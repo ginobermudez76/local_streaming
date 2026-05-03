@@ -4,6 +4,40 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="LanScreenShare.Desktop.MainWindow"
-        Title="LanScreenShare.Desktop">
-    Welcome to Avalonia!
+        xmlns:models="using:LanScreenShare.Core.Models"
+        Title="LanScreenShare"
+        Background="#1E1E1E">
+    <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="250,*">
+        
+        <!-- Sidebar -->
+        <StackPanel Grid.Row="0" Grid.RowSpan="3" Grid.Column="0" Background="#252526" Spacing="10" Margin="0" x:Name="SidebarPanel">
+            <TextBlock Text="LanScreenShare" FontSize="20" FontWeight="Bold" Foreground="White" Margin="15,15,15,20"/>
+            
+            <Button x:Name="HostButton" Content="Host Stream" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="15,0"/>
+            <Button x:Name="SearchButton" Content="Buscar dispositivos" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="15,0"/>
+            
+            <TextBlock Text="Dispositivos detectados:" Foreground="LightGray" Margin="15,20,15,5"/>
+            <ListBox x:Name="DevicesList" Background="Transparent" BorderThickness="0" Foreground="White" Margin="10,0">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:DeviceInfo">
+                        <StackPanel Margin="0,5">
+                            <TextBlock Text="{Binding Name}" FontWeight="Bold"/>
+                            <TextBlock Text="{Binding IPAddress}" FontSize="12" Foreground="Gray"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </StackPanel>
+        
+        <!-- Main Area (Placeholder for Stream) -->
+        <Border Grid.Row="0" Grid.RowSpan="3" Grid.Column="1" Background="#1E1E1E" Padding="20">
+            <Border BorderBrush="#3E3E42" BorderThickness="2" CornerRadius="8" Background="#2D2D30">
+                <TextBlock Text="Área de vista previa (TODO: Streaming)" 
+                           HorizontalAlignment="Center" 
+                           VerticalAlignment="Center" 
+                           Foreground="Gray" 
+                           FontSize="18"/>
+            </Border>
+        </Border>
+    </Grid>
 </Window>

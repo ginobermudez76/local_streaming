@@ -1,11 +1,30 @@
 {
   "version": 3,
   "targets": {
-    "net9.0": {}
+    "net9.0": {
+      "LanScreenShare.Core/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v9.0",
+        "compile": {
+          "bin/placeholder/LanScreenShare.Core.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/LanScreenShare.Core.dll": {}
+        }
+      }
+    }
   },
-  "libraries": {},
+  "libraries": {
+    "LanScreenShare.Core/1.0.0": {
+      "type": "project",
+      "path": "../LanScreenShare.Core/LanScreenShare.Core.csproj",
+      "msbuildProject": "../LanScreenShare.Core/LanScreenShare.Core.csproj"
+    }
+  },
   "projectFileDependencyGroups": {
-    "net9.0": []
+    "net9.0": [
+      "LanScreenShare.Core >= 1.0.0"
+    ]
   },
   "packageFolders": {
     "C:\\Users\\Gino\\.nuget\\packages\\": {},
@@ -39,7 +58,11 @@
       "frameworks": {
         "net9.0": {
           "targetAlias": "net9.0",
-          "projectReferences": {}
+          "projectReferences": {
+            "C:\\xampp\\htdocs\\local_streaming\\LanScreenShare.Core\\LanScreenShare.Core.csproj": {
+              "projectPath": "C:\\xampp\\htdocs\\local_streaming\\LanScreenShare.Core\\LanScreenShare.Core.csproj"
+            }
+          }
         }
       },
       "warningProperties": {

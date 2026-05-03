@@ -89,3 +89,8 @@ C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\obj\Debug\net9.0\refint\L
 C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\obj\Debug\net9.0\LanScreenShare.Desktop.pdb
 C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\obj\Debug\net9.0\LanScreenShare.Desktop.genruntimeconfig.cache
 C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\obj\Debug\net9.0\ref\LanScreenShare.Desktop.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\obj\Debug\net9.0\LanScreenShare.Desktop.sourcelink.json
+C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\bin\Debug\net9.0\LanScreenShare.Core.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\bin\Debug\net9.0\LanScreenShare.Network.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\bin\Debug\net9.0\LanScreenShare.Core.pdb
+C:\xampp\htdocs\local_streaming\LanScreenShare.Desktop\bin\Debug\net9.0\LanScreenShare.Network.pdb

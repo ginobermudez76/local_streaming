@@ -695,6 +695,29 @@
             "related": ".xml"
           }
         }
+      },
+      "LanScreenShare.Core/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v9.0",
+        "compile": {
+          "bin/placeholder/LanScreenShare.Core.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/LanScreenShare.Core.dll": {}
+        }
+      },
+      "LanScreenShare.Network/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v9.0",
+        "dependencies": {
+          "LanScreenShare.Core": "1.0.0"
+        },
+        "compile": {
+          "bin/placeholder/LanScreenShare.Network.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/LanScreenShare.Network.dll": {}
+        }
       }
     }
   },
@@ -1640,6 +1663,16 @@
         "tmds.dbus.protocol.0.92.0.nupkg.sha512",
         "tmds.dbus.protocol.nuspec"
       ]
+    },
+    "LanScreenShare.Core/1.0.0": {
+      "type": "project",
+      "path": "../LanScreenShare.Core/LanScreenShare.Core.csproj",
+      "msbuildProject": "../LanScreenShare.Core/LanScreenShare.Core.csproj"
+    },
+    "LanScreenShare.Network/1.0.0": {
+      "type": "project",
+      "path": "../LanScreenShare.Network/LanScreenShare.Network.csproj",
+      "msbuildProject": "../LanScreenShare.Network/LanScreenShare.Network.csproj"
     }
   },
   "projectFileDependencyGroups": {
@@ -1648,7 +1681,9 @@
       "Avalonia.Desktop >= 12.0.2",
       "Avalonia.Fonts.Inter >= 12.0.2",
       "Avalonia.Themes.Fluent >= 12.0.2",
-      "AvaloniaUI.DiagnosticsSupport >= 2.2.1"
+      "AvaloniaUI.DiagnosticsSupport >= 2.2.1",
+      "LanScreenShare.Core >= 1.0.0",
+      "LanScreenShare.Network >= 1.0.0"
     ]
   },
   "packageFolders": {
@@ -1683,7 +1718,14 @@
       "frameworks": {
         "net9.0": {
           "targetAlias": "net9.0",
-          "projectReferences": {}
+          "projectReferences": {
+            "C:\\xampp\\htdocs\\local_streaming\\LanScreenShare.Core\\LanScreenShare.Core.csproj": {
+              "projectPath": "C:\\xampp\\htdocs\\local_streaming\\LanScreenShare.Core\\LanScreenShare.Core.csproj"
+            },
+            "C:\\xampp\\htdocs\\local_streaming\\LanScreenShare.Network\\LanScreenShare.Network.csproj": {
+              "projectPath": "C:\\xampp\\htdocs\\local_streaming\\LanScreenShare.Network\\LanScreenShare.Network.csproj"
+            }
+          }
         }
       },
       "warningProperties": {

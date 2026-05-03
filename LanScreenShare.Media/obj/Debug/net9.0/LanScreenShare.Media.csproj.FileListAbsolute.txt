@@ -9,3 +9,4 @@ C:\xampp\htdocs\local_streaming\LanScreenShare.Media\obj\Debug\net9.0\LanScreenS
 C:\xampp\htdocs\local_streaming\LanScreenShare.Media\obj\Debug\net9.0\refint\LanScreenShare.Media.dll
 C:\xampp\htdocs\local_streaming\LanScreenShare.Media\obj\Debug\net9.0\LanScreenShare.Media.pdb
 C:\xampp\htdocs\local_streaming\LanScreenShare.Media\obj\Debug\net9.0\ref\LanScreenShare.Media.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Media\obj\Debug\net9.0\LanScreenShare.Media.sourcelink.json

@@ -17,4 +17,9 @@
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LanScreenShare.Core\LanScreenShare.Core.csproj" />
+    <ProjectReference Include="..\LanScreenShare.Network\LanScreenShare.Network.csproj" />
+  </ItemGroup>
 </Project>

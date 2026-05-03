@@ -9,3 +9,8 @@ C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScree
 C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\refint\LanScreenShare.Network.dll
 C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.pdb
 C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\ref\LanScreenShare.Network.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\bin\Debug\net9.0\LanScreenShare.Core.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\bin\Debug\net9.0\LanScreenShare.Core.pdb
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.csproj.AssemblyReference.cache
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.sourcelink.json
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScree.86DF5C11.Up2Date

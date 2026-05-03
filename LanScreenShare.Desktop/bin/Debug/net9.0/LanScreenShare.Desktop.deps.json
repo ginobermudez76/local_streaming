@@ -12,7 +12,9 @@
           "Avalonia.Desktop": "12.0.2",
           "Avalonia.Fonts.Inter": "12.0.2",
           "Avalonia.Themes.Fluent": "12.0.2",
-          "AvaloniaUI.DiagnosticsSupport": "2.2.1"
+          "AvaloniaUI.DiagnosticsSupport": "2.2.1",
+          "LanScreenShare.Core": "1.0.0",
+          "LanScreenShare.Network": "1.0.0"
         },
         "runtime": {
           "LanScreenShare.Desktop.dll": {}
@@ -537,6 +539,25 @@
             "fileVersion": "0.92.0.0"
           }
         }
+      },
+      "LanScreenShare.Core/1.0.0": {
+        "runtime": {
+          "LanScreenShare.Core.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "LanScreenShare.Network/1.0.0": {
+        "dependencies": {
+          "LanScreenShare.Core": "1.0.0"
+        },
+        "runtime": {
+          "LanScreenShare.Network.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
       }
     }
   },
@@ -762,6 +783,16 @@
       "sha512": "sha512-h7IMakm0PF2jxiagoysoAjrzzLQ0UBdnSXQL5kb17YW0Fvyo12Tg96A99QkzwktWRrd7H+Uw9EzjasNLUfGYlA==",
       "path": "tmds.dbus.protocol/0.92.0",
       "hashPath": "tmds.dbus.protocol.0.92.0.nupkg.sha512"
+    },
+    "LanScreenShare.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "LanScreenShare.Network/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
     }
   }
 }
