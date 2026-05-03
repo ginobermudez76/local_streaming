@@ -1,0 +1,11 @@
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\bin\Debug\net9.0\LanScreenShare.Network.deps.json
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\bin\Debug\net9.0\LanScreenShare.Network.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\bin\Debug\net9.0\LanScreenShare.Network.pdb
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.GeneratedMSBuildEditorConfig.editorconfig
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.AssemblyInfoInputs.cache
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.AssemblyInfo.cs
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.csproj.CoreCompileInputs.cache
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\refint\LanScreenShare.Network.dll
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\LanScreenShare.Network.pdb
+C:\xampp\htdocs\local_streaming\LanScreenShare.Network\obj\Debug\net9.0\ref\LanScreenShare.Network.dll
