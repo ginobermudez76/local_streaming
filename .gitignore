@@ -1,0 +1,45 @@
+## Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## Visual Studio cache and user files
+.vs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.pidb
+*.booproj
+*.svclog
+*.VisualState.xml
+*.DotSettings.user
+*.sln.docstates
+
+## Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+## JetBrains Rider / ReSharper
+_ReSharper*/
+*.ReSharper
+.idea/
+
+## Avalonia / Build caches
+*.cache
+*.FileListAbsolute.txt
+*.Up2Date
+
+## Windows OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+## Mac / Linux generated files
+.DS_Store
+._*
