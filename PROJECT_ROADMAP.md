@@ -40,52 +40,56 @@ gantt
     Descubrimiento UDP multi-interfaz :done,    des3, 2026-09-26, 2026-09-27
     Filtro de auto-detección          :done,    des4, 2026-09-27, 2026-09-27
     section Fase 2: Streaming LAN (Windows)
-    Contratos en Core (IScreenCapture):active,  str1, 2026-09-27, 2026-10-02
-    Captura nativa de pantalla        :         str2, after str1, 5d
-    Protocolo de transporte (TCP/UDP) :         str3, after str2, 5d
-    Renderizado en MainWindow         :         str4, after str3, 4d
+    Contratos en Core (IScreenCapture):done,    str1, 2026-09-27, 2026-09-27
+    Captura nativa de pantalla        :done,    str2, 2026-09-27, 2026-09-27
+    Protocolo de transporte (TCP)     :done,    str3, 2026-09-27, 2026-09-27
+    Renderizado en MainWindow         :done,    str4, 2026-09-27, 2026-09-27
     section Fase 3: Optimización y Audio
-    Codificación por hardware         :         opt1, after str4, 7d
+    Codificación acelerada / H.264    :active,  opt1, 2026-09-28, 7d
     Streaming de Audio WASAPI         :         opt2, after opt1, 5d
     section Fase 4: Multiplataforma
-    Port a Linux (PipeWire)           :         cross1, 2026-11-01, 10d
+    Port a Linux (PipeWire / X11)     :         cross1, 2026-10-15, 10d
     Port a Android / iOS              :         cross2, after cross1, 14d
 ```
 
-### ✅ Hitos Completados (Fase 1)
+### ✅ Hitos Completados (Fases 1 y 2)
 - [x] **Configuración del Repositorio:** Creación de `.gitignore` exhaustivo y purga del índice remoto de carpetas `bin/`, `obj/` y `.vs/`.
-- [x] **Modelos Base:** Creación del modelo `DeviceInfo` para representar pares en la red.
+- [x] **Modelos Base:** Creación del modelo `DeviceInfo` y `CapturedFrame`.
 - [x] **Servicio de Descubrimiento UDP:**
-  - Envío periódico a través de broadcast dirigido por subred (`Subnet Directed Broadcast`) en lugar de depender únicamente de `255.255.255.255`.
+  - Envío periódico a través de broadcast dirigido por subred (`Subnet Directed Broadcast`).
   - Soporte multi-interfaz (aislando interfaces virtuales de VMware, VPNs y Loopback).
   - Manejo de exclusión mutua para evitar auto-descubrimiento en la misma máquina (`IsSelfMessage`).
-- [x] **UI Inicial:** Ventana con panel lateral de acciones (*"Host Stream"*, *"Buscar dispositivos"*), lista reactiva de pares encontrados y área central para video.
+- [x] **Contratos de Streaming en `LanScreenShare.Core`:**
+  - `IScreenCaptureService` (captura agnóstica de plataforma).
+  - `IStreamServer` (servidor de emisión de cuadros).
+  - `IStreamClient` (receptor y cliente de cuadros).
+  - `CapturedFrame` (búfer de imagen, dimensiones, timestamp y formato).
+- [x] **Captura de Pantalla Nativa en `LanScreenShare.Media` (Windows):**
+  - Implementación en `WindowsScreenCaptureService` utilizando Win32 GDI Desktop Capture (`BitBlt` con soporte de cursor y ventanas transparentes).
+  - Compresión de fotogramas ultrarrápida a JPEG mediante SkiaSharp.
+- [x] **Protocolo de Streaming en `LanScreenShare.Network`:**
+  - `TcpStreamServer`: Servidor TCP con encabezado estructurado de 24 bytes (Magic `LSS1`, longitud, resolución, timestamp).
+  - `TcpStreamClient`: Cliente TCP con deserialización de cuadros y reconexión limpia.
+- [x] **Renderizado en Tiempo Real en `LanScreenShare.Desktop`:**
+  - Integración en `MainWindow.axaml` con control `Image` y decodificación asincrónica en Avalonia `Bitmap`.
+  - Estados de conexión (transmitiendo, viendo pantalla de par, desconectado, indicador LED de estado).
 
 ---
 
-### ⏳ Siguientes Pasos Inmediatos (Fase 2: Streaming LAN)
+### ⏳ Siguientes Pasos (Fase 3: Optimización y Audio)
 
-1. **Definir Contratos en `LanScreenShare.Core`:**
-   - `IScreenCaptureService`: Abstracción para iniciar, pausar y detener la captura de fotogramas, desacoplando la lógica de la plataforma.
-   - `CapturedFrame`: Estructura para transferir el búfer de píxeles, resolución y formato.
-   - `IStreamServer` / `IStreamClient`: Contratos para el transporte de video en red.
-
-2. **Implementar Captura Nativa en `LanScreenShare.Media` (Windows):**
-   - Implementar `WindowsCaptureService` usando `Windows.Graphics.Capture` o `DXGI Desktop Duplication`.
-   - Conversión eficiente de fotogramas a memoria compartida o compresión preliminar.
-
-3. **Protocolo de Streaming en `LanScreenShare.Network`:**
-   - Establecer conexión directa entre cliente y host al hacer clic en un dispositivo de la lista.
-   - Implementar un canal de streaming por TCP o UDP optimizado para transportar los cuadros con encabezados de longitud y timestamp.
-
-4. **Renderizado en `LanScreenShare.Desktop`:**
-   - Recibir el flujo de bytes en el cliente y volcarlo en un `WriteableBitmap` en Avalonia para visualizar la pantalla remota en tiempo real.
+1. **Ajuste dinámico de calidad y FPS:**
+   - Permitir ajustar calidad JPEG (50% a 90%) o resolución para adaptarse al ancho de banda de la red Wi-Fi.
+2. **Streaming de Audio del Sistema (Windows WASAPI Loopback):**
+   - Capturar el audio de reproducción del sistema en Windows usando WASAPI (`AudioClient.Initialize` en modo Loopback) y transmitirlo multiplexado o en canal paralelo.
+3. **Control Remoto (Opcional):**
+   - Transmisión de eventos de mouse y teclado desde el cliente hacia el host para soporte/control interactivo.
 
 ---
 
 ## 4. Diagrama de Clases y Arquitectura
 
-El siguiente diagrama refleja la estructura actual y los contratos previstos para garantizar portabilidad a Linux y Móviles:
+El siguiente diagrama refleja la estructura implementada:
 
 ```mermaid
 classDiagram
@@ -102,20 +106,35 @@ classDiagram
             +int Width
             +int Height
             +long Timestamp
+            +string Format
         }
 
         class IScreenCaptureService {
             <<interface>>
-            +StartCapture() void
+            +bool IsCapturing
+            +StartCapture(int targetFps, int quality) void
             +StopCapture() void
-            +event OnFrameArrived
+            +event FrameCaptured
         }
 
-        class IStreamTransport {
+        class IStreamServer {
             <<interface>>
-            +StartStreaming(string targetIp, int port) Task
-            +StopStreaming() void
-            +event OnFrameReceived
+            +bool IsRunning
+            +int ConnectedClientsCount
+            +StartAsync(int port, CancellationToken) Task
+            +BroadcastFrameAsync(CapturedFrame) Task
+            +Stop() void
+            +event ClientConnected
+            +event ClientDisconnected
+        }
+
+        class IStreamClient {
+            <<interface>>
+            +bool IsConnected
+            +ConnectAsync(string hostIp, int port, CancellationToken) Task
+            +DisconnectAsync() Task
+            +event FrameReceived
+            +event StatusChanged
         }
     }
 
@@ -124,51 +143,49 @@ classDiagram
         class DiscoveryService {
             -int DiscoveryPort
             -string BroadcastMessagePrefix
-            -CancellationTokenSource _hostCts
-            -CancellationTokenSource _listenCts
             +StartHostingBroadcast() void
             +StopHosting() void
             +StartListening() void
             +StopListening() void
-            -GetActiveBroadcastTargets() List
-            -CalculateBroadcastAddress(IPAddress, IPAddress) IPAddress
-            -IsSelfMessage(string, string, string) bool
             +event OnDeviceDiscovered
         }
 
         class TcpStreamServer {
             -TcpListener _listener
-            +Start(int port) Task
-            +BroadcastFrame(CapturedFrame frame) Task
+            -ConcurrentDictionary _clients
+            +StartAsync(int port, CancellationToken) Task
+            +BroadcastFrameAsync(CapturedFrame frame) Task
             +Stop() void
         }
 
         class TcpStreamClient {
             -TcpClient _client
-            +Connect(string hostIp, int port) Task
-            +event OnFrameReceived
-            +Disconnect() void
+            +ConnectAsync(string hostIp, int port, CancellationToken) Task
+            +DisconnectAsync() Task
+            +event FrameReceived
         }
     }
 
     %% Capa Media (Específica por SO)
     namespace LanScreenShare_Media {
-        class WindowsCaptureService {
+        class WindowsScreenCaptureService {
             -bool _isCapturing
-            +StartCapture() void
+            -CancellationTokenSource _cts
+            +StartCapture(int targetFps, int quality) void
             +StopCapture() void
-            -ProcessDxgiFrame() void
+            -CaptureDesktopFrame(int quality) CapturedFrame
+            -DrawMouseCursor(IntPtr, int, int)$ void
         }
 
         class LinuxPipeWireCaptureService {
             <<futuro>>
-            +StartCapture() void
+            +StartCapture(int, int) void
             +StopCapture() void
         }
 
         class AndroidMediaProjectionCaptureService {
             <<futuro>>
-            +StartCapture() void
+            +StartCapture(int, int) void
             +StopCapture() void
         }
     }
@@ -177,11 +194,15 @@ classDiagram
     namespace LanScreenShare_Desktop {
         class MainWindow {
             -DiscoveryService _discoveryService
+            -IScreenCaptureService _screenCaptureService
+            -IStreamServer _streamServer
+            -IStreamClient _streamClient
             +ObservableCollection~DeviceInfo~ Devices
             -HostButton_Click(object, RoutedEventArgs) void
             -SearchButton_Click(object, RoutedEventArgs) void
-            -DiscoveryService_OnDeviceDiscovered(object, DeviceInfo) void
-            -DeviceList_SelectionChanged(object, SelectionChangedEventArgs) void
+            -ConnectDevice_Click(object, RoutedEventArgs) void
+            -DisconnectButton_Click(object, RoutedEventArgs) void
+            -StreamClient_FrameReceived(object, CapturedFrame) void
         }
 
         class App {
@@ -196,20 +217,21 @@ classDiagram
     }
 
     %% Relaciones e Implementaciones
-    DiscoveryService ..> DeviceInfo : emite / descubre
-    MainWindow --> DiscoveryService : utiliza
-    MainWindow --> DeviceInfo : muestra lista
-    MainWindow ..> IStreamTransport : inicia conexion
+    IScreenCaptureService <|.. WindowsScreenCaptureService : implementa Windows
+    IScreenCaptureService <|.. LinuxPipeWireCaptureService : implementa Linux (futuro)
+    IScreenCaptureService <|.. AndroidMediaProjectionCaptureService : implementa Android (futuro)
 
-    IScreenCaptureService <|.. WindowsCaptureService : implementa en Windows
-    IScreenCaptureService <|.. LinuxPipeWireCaptureService : implementa en Linux
-    IScreenCaptureService <|.. AndroidMediaProjectionCaptureService : implementa en Android
+    IStreamServer <|.. TcpStreamServer : implementa emisor
+    IStreamClient <|.. TcpStreamClient : implementa receptor
 
-    IStreamTransport <|.. TcpStreamServer : implementa emisor
-    IStreamTransport <|.. TcpStreamClient : implementa receptor
+    MainWindow --> DiscoveryService : usa
+    MainWindow --> IScreenCaptureService : usa
+    MainWindow --> IStreamServer : emite frames
+    MainWindow --> IStreamClient : recibe frames
+    MainWindow ..> CapturedFrame : renderiza en Image
 
-    WindowsCaptureService ..> CapturedFrame : produce
-    TcpStreamServer ..> CapturedFrame : envía
+    WindowsScreenCaptureService ..> CapturedFrame : produce
+    TcpStreamServer ..> CapturedFrame : transporta
     TcpStreamClient ..> CapturedFrame : recibe
 ```
 
