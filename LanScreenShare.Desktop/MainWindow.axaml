@@ -13,8 +13,9 @@
     <Grid ColumnDefinitions="310,*">
         <!-- Sidebar -->
         <Border Grid.Column="0" Background="#1F1F23" BorderBrush="#2D2D35" BorderThickness="0,0,1,0">
-            <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" Margin="16">
-                <!-- App Header -->
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" Margin="16">
+                    <!-- App Header -->
                 <StackPanel Grid.Row="0" Margin="0,0,0,14" Spacing="4">
                     <TextBlock Text="LanScreenShare" FontSize="20" FontWeight="Bold" Foreground="#FAFAFA"/>
                     <TextBlock Text="Transmisión de pantalla en LAN" FontSize="12" Foreground="#A1A1AA"/>
@@ -158,7 +159,8 @@
                          x:Name="DevicesList"
                          Background="Transparent"
                          BorderThickness="0"
-                         Foreground="White">
+                         Foreground="White"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="models:DeviceInfo">
                             <Border Background="#27272A"
@@ -196,7 +198,8 @@
                            Margin="0,8,0,0"
                            TextWrapping="Wrap"/>
             </Grid>
-        </Border>
+        </ScrollViewer>
+    </Border>
 
         <!-- Main Area (Stream Preview) -->
         <Grid Grid.Column="1" RowDefinitions="Auto,*">
