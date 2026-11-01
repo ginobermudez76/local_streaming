@@ -97,10 +97,13 @@ gantt
 
 - [x] **Control Remoto Interactivo de Mouse y Teclado (Fase 4):**
   - Modelo `RemoteInputMessage` con coordenadas normalizadas (0.0f a 1.0f), clics, rueda de desplazamiento y códigos de teclas virtuales.
-  - `WindowsInputSimulatorService` (`user32.dll` `SendInput`) con soporte multi-monitor (`MOUSEEVENTF_VIRTUALDESK`).
+  - `WindowsInputSimulatorService` (`user32.dll` `SetCursorPos`, `mouse_event`, `keybd_event`) con inyección precisa de hardware virtual.
+  - Compatibilidad total con aplicaciones elevadas (UIPI): Capacidad de interactuar con launchers de juegos (ej. Genshin Impact), Administrador de Tareas y ventanas administrativas al ejecutar como Administrador.
+  - Indicador visual automático de nivel de privilegios en el host (`🛡️ Modo Administrador Activo` / `⚠️ Modo Estándar`).
   - Protocolo TCP de baja latencia (`TcpControlServer` y `TcpControlClient` en puerto 5003 con cabecera binaria `LSI1` de 20 bytes).
   - Cálculo geométrico preciso en `MainWindow.axaml.cs` para compensar franjas negras (*letterboxing/pillarboxing*) del control `Image` con `Stretch="Uniform"`.
   - Controles de seguridad: Casilla *"Permitir control remoto"* en el host y botón interactivo `🎮 Control` en la barra del espectador.
+  - Barra lateral responsiva con `ScrollViewer` para garantizar navegación y acceso a la lista de dispositivos en cualquier resolución de pantalla.
 
 ---
 
