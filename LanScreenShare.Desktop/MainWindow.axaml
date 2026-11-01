@@ -69,6 +69,18 @@
                             </ComboBox>
                         </StackPanel>
 
+                        <!-- Codec Selector -->
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="Códec de Video" FontSize="11" Foreground="#A1A1AA"/>
+                            <ComboBox x:Name="CodecComboBox"
+                                      HorizontalAlignment="Stretch"
+                                      FontSize="12"
+                                      SelectedIndex="0">
+                                <ComboBoxItem Content="H.264 / AVC (Aceleración GPU)" Tag="h264"/>
+                                <ComboBoxItem Content="JPEG (Compatibilidad Universal)" Tag="jpeg"/>
+                            </ComboBox>
+                        </StackPanel>
+
                         <!-- FPS Selector -->
                         <StackPanel Spacing="4">
                             <Grid ColumnDefinitions="*,Auto">

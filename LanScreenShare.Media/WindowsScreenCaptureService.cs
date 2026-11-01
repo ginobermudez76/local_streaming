@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Threading;
 using System.Threading.Tasks;
 using LanScreenShare.Core.Interfaces;
@@ -9,6 +10,7 @@ using SkiaSharp;
 
 namespace LanScreenShare.Media
 {
+    [SupportedOSPlatform("windows")]
     public class WindowsScreenCaptureService : IScreenCaptureService
     {
         private CancellationTokenSource? _cts;
@@ -18,6 +20,8 @@ namespace LanScreenShare.Media
         private volatile int _targetFps = 30;
         private volatile int _quality = 75;
         private volatile int _scalePercent = 100;
+        private volatile string _codec = "h264";
+        private MediaFoundationH264EncoderService? _h264Encoder;
 
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
@@ -40,14 +44,21 @@ namespace LanScreenShare.Media
             set => _scalePercent = (int)Math.Round(Math.Clamp(value, 0.25, 1.0) * 100);
         }
 
-        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0)
+        public string Codec
+        {
+            get => _codec;
+            set => _codec = value.ToLowerInvariant() == "h264" ? "h264" : "jpeg";
+        }
+
+        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "h264")
         {
             TargetFps = targetFps;
             Quality = quality;
             ResolutionScale = resolutionScale;
+            Codec = codec;
         }
 
-        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0)
+        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0, string codec = "h264")
         {
             if (IsCapturing)
                 return;
@@ -55,6 +66,7 @@ namespace LanScreenShare.Media
             _targetFps = Math.Clamp(targetFps, 1, 120);
             _quality = Math.Clamp(quality, 10, 100);
             ResolutionScale = resolutionScale;
+            Codec = codec;
 
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
@@ -169,7 +181,6 @@ namespace LanScreenShare.Media
             // Dibujar el cursor del mouse sobre el fotograma capturado
             DrawMouseCursor(hdcDest, left, top);
 
-            byte[]? jpegBytes = null;
             int finalWidth = width;
             int finalHeight = height;
 
@@ -199,16 +210,25 @@ namespace LanScreenShare.Media
                         }
                     }
 
+                    byte[]? encodedBytes = null;
+                    string currentCodec = _codec;
+
                     try
                     {
-                        using (var image = SKImage.FromBitmap(bitmapToEncode))
+                        if (currentCodec == "h264")
                         {
+                            _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps);
+                            byte[] bgraBytes = new byte[finalWidth * finalHeight * 4];
+                            Marshal.Copy(bitmapToEncode.GetPixels(), bgraBytes, 0, bgraBytes.Length);
+                            encodedBytes = _h264Encoder.EncodeFrame(bgraBytes, finalWidth, finalHeight);
+                        }
+                        else
+                        {
+                            using var image = SKImage.FromBitmap(bitmapToEncode);
                             if (image != null)
                             {
-                                using (var data = image.Encode(SKEncodedImageFormat.Jpeg, quality))
-                                {
-                                    jpegBytes = data.ToArray();
-                                }
+                                using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
+                                encodedBytes = data.ToArray();
                             }
                         }
                     }
@@ -216,6 +236,18 @@ namespace LanScreenShare.Media
                     {
                         resizedBitmap?.Dispose();
                     }
+
+                    if (encodedBytes == null || encodedBytes.Length == 0)
+                        return null;
+
+                    return new CapturedFrame
+                    {
+                        Data = encodedBytes,
+                        Width = finalWidth,
+                        Height = finalHeight,
+                        Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        Format = currentCodec
+                    };
                 }
             }
             finally
@@ -225,18 +257,6 @@ namespace LanScreenShare.Media
                 DeleteDC(hdcDest);
                 ReleaseDC(IntPtr.Zero, hdcSrc);
             }
-
-            if (jpegBytes == null || jpegBytes.Length == 0)
-                return null;
-
-            return new CapturedFrame
-            {
-                Data = jpegBytes,
-                Width = finalWidth,
-                Height = finalHeight,
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Format = "jpeg"
-            };
         }
 
         private static void DrawMouseCursor(IntPtr hdcDest, int screenLeft, int screenTop)
@@ -261,6 +281,8 @@ namespace LanScreenShare.Media
                 return;
 
             StopCapture();
+            _h264Encoder?.Dispose();
+            _h264Encoder = null;
             _disposed = true;
             GC.SuppressFinalize(this);
         }

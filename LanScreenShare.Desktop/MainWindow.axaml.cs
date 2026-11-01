@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
@@ -13,6 +14,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using LanScreenShare.Core.Interfaces;
@@ -49,6 +51,11 @@ namespace LanScreenShare.Desktop
         private bool _isHosting;
         private string? _currentConnectedDeviceName;
 
+        // Decodificador de video por hardware (H.264)
+        private readonly IVideoDecoderService? _h264Decoder;
+        private WriteableBitmap? _viewerWriteableBitmap;
+        private readonly object _bitmapLock = new();
+
         // Estadísticas de flujo en tiempo real
         private long _metricFramesCount;
         private long _metricBytesCount;
@@ -61,6 +68,18 @@ namespace LanScreenShare.Desktop
         public MainWindow()
         {
             InitializeComponent();
+
+            if (OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    _h264Decoder = new MediaFoundationH264DecoderService();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[MainWindow] Decodificador H.264 no disponible: {ex.Message}");
+                }
+            }
 
             _discoveryService = new DiscoveryService();
             _discoveryService.OnDeviceDiscovered += DiscoveryService_OnDeviceDiscovered;
@@ -210,6 +229,12 @@ namespace LanScreenShare.Desktop
             if (engineCombo != null)
             {
                 engineCombo.SelectionChanged += (s, e) => OnEngineChanged();
+            }
+
+            var codecCombo = this.FindControl<ComboBox>("CodecComboBox");
+            if (codecCombo != null)
+            {
+                codecCombo.SelectionChanged += (s, e) => OnSettingChanged();
             }
 
             var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
@@ -686,6 +711,16 @@ namespace LanScreenShare.Desktop
             return "dxgi";
         }
 
+        private string GetSelectedCodec()
+        {
+            var combo = this.FindControl<ComboBox>("CodecComboBox");
+            if (combo?.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            {
+                return tag;
+            }
+            return "h264";
+        }
+
         private int GetSelectedFps()
         {
             var combo = this.FindControl<ComboBox>("FpsComboBox");
@@ -715,14 +750,15 @@ namespace LanScreenShare.Desktop
                 int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
                 double scale = GetSelectedScale();
                 string engine = GetSelectedEngine();
+                string codec = GetSelectedCodec();
 
-                SwitchCaptureEngine(engine, fps, quality, scale);
+                SwitchCaptureEngine(engine, fps, quality, scale, codec);
                 string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
-                UpdateStatus($"Cambiado a motor {engineName} en caliente", "#22C55E");
+                UpdateStatus($"Cambiado a motor {engineName} ({codec.ToUpper()}) en caliente", "#22C55E");
             }
         }
 
-        private void SwitchCaptureEngine(string engine, int fps, int quality, double scale)
+        private void SwitchCaptureEngine(string engine, int fps, int quality, double scale, string codec)
         {
             _screenCaptureService.StopCapture();
             _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
@@ -738,7 +774,7 @@ namespace LanScreenShare.Desktop
             }
 
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
-            _screenCaptureService.StartCapture(fps, quality, scale);
+            _screenCaptureService.StartCapture(fps, quality, scale, codec);
         }
 
         private void OnSettingChanged()
@@ -746,6 +782,7 @@ namespace LanScreenShare.Desktop
             int fps = GetSelectedFps();
             int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
             double scale = GetSelectedScale();
+            string codec = GetSelectedCodec();
 
             var fpsLabel = this.FindControl<TextBlock>("FpsValueLabel");
             if (fpsLabel != null)
@@ -765,7 +802,7 @@ namespace LanScreenShare.Desktop
                 scaleLabel.Text = $"{scale * 100:0}%";
             }
 
-            _screenCaptureService.UpdateSettings(fps, quality, scale);
+            _screenCaptureService.UpdateSettings(fps, quality, scale, codec);
         }
 
         private void MetricsTimer_Tick(object? sender, EventArgs e)
@@ -791,6 +828,10 @@ namespace LanScreenShare.Desktop
                         ? (_screenCaptureService is DxgiScreenCaptureService ? " • DXGI GPU" : " • GDI CPU")
                         : "";
 
+                    string codecTag = _isHosting
+                        ? $" • {_screenCaptureService.Codec.ToUpper()}"
+                        : "";
+
                     string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient.IsConnected && _audioClient.IsConnected)
                         ? " • 🔊 Audio"
                         : "";
@@ -799,7 +840,7 @@ namespace LanScreenShare.Desktop
                         ? " • 🎮 Control Activo"
                         : "";
 
-                    statsText.Text = $"{frames} FPS • {transferRate}{res}{engineTag}{audioTag}{controlTag}";
+                    statsText.Text = $"{frames} FPS • {transferRate}{res}{engineTag}{codecTag}{audioTag}{controlTag}";
                 }
             }
             else
@@ -842,10 +883,11 @@ namespace LanScreenShare.Desktop
                     int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
                     double scale = GetSelectedScale();
                     string engine = GetSelectedEngine();
+                    string codec = GetSelectedCodec();
 
                     // 1. Iniciar servidor de video (Puerto 5001)
                     await _streamServer.StartAsync(5001);
-                    SwitchCaptureEngine(engine, fps, quality, scale);
+                    SwitchCaptureEngine(engine, fps, quality, scale, codec);
 
                     // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
                     bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
@@ -1070,6 +1112,59 @@ namespace LanScreenShare.Desktop
 
             try
             {
+                if (frame.Format == "h264" && _h264Decoder != null)
+                {
+                    if (_h264Decoder.TryDecodeFrame(frame.Data, frame.Width, frame.Height, out byte[] bgraPixels, out int decW, out int decH))
+                    {
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            try
+                            {
+                                lock (_bitmapLock)
+                                {
+                                    if (_viewerWriteableBitmap == null ||
+                                        _viewerWriteableBitmap.PixelSize.Width != decW ||
+                                        _viewerWriteableBitmap.PixelSize.Height != decH)
+                                    {
+                                        _viewerWriteableBitmap?.Dispose();
+                                        _viewerWriteableBitmap = new WriteableBitmap(
+                                            new PixelSize(decW, decH),
+                                            new Vector(96, 96),
+                                            PixelFormat.Bgra8888,
+                                            AlphaFormat.Premul);
+                                    }
+
+                                    using (var fb = _viewerWriteableBitmap.Lock())
+                                    {
+                                        int copyLength = Math.Min(bgraPixels.Length, fb.RowBytes * decH);
+                                        Marshal.Copy(bgraPixels, 0, fb.Address, copyLength);
+                                    }
+                                }
+
+                                var screenImage = this.FindControl<Image>("ScreenImage");
+                                if (screenImage != null)
+                                {
+                                    screenImage.Source = _viewerWriteableBitmap;
+                                    screenImage.InvalidateVisual();
+                                }
+
+                                var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
+                                if (placeholder != null && placeholder.IsVisible)
+                                {
+                                    placeholder.IsVisible = false;
+                                }
+
+                                UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName} (H.264 GPU)", "#22C55E");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[StreamViewer] Error renderizando frame H.264: {ex.Message}");
+                            }
+                        });
+                        return;
+                    }
+                }
+
                 using var ms = new MemoryStream(frame.Data);
                 var bitmap = new Bitmap(ms);
 
@@ -1087,7 +1182,7 @@ namespace LanScreenShare.Desktop
                         placeholder.IsVisible = false;
                     }
 
-                    UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName}", "#22C55E");
+                    UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName} (JPEG)", "#22C55E");
                 });
             }
             catch (Exception ex)
@@ -1243,6 +1338,9 @@ namespace LanScreenShare.Desktop
         private void MainWindow_Closing(object? sender, WindowClosingEventArgs e)
         {
             _metricsTimer.Stop();
+
+            _h264Decoder?.Dispose();
+            _viewerWriteableBitmap?.Dispose();
 
             _screenCaptureService.Dispose();
             _streamServer.Dispose();

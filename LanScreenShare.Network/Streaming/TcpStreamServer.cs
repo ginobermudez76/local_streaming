@@ -12,7 +12,8 @@ namespace LanScreenShare.Network.Streaming
 {
     public class TcpStreamServer : IStreamServer
     {
-        private const uint FrameHeaderMagic = 0x4C535331; // "LSS1"
+        private const uint FrameHeaderMagicJpeg = 0x4C535331; // "LSS1"
+        private const uint FrameHeaderMagicH264 = 0x4C535332; // "LSS2"
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
         private readonly ConcurrentDictionary<string, NetworkStream> _clients = new();
@@ -114,7 +115,8 @@ namespace LanScreenShare.Network.Streaming
             using (var ms = new MemoryStream(header))
             using (var writer = new BinaryWriter(ms))
             {
-                writer.Write(FrameHeaderMagic);
+                uint magic = frame.Format == "h264" ? FrameHeaderMagicH264 : FrameHeaderMagicJpeg;
+                writer.Write(magic);
                 writer.Write(frame.Data.Length);
                 writer.Write(frame.Width);
                 writer.Write(frame.Height);

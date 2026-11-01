@@ -10,7 +10,8 @@ namespace LanScreenShare.Network.Streaming
 {
     public class TcpStreamClient : IStreamClient
     {
-        private const uint FrameHeaderMagic = 0x4C535331; // "LSS1"
+        private const uint FrameHeaderMagicJpeg = 0x4C535331; // "LSS1"
+        private const uint FrameHeaderMagicH264 = 0x4C535332; // "LSS2"
         private TcpClient? _client;
         private CancellationTokenSource? _cts;
         private bool _disposed;
@@ -65,7 +66,7 @@ namespace LanScreenShare.Network.Streaming
                             timestamp = reader.ReadInt64();
                         }
 
-                        if (magic != FrameHeaderMagic || dataLength <= 0 || dataLength > 50 * 1024 * 1024)
+                        if ((magic != FrameHeaderMagicJpeg && magic != FrameHeaderMagicH264) || dataLength <= 0 || dataLength > 50 * 1024 * 1024)
                         {
                             Console.WriteLine($"[StreamClient] Encabezado inválido o corrupto (Magic: {magic:X}, Length: {dataLength})");
                             continue;
@@ -81,7 +82,7 @@ namespace LanScreenShare.Network.Streaming
                             Width = width,
                             Height = height,
                             Timestamp = timestamp,
-                            Format = "jpeg"
+                            Format = magic == FrameHeaderMagicH264 ? "h264" : "jpeg"
                         };
 
                         FrameReceived?.Invoke(this, frame);
