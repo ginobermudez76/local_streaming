@@ -43,3 +43,7 @@ $RECYCLE.BIN/
 ## Mac / Linux generated files
 .DS_Store
 ._*
+
+## Tooling and indexing
+.codegraph/
+.gemini/
