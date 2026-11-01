@@ -1,7 +1,9 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
@@ -20,12 +22,25 @@ namespace LanScreenShare.Desktop
     public partial class MainWindow : Window
     {
         private readonly DiscoveryService _discoveryService;
-        private readonly IScreenCaptureService _screenCaptureService;
+        private IScreenCaptureService _screenCaptureService;
         private readonly IStreamServer _streamServer;
         private readonly IStreamClient _streamClient;
 
+        // Servicios de streaming de audio
+        private readonly IAudioCaptureService? _audioCaptureService;
+        private readonly IAudioPlayerService? _audioPlayerService;
+        private readonly TcpAudioServer _audioServer;
+        private readonly TcpAudioClient _audioClient;
+
         private bool _isHosting;
         private string? _currentConnectedDeviceName;
+
+        // Estadísticas de flujo en tiempo real
+        private long _metricFramesCount;
+        private long _metricBytesCount;
+        private int _lastFrameWidth;
+        private int _lastFrameHeight;
+        private readonly DispatcherTimer _metricsTimer;
 
         public ObservableCollection<DeviceInfo> Devices { get; } = new();
 
@@ -36,7 +51,8 @@ namespace LanScreenShare.Desktop
             _discoveryService = new DiscoveryService();
             _discoveryService.OnDeviceDiscovered += DiscoveryService_OnDeviceDiscovered;
 
-            _screenCaptureService = new WindowsScreenCaptureService();
+            // Iniciar por defecto con el motor DXGI (acelerado por GPU)
+            _screenCaptureService = new DxgiScreenCaptureService();
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
 
             _streamServer = new TcpStreamServer();
@@ -46,6 +62,29 @@ namespace LanScreenShare.Desktop
             _streamClient = new TcpStreamClient();
             _streamClient.FrameReceived += StreamClient_FrameReceived;
             _streamClient.StatusChanged += StreamClient_StatusChanged;
+
+            // Inicialización de subsistema de Audio
+            _audioServer = new TcpAudioServer();
+            _audioClient = new TcpAudioClient();
+
+            if (OperatingSystem.IsWindows())
+            {
+                _audioCaptureService = new WasapiAudioCaptureService();
+                _audioPlayerService = new WasapiAudioPlayerService();
+
+                _audioCaptureService.AudioCaptured += async (s, chunk) =>
+                {
+                    if (_isHosting && _audioServer.IsRunning)
+                    {
+                        await _audioServer.BroadcastAudioAsync(chunk);
+                    }
+                };
+
+                _audioClient.AudioReceived += (s, chunk) =>
+                {
+                    _audioPlayerService.PlayChunk(chunk);
+                };
+            }
 
             var devicesList = this.FindControl<ListBox>("DevicesList");
             if (devicesList != null)
@@ -71,8 +110,209 @@ namespace LanScreenShare.Desktop
                 disconnectButton.Click += DisconnectButton_Click;
             }
 
+            var audioMuteButton = this.FindControl<Button>("AudioMuteButton");
+            if (audioMuteButton != null)
+            {
+                audioMuteButton.Click += (s, e) =>
+                {
+                    if (_audioPlayerService != null)
+                    {
+                        _audioPlayerService.IsMuted = !_audioPlayerService.IsMuted;
+                        audioMuteButton.Content = _audioPlayerService.IsMuted ? "🔇" : "🔊";
+                    }
+                };
+            }
+
+            // Controles de ajuste de transmisión
+            var engineCombo = this.FindControl<ComboBox>("EngineComboBox");
+            if (engineCombo != null)
+            {
+                engineCombo.SelectionChanged += (s, e) => OnEngineChanged();
+            }
+
+            var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
+            if (fpsCombo != null)
+            {
+                fpsCombo.SelectionChanged += (s, e) => OnSettingChanged();
+            }
+
+            var qualitySlider = this.FindControl<Slider>("QualitySlider");
+            if (qualitySlider != null)
+            {
+                qualitySlider.PropertyChanged += (s, e) =>
+                {
+                    if (e.Property.Name == nameof(Slider.Value))
+                    {
+                        OnSettingChanged();
+                    }
+                };
+            }
+
+            var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
+            if (scaleCombo != null)
+            {
+                scaleCombo.SelectionChanged += (s, e) => OnSettingChanged();
+            }
+
+            // Temporizador de métricas (1 segundo)
+            _metricsTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _metricsTimer.Tick += MetricsTimer_Tick;
+            _metricsTimer.Start();
+
             this.Closing += MainWindow_Closing;
         }
+
+        #region Stream Settings Logic
+
+        private string GetSelectedEngine()
+        {
+            var combo = this.FindControl<ComboBox>("EngineComboBox");
+            if (combo?.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            {
+                return tag;
+            }
+            return "dxgi";
+        }
+
+        private int GetSelectedFps()
+        {
+            var combo = this.FindControl<ComboBox>("FpsComboBox");
+            if (combo?.SelectedItem is ComboBoxItem item && item.Tag is string tag && int.TryParse(tag, out int fps))
+            {
+                return fps;
+            }
+            return 30;
+        }
+
+        private double GetSelectedScale()
+        {
+            var combo = this.FindControl<ComboBox>("ScaleComboBox");
+            if (combo?.SelectedItem is ComboBoxItem item && item.Tag is string tag &&
+                double.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out double scale))
+            {
+                return scale;
+            }
+            return 1.0;
+        }
+
+        private void OnEngineChanged()
+        {
+            if (_isHosting)
+            {
+                int fps = GetSelectedFps();
+                int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
+                double scale = GetSelectedScale();
+                string engine = GetSelectedEngine();
+
+                SwitchCaptureEngine(engine, fps, quality, scale);
+                string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
+                UpdateStatus($"Cambiado a motor {engineName} en caliente", "#22C55E");
+            }
+        }
+
+        private void SwitchCaptureEngine(string engine, int fps, int quality, double scale)
+        {
+            _screenCaptureService.StopCapture();
+            _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
+            _screenCaptureService.Dispose();
+
+            if (engine == "dxgi")
+            {
+                _screenCaptureService = new DxgiScreenCaptureService();
+            }
+            else
+            {
+                _screenCaptureService = new WindowsScreenCaptureService();
+            }
+
+            _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
+            _screenCaptureService.StartCapture(fps, quality, scale);
+        }
+
+        private void OnSettingChanged()
+        {
+            int fps = GetSelectedFps();
+            int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
+            double scale = GetSelectedScale();
+
+            var fpsLabel = this.FindControl<TextBlock>("FpsValueLabel");
+            if (fpsLabel != null)
+            {
+                fpsLabel.Text = $"{fps} FPS";
+            }
+
+            var qualityLabel = this.FindControl<TextBlock>("QualityValueLabel");
+            if (qualityLabel != null)
+            {
+                qualityLabel.Text = $"{quality}%";
+            }
+
+            var scaleLabel = this.FindControl<TextBlock>("ScaleValueLabel");
+            if (scaleLabel != null)
+            {
+                scaleLabel.Text = $"{scale * 100:0}%";
+            }
+
+            _screenCaptureService.UpdateSettings(fps, quality, scale);
+        }
+
+        private void MetricsTimer_Tick(object? sender, EventArgs e)
+        {
+            long frames = Interlocked.Exchange(ref _metricFramesCount, 0);
+            long bytes = Interlocked.Exchange(ref _metricBytesCount, 0);
+
+            var statsBadge = this.FindControl<Border>("StatsBadge");
+            var statsText = this.FindControl<TextBlock>("StatsText");
+
+            if (_isHosting || (_streamClient != null && _streamClient.IsConnected))
+            {
+                if (statsBadge != null && statsText != null)
+                {
+                    statsBadge.IsVisible = true;
+                    double kbPerSec = bytes / 1024.0;
+                    string transferRate = kbPerSec >= 1024
+                        ? $"{(kbPerSec / 1024.0):F1} MB/s"
+                        : $"{kbPerSec:F0} KB/s";
+
+                    string res = _lastFrameWidth > 0 ? $" • {_lastFrameWidth}x{_lastFrameHeight}" : "";
+                    string engineTag = _isHosting
+                        ? (_screenCaptureService is DxgiScreenCaptureService ? " • DXGI GPU" : " • GDI CPU")
+                        : "";
+
+                    string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient.IsConnected && _audioClient.IsConnected)
+                        ? " • 🔊 Audio"
+                        : "";
+
+                    statsText.Text = $"{frames} FPS • {transferRate}{res}{engineTag}{audioTag}";
+                }
+            }
+            else
+            {
+                if (statsBadge != null)
+                {
+                    statsBadge.IsVisible = false;
+                }
+            }
+        }
+
+        private void ResetMetrics()
+        {
+            Interlocked.Exchange(ref _metricFramesCount, 0);
+            Interlocked.Exchange(ref _metricBytesCount, 0);
+            _lastFrameWidth = 0;
+            _lastFrameHeight = 0;
+
+            var statsBadge = this.FindControl<Border>("StatsBadge");
+            if (statsBadge != null)
+            {
+                statsBadge.IsVisible = false;
+            }
+        }
+
+        #endregion
 
         #region Hosting Logic
 
@@ -85,11 +325,34 @@ namespace LanScreenShare.Desktop
                 // Iniciar Host
                 try
                 {
+                    int fps = GetSelectedFps();
+                    int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
+                    double scale = GetSelectedScale();
+                    string engine = GetSelectedEngine();
+
+                    // 1. Iniciar servidor de video (Puerto 5001)
                     await _streamServer.StartAsync(5001);
-                    _screenCaptureService.StartCapture(targetFps: 30, quality: 75);
+                    SwitchCaptureEngine(engine, fps, quality, scale);
+
+                    // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
+                    bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
+                    if (shareAudio)
+                    {
+                        try
+                        {
+                            await _audioServer.StartAsync(5002);
+                            _audioCaptureService?.StartCapture();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Audio] Advertencia iniciando audio: {ex.Message}");
+                        }
+                    }
+
                     _discoveryService.StartHostingBroadcast();
 
                     _isHosting = true;
+                    ResetMetrics();
 
                     if (hostBtn != null)
                     {
@@ -97,7 +360,9 @@ namespace LanScreenShare.Desktop
                         hostBtn.Background = new SolidColorBrush(Color.Parse("#DC2626"));
                     }
 
-                    UpdateStatus("Transmitiendo pantalla propia (Puerto 5001) - Esperando espectadores", "#22C55E");
+                    string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
+                    string audioStatus = shareAudio ? " + Audio WASAPI" : "";
+                    UpdateStatus($"Transmitiendo pantalla con {engineName}{audioStatus} - Esperando espectadores", "#22C55E");
                 }
                 catch (Exception ex)
                 {
@@ -109,9 +374,14 @@ namespace LanScreenShare.Desktop
                 // Detener Host
                 _screenCaptureService.StopCapture();
                 _streamServer.Stop();
+
+                _audioCaptureService?.StopCapture();
+                _audioServer.Stop();
+
                 _discoveryService.StopHosting();
 
                 _isHosting = false;
+                ResetMetrics();
 
                 if (hostBtn != null)
                 {
@@ -127,6 +397,11 @@ namespace LanScreenShare.Desktop
         {
             if (_isHosting && _streamServer.IsRunning)
             {
+                Interlocked.Increment(ref _metricFramesCount);
+                Interlocked.Add(ref _metricBytesCount, frame.Data.Length);
+                _lastFrameWidth = frame.Width;
+                _lastFrameHeight = frame.Height;
+
                 await _streamServer.BroadcastFrameAsync(frame);
             }
         }
@@ -202,15 +477,34 @@ namespace LanScreenShare.Desktop
         {
             _currentConnectedDeviceName = device.Name;
             UpdateStatus($"Conectando a {device.Name} ({device.IPAddress}:5001)...", "#F59E0B");
+            ResetMetrics();
 
             try
             {
+                // 1. Conectar flujo de video
                 await _streamClient.ConnectAsync(device.IPAddress, 5001);
+
+                // 2. Conectar flujo de audio en paralelo
+                try
+                {
+                    await _audioClient.ConnectAsync(device.IPAddress, 5002);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[AudioClient] Audio no disponible en el host: {ex.Message}");
+                }
 
                 var disconnectBtn = this.FindControl<Button>("DisconnectButton");
                 if (disconnectBtn != null)
                 {
                     disconnectBtn.IsVisible = true;
+                }
+
+                var muteBtn = this.FindControl<Button>("AudioMuteButton");
+                if (muteBtn != null)
+                {
+                    muteBtn.IsVisible = true;
+                    muteBtn.Content = (_audioPlayerService?.IsMuted ?? false) ? "🔇" : "🔊";
                 }
             }
             catch (Exception ex)
@@ -221,6 +515,11 @@ namespace LanScreenShare.Desktop
 
         private void StreamClient_FrameReceived(object? sender, CapturedFrame frame)
         {
+            Interlocked.Increment(ref _metricFramesCount);
+            Interlocked.Add(ref _metricBytesCount, frame.Data.Length);
+            _lastFrameWidth = frame.Width;
+            _lastFrameHeight = frame.Height;
+
             try
             {
                 using var ms = new MemoryStream(frame.Data);
@@ -240,7 +539,7 @@ namespace LanScreenShare.Desktop
                         placeholder.IsVisible = false;
                     }
 
-                    UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName} ({frame.Width}x{frame.Height})", "#22C55E");
+                    UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName}", "#22C55E");
                 });
             }
             catch (Exception ex)
@@ -260,12 +559,22 @@ namespace LanScreenShare.Desktop
                 {
                     disconnectBtn.IsVisible = _streamClient.IsConnected;
                 }
+
+                var muteBtn = this.FindControl<Button>("AudioMuteButton");
+                if (muteBtn != null)
+                {
+                    muteBtn.IsVisible = _streamClient.IsConnected;
+                }
             });
         }
 
         private async void DisconnectButton_Click(object? sender, RoutedEventArgs e)
         {
             await _streamClient.DisconnectAsync();
+            await _audioClient.DisconnectAsync();
+            _audioPlayerService?.Stop();
+
+            ResetMetrics();
 
             var screenImage = this.FindControl<Image>("ScreenImage");
             if (screenImage != null)
@@ -283,6 +592,12 @@ namespace LanScreenShare.Desktop
             if (disconnectBtn != null)
             {
                 disconnectBtn.IsVisible = false;
+            }
+
+            var muteBtn = this.FindControl<Button>("AudioMuteButton");
+            if (muteBtn != null)
+            {
+                muteBtn.IsVisible = false;
             }
 
             UpdateStatus("Desconectado", "#71717A");
@@ -309,9 +624,17 @@ namespace LanScreenShare.Desktop
 
         private void MainWindow_Closing(object? sender, WindowClosingEventArgs e)
         {
+            _metricsTimer.Stop();
+
             _screenCaptureService.Dispose();
             _streamServer.Dispose();
             _streamClient.Dispose();
+
+            _audioCaptureService?.Dispose();
+            _audioPlayerService?.Dispose();
+            _audioServer.Dispose();
+            _audioClient.Dispose();
+
             _discoveryService.StopHosting();
             _discoveryService.StopListening();
         }
