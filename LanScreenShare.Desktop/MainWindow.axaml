@@ -245,6 +245,16 @@
                                       FontSize="12"
                                       ToolTip.Tip="Habilitar interacción con mouse y teclado"/>
 
+                        <ToggleButton x:Name="GameModeButton"
+                                      Content="🎯 Modo 3D (Ctrl+Alt+L)"
+                                      IsVisible="False"
+                                      Background="#27272A"
+                                      Foreground="White"
+                                      Padding="10,6"
+                                      CornerRadius="4"
+                                      FontSize="12"
+                                      ToolTip.Tip="Captura el mouse para juegos 3D (giro 360°). Presiona Ctrl+Alt+L para liberar el cursor"/>
+
                         <Button x:Name="AudioMuteButton"
                                 Content="🔊"
                                 IsVisible="False"
@@ -275,6 +285,25 @@
                        HorizontalAlignment="Stretch"
                        VerticalAlignment="Stretch"
                        Focusable="True"/>
+
+                <!-- Game 3D Mode Floating Notification -->
+                <Border x:Name="GameModeBanner"
+                        Background="#E618181B"
+                        BorderBrush="#38BDF8"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="14,7"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,14,0,0"
+                        IsVisible="False"
+                        IsHitTestVisible="False">
+                    <TextBlock x:Name="GameModeBannerText"
+                               Text="🎯 Modo Juego 3D Activo — Presiona Ctrl + Alt + L para liberar el mouse"
+                               Foreground="#38BDF8"
+                               FontSize="12"
+                               FontWeight="SemiBold"/>
+                </Border>
 
                 <!-- Placeholder Overlay -->
                 <StackPanel x:Name="PlaceholderPanel"

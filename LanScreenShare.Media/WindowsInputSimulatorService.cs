@@ -21,6 +21,10 @@ namespace LanScreenShare.Media
                         SendMouseMove(input.NormalizedX, input.NormalizedY);
                         break;
 
+                    case InputEventType.MouseMoveRelative:
+                        SendMouseMoveRelative((int)Math.Round(input.NormalizedX), (int)Math.Round(input.NormalizedY));
+                        break;
+
                     case InputEventType.MouseDown:
                         SendMouseButton(input.Button, isDown: true, input.NormalizedX, input.NormalizedY);
                         break;
@@ -59,10 +63,20 @@ namespace LanScreenShare.Media
             SetCursorPos(targetX, targetY);
         }
 
+        private static void SendMouseMoveRelative(int dx, int dy)
+        {
+            if (dx == 0 && dy == 0)
+                return;
+
+            mouse_event(MOUSEEVENTF_MOVE, (uint)dx, (uint)dy, 0, UIntPtr.Zero);
+        }
+
         private static void SendMouseButton(RemoteMouseButton button, bool isDown, float normX, float normY)
         {
-            // Primero posicionar cursor en el punto exacto
-            SendMouseMove(normX, normY);
+            if (normX >= 0f && normY >= 0f)
+            {
+                SendMouseMove(normX, normY);
+            }
 
             uint flag = 0;
             switch (button)
@@ -85,7 +99,10 @@ namespace LanScreenShare.Media
 
         private static void SendMouseWheel(short delta, float normX, float normY)
         {
-            SendMouseMove(normX, normY);
+            if (normX >= 0f && normY >= 0f)
+            {
+                SendMouseMove(normX, normY);
+            }
             mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (uint)delta, UIntPtr.Zero);
         }
 
@@ -103,6 +120,7 @@ namespace LanScreenShare.Media
         private const int SM_CXSCREEN = 0;
         private const int SM_CYSCREEN = 1;
 
+        private const uint MOUSEEVENTF_MOVE = 0x0001;
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
         private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;

@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
@@ -13,6 +14,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
 using LanScreenShare.Media;
@@ -40,6 +42,9 @@ namespace LanScreenShare.Desktop
         private readonly TcpControlClient _controlClient;
         private bool _remoteControlEnabled;
         private volatile bool _allowRemoteControl = true;
+        private bool _isGameMode;
+        private bool _isRecenteringMouse;
+        private DispatcherTimer? _gameModeBannerTimer;
 
         private bool _isHosting;
         private string? _currentConnectedDeviceName;
@@ -174,6 +179,20 @@ namespace LanScreenShare.Desktop
                 };
             }
 
+            var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
+            if (gameModeBtn != null)
+            {
+                gameModeBtn.IsCheckedChanged += (s, e) =>
+                {
+                    if (_isGameMode != (gameModeBtn.IsChecked == true))
+                    {
+                        ToggleGameMode();
+                    }
+                };
+            }
+
+            this.KeyDown += MainWindow_KeyDown;
+
             // Eventos de entrada sobre ScreenImage para control remoto
             var screenImage = this.FindControl<Image>("ScreenImage");
             if (screenImage != null)
@@ -291,9 +310,152 @@ namespace LanScreenShare.Desktop
             return true;
         }
 
+        private void MainWindow_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.L &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            {
+                ToggleGameMode();
+                e.Handled = true;
+                return;
+            }
+        }
+
+        private void ToggleGameMode()
+        {
+            if (!_controlClient.IsConnected)
+                return;
+
+            _isGameMode = !_isGameMode;
+            UpdateGameModeUI();
+        }
+
+        private void UpdateGameModeUI()
+        {
+            var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
+            if (gameModeBtn != null)
+            {
+                gameModeBtn.IsChecked = _isGameMode;
+                gameModeBtn.Background = _isGameMode
+                    ? new SolidColorBrush(Color.Parse("#2563EB"))
+                    : new SolidColorBrush(Color.Parse("#27272A"));
+            }
+
+            var banner = this.FindControl<Border>("GameModeBanner");
+            var bannerText = this.FindControl<TextBlock>("GameModeBannerText");
+            var screenImage = this.FindControl<Image>("ScreenImage");
+
+            if (_isGameMode)
+            {
+                _remoteControlEnabled = true;
+                var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
+                if (remoteControlBtn != null)
+                {
+                    remoteControlBtn.IsChecked = true;
+                    remoteControlBtn.Background = new SolidColorBrush(Color.Parse("#2563EB"));
+                }
+
+                if (screenImage != null)
+                {
+                    screenImage.Focus();
+                    screenImage.Cursor = new Cursor(StandardCursorType.None);
+                }
+
+                if (OperatingSystem.IsWindows())
+                {
+                    var center = GetScreenImageCenterOnScreen();
+                    _isRecenteringMouse = true;
+                    SetCursorPos(center.X, center.Y);
+                }
+
+                _gameModeBannerTimer?.Stop();
+                if (banner != null && bannerText != null)
+                {
+                    banner.IsVisible = true;
+                    bannerText.Text = "🎯 Modo Juego 3D Activo — Presiona Ctrl + Alt + L para liberar el mouse";
+                    bannerText.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
+                }
+            }
+            else
+            {
+                if (screenImage != null)
+                {
+                    screenImage.Cursor = Cursor.Default;
+                }
+
+                if (banner != null && bannerText != null)
+                {
+                    banner.IsVisible = true;
+                    bannerText.Text = "🔓 Mouse Liberado — Presiona Ctrl + Alt + L para recapturar";
+                    bannerText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
+
+                    _gameModeBannerTimer?.Stop();
+                    _gameModeBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+                    _gameModeBannerTimer.Tick += (s, e) =>
+                    {
+                        banner.IsVisible = false;
+                        _gameModeBannerTimer?.Stop();
+                    };
+                    _gameModeBannerTimer.Start();
+                }
+            }
+        }
+
+        private Avalonia.PixelPoint GetScreenImageCenterOnScreen()
+        {
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            if (screenImage != null && screenImage.Bounds.Width > 0 && screenImage.Bounds.Height > 0)
+            {
+                int imgCenterX = this.Position.X + (int)Math.Round(screenImage.Bounds.X + (screenImage.Bounds.Width / 2.0));
+                int imgCenterY = this.Position.Y + (int)Math.Round(screenImage.Bounds.Y + (screenImage.Bounds.Height / 2.0));
+                return new Avalonia.PixelPoint(imgCenterX, imgCenterY);
+            }
+
+            int winCenterX = this.Position.X + (int)Math.Round(this.Bounds.Width / 2.0);
+            int winCenterY = this.Position.Y + (int)Math.Round(this.Bounds.Height / 2.0);
+            return new Avalonia.PixelPoint(winCenterX, winCenterY);
+        }
+
         private void ScreenImage_PointerMoved(object? sender, PointerEventArgs e)
         {
-            if (_remoteControlEnabled && _controlClient.IsConnected && TryGetNormalizedCoordinates(e, out float x, out float y))
+            if (!_remoteControlEnabled || !_controlClient.IsConnected)
+                return;
+
+            if (_isGameMode)
+            {
+                if (_isRecenteringMouse)
+                {
+                    _isRecenteringMouse = false;
+                    return;
+                }
+
+                if (OperatingSystem.IsWindows())
+                {
+                    var center = GetScreenImageCenterOnScreen();
+                    if (GetCursorPos(out POINT curPos))
+                    {
+                        int dx = curPos.X - center.X;
+                        int dy = curPos.Y - center.Y;
+
+                        if (dx != 0 || dy != 0)
+                        {
+                            _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                            {
+                                Type = InputEventType.MouseMoveRelative,
+                                NormalizedX = dx,
+                                NormalizedY = dy
+                            });
+
+                            _isRecenteringMouse = true;
+                            SetCursorPos(center.X, center.Y);
+                        }
+                    }
+                }
+                return;
+            }
+
+            if (TryGetNormalizedCoordinates(e, out float x, out float y))
             {
                 _ = _controlClient.SendInputAsync(new RemoteInputMessage
                 {
@@ -306,46 +468,78 @@ namespace LanScreenShare.Desktop
 
         private void ScreenImage_PointerPressed(object? sender, PointerPressedEventArgs e)
         {
-            if (_remoteControlEnabled && _controlClient.IsConnected && TryGetNormalizedCoordinates(e, out float x, out float y))
+            if (!_remoteControlEnabled || !_controlClient.IsConnected)
+                return;
+
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            screenImage?.Focus();
+
+            var point = e.GetCurrentPoint(screenImage);
+            var props = point.Properties;
+
+            RemoteMouseButton button = props.IsLeftButtonPressed ? RemoteMouseButton.Left
+                : props.IsRightButtonPressed ? RemoteMouseButton.Right
+                : props.IsMiddleButtonPressed ? RemoteMouseButton.Middle
+                : RemoteMouseButton.None;
+
+            if (button == RemoteMouseButton.None)
+                return;
+
+            if (_isGameMode)
             {
-                var screenImage = this.FindControl<Image>("ScreenImage");
-                screenImage?.Focus();
-
-                var point = e.GetCurrentPoint(screenImage);
-                var props = point.Properties;
-
-                RemoteMouseButton button = props.IsLeftButtonPressed ? RemoteMouseButton.Left
-                    : props.IsRightButtonPressed ? RemoteMouseButton.Right
-                    : props.IsMiddleButtonPressed ? RemoteMouseButton.Middle
-                    : RemoteMouseButton.None;
-
-                if (button != RemoteMouseButton.None)
+                _ = _controlClient.SendInputAsync(new RemoteInputMessage
                 {
-                    _ = _controlClient.SendInputAsync(new RemoteInputMessage
-                    {
-                        Type = InputEventType.MouseDown,
-                        Button = button,
-                        NormalizedX = x,
-                        NormalizedY = y
-                    });
-                    e.Handled = true;
-                }
+                    Type = InputEventType.MouseDown,
+                    Button = button,
+                    NormalizedX = -1f,
+                    NormalizedY = -1f
+                });
+                e.Handled = true;
+                return;
+            }
+
+            if (TryGetNormalizedCoordinates(e, out float x, out float y))
+            {
+                _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                {
+                    Type = InputEventType.MouseDown,
+                    Button = button,
+                    NormalizedX = x,
+                    NormalizedY = y
+                });
+                e.Handled = true;
             }
         }
 
         private void ScreenImage_PointerReleased(object? sender, PointerReleasedEventArgs e)
         {
-            if (_remoteControlEnabled && _controlClient.IsConnected && TryGetNormalizedCoordinates(e, out float x, out float y))
+            if (!_remoteControlEnabled || !_controlClient.IsConnected)
+                return;
+
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            var point = e.GetCurrentPoint(screenImage);
+            var props = point.Properties;
+
+            RemoteMouseButton button = props.PointerUpdateKind == PointerUpdateKind.LeftButtonReleased ? RemoteMouseButton.Left
+                : props.PointerUpdateKind == PointerUpdateKind.RightButtonReleased ? RemoteMouseButton.Right
+                : props.PointerUpdateKind == PointerUpdateKind.MiddleButtonReleased ? RemoteMouseButton.Middle
+                : RemoteMouseButton.Left;
+
+            if (_isGameMode)
             {
-                var screenImage = this.FindControl<Image>("ScreenImage");
-                var point = e.GetCurrentPoint(screenImage);
-                var props = point.Properties;
+                _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                {
+                    Type = InputEventType.MouseUp,
+                    Button = button,
+                    NormalizedX = -1f,
+                    NormalizedY = -1f
+                });
+                e.Handled = true;
+                return;
+            }
 
-                RemoteMouseButton button = props.PointerUpdateKind == PointerUpdateKind.LeftButtonReleased ? RemoteMouseButton.Left
-                    : props.PointerUpdateKind == PointerUpdateKind.RightButtonReleased ? RemoteMouseButton.Right
-                    : props.PointerUpdateKind == PointerUpdateKind.MiddleButtonReleased ? RemoteMouseButton.Middle
-                    : RemoteMouseButton.Left;
-
+            if (TryGetNormalizedCoordinates(e, out float x, out float y))
+            {
                 _ = _controlClient.SendInputAsync(new RemoteInputMessage
                 {
                     Type = InputEventType.MouseUp,
@@ -359,9 +553,26 @@ namespace LanScreenShare.Desktop
 
         private void ScreenImage_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
         {
-            if (_remoteControlEnabled && _controlClient.IsConnected && TryGetNormalizedCoordinates(e, out float x, out float y))
+            if (!_remoteControlEnabled || !_controlClient.IsConnected)
+                return;
+
+            short delta = (short)(e.Delta.Y * 120);
+
+            if (_isGameMode)
             {
-                short delta = (short)(e.Delta.Y * 120);
+                _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                {
+                    Type = InputEventType.MouseWheel,
+                    WheelDelta = delta,
+                    NormalizedX = -1f,
+                    NormalizedY = -1f
+                });
+                e.Handled = true;
+                return;
+            }
+
+            if (TryGetNormalizedCoordinates(e, out float x, out float y))
+            {
                 _ = _controlClient.SendInputAsync(new RemoteInputMessage
                 {
                     Type = InputEventType.MouseWheel,
@@ -375,6 +586,15 @@ namespace LanScreenShare.Desktop
 
         private void ScreenImage_KeyDown(object? sender, KeyEventArgs e)
         {
+            if (e.Key == Key.L &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            {
+                ToggleGameMode();
+                e.Handled = true;
+                return;
+            }
+
             if (_remoteControlEnabled && _controlClient.IsConnected)
             {
                 int vk = ConvertAvaloniaKeyToWin32Vk(e.Key);
@@ -392,6 +612,14 @@ namespace LanScreenShare.Desktop
 
         private void ScreenImage_KeyUp(object? sender, KeyEventArgs e)
         {
+            if (e.Key == Key.L &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            {
+                e.Handled = true;
+                return;
+            }
+
             if (_remoteControlEnabled && _controlClient.IsConnected)
             {
                 int vk = ConvertAvaloniaKeyToWin32Vk(e.Key);
@@ -818,6 +1046,14 @@ namespace LanScreenShare.Desktop
                         ? "Habilitar interacción con mouse y teclado"
                         : "Control remoto no disponible (puerto 5003 no respondió en el host)");
                 }
+
+                var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
+                if (gameModeBtn != null)
+                {
+                    gameModeBtn.IsVisible = true;
+                    gameModeBtn.IsChecked = false;
+                    gameModeBtn.IsEnabled = _controlClient.IsConnected;
+                }
             }
             catch (Exception ex)
             {
@@ -883,6 +1119,13 @@ namespace LanScreenShare.Desktop
                 {
                     remoteControlBtn.IsVisible = _streamClient.IsConnected;
                 }
+
+                var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
+                if (gameModeBtn != null)
+                {
+                    gameModeBtn.IsVisible = _streamClient.IsConnected;
+                    if (!_streamClient.IsConnected) gameModeBtn.IsChecked = false;
+                }
             });
         }
 
@@ -894,6 +1137,12 @@ namespace LanScreenShare.Desktop
 
             _audioPlayerService?.Stop();
             _remoteControlEnabled = false;
+
+            if (_isGameMode)
+            {
+                _isGameMode = false;
+                UpdateGameModeUI();
+            }
 
             ResetMetrics();
 
@@ -926,6 +1175,13 @@ namespace LanScreenShare.Desktop
             {
                 remoteControlBtn.IsVisible = false;
                 remoteControlBtn.IsChecked = false;
+            }
+
+            var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
+            if (gameModeBtn != null)
+            {
+                gameModeBtn.IsVisible = false;
+                gameModeBtn.IsChecked = false;
             }
 
             UpdateStatus("Desconectado", "#71717A");
@@ -966,6 +1222,23 @@ namespace LanScreenShare.Desktop
                 return false;
             }
         }
+
+        #region Win32 P/Invoke for Mouse Centering
+
+        [DllImport("user32.dll")]
+        private static extern bool SetCursorPos(int X, int Y);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetCursorPos(out POINT lpPoint);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
+        #endregion
 
         private void MainWindow_Closing(object? sender, WindowClosingEventArgs e)
         {
