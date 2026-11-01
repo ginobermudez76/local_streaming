@@ -15,18 +15,49 @@ namespace LanScreenShare.Media
         private Task? _captureTask;
         private bool _disposed;
 
+        private volatile int _targetFps = 30;
+        private volatile int _quality = 75;
+        private volatile int _scalePercent = 100;
+
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
 
-        public void StartCapture(int targetFps = 30, int quality = 75)
+        public int TargetFps
+        {
+            get => _targetFps;
+            set => _targetFps = Math.Clamp(value, 1, 120);
+        }
+
+        public int Quality
+        {
+            get => _quality;
+            set => _quality = Math.Clamp(value, 10, 100);
+        }
+
+        public double ResolutionScale
+        {
+            get => _scalePercent / 100.0;
+            set => _scalePercent = (int)Math.Round(Math.Clamp(value, 0.25, 1.0) * 100);
+        }
+
+        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0)
+        {
+            TargetFps = targetFps;
+            Quality = quality;
+            ResolutionScale = resolutionScale;
+        }
+
+        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0)
         {
             if (IsCapturing)
                 return;
 
+            _targetFps = Math.Clamp(targetFps, 1, 120);
+            _quality = Math.Clamp(quality, 10, 100);
+            ResolutionScale = resolutionScale;
+
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
-
-            int frameIntervalMs = Math.Max(10, 1000 / targetFps);
 
             _captureTask = Task.Run(async () =>
             {
@@ -36,9 +67,12 @@ namespace LanScreenShare.Media
                 {
                     stopwatch.Restart();
 
+                    int currentFps = _targetFps;
+                    int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, currentFps));
+
                     try
                     {
-                        var frame = CaptureDesktopFrame(quality);
+                        var frame = CaptureDesktopFrame(_quality, ResolutionScale);
                         if (frame != null)
                         {
                             FrameCaptured?.Invoke(this, frame);
@@ -82,7 +116,7 @@ namespace LanScreenShare.Media
             _captureTask = null;
         }
 
-        private CapturedFrame? CaptureDesktopFrame(int quality)
+        private CapturedFrame? CaptureDesktopFrame(int quality, double scale)
         {
             int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
             int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -136,6 +170,9 @@ namespace LanScreenShare.Media
             DrawMouseCursor(hdcDest, left, top);
 
             byte[]? jpegBytes = null;
+            int finalWidth = width;
+            int finalHeight = height;
+
             try
             {
                 var imageInfo = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
@@ -143,15 +180,41 @@ namespace LanScreenShare.Media
                 {
                     skBitmap.InstallPixels(imageInfo, pBits);
 
-                    using (var image = SKImage.FromBitmap(skBitmap))
+                    SKBitmap bitmapToEncode = skBitmap;
+                    SKBitmap? resizedBitmap = null;
+
+                    if (scale > 0.2 && scale < 0.99)
                     {
-                        if (image != null)
+                        int targetW = (int)(width * scale);
+                        int targetH = (int)(height * scale);
+                        if (targetW > 0 && targetH > 0)
                         {
-                            using (var data = image.Encode(SKEncodedImageFormat.Jpeg, quality))
+                            resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), SKSamplingOptions.Default);
+                            if (resizedBitmap != null)
                             {
-                                jpegBytes = data.ToArray();
+                                bitmapToEncode = resizedBitmap;
+                                finalWidth = targetW;
+                                finalHeight = targetH;
                             }
                         }
+                    }
+
+                    try
+                    {
+                        using (var image = SKImage.FromBitmap(bitmapToEncode))
+                        {
+                            if (image != null)
+                            {
+                                using (var data = image.Encode(SKEncodedImageFormat.Jpeg, quality))
+                                {
+                                    jpegBytes = data.ToArray();
+                                }
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        resizedBitmap?.Dispose();
                     }
                 }
             }
@@ -169,8 +232,8 @@ namespace LanScreenShare.Media
             return new CapturedFrame
             {
                 Data = jpegBytes,
-                Width = width,
-                Height = height,
+                Width = finalWidth,
+                Height = finalHeight,
                 Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 Format = "jpeg"
             };

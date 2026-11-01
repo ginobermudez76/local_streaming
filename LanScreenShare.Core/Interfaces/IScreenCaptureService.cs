@@ -7,7 +7,11 @@ namespace LanScreenShare.Core.Interfaces
     {
         event EventHandler<CapturedFrame>? FrameCaptured;
         bool IsCapturing { get; }
-        void StartCapture(int targetFps = 30, int quality = 70);
+        int TargetFps { get; set; }
+        int Quality { get; set; }
+        double ResolutionScale { get; set; }
+        void StartCapture(int targetFps = 30, int quality = 70, double resolutionScale = 1.0);
         void StopCapture();
+        void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0);
     }
 }
