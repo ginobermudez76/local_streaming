@@ -45,9 +45,11 @@ gantt
     Protocolo de transporte (TCP)     :done,    str3, 2026-09-27, 2026-09-27
     Renderizado en MainWindow         :done,    str4, 2026-09-27, 2026-09-27
     section Fase 3: Optimización y Audio
-    Codificación acelerada / H.264    :active,  opt1, 2026-09-28, 7d
-    Streaming de Audio WASAPI         :         opt2, after opt1, 5d
-    section Fase 4: Multiplataforma
+    Codificación acelerada / H.264    :done,    opt1, 2026-09-28, 2026-09-29
+    Captura GPU DXGI Desktop Dupl.    :done,    opt2, 2026-09-29, 2026-09-30
+    Streaming de Audio WASAPI Loopback:done,    opt3, 2026-09-30, 2026-10-01
+    section Fase 4: Control y Multiplataforma
+    Control Remoto (Mouse y Teclado)  :active,  ctrl1, 2026-10-02, 5d
     Port a Linux (PipeWire / X11)     :         cross1, 2026-10-15, 10d
     Port a Android / iOS              :         cross2, after cross1, 14d
 ```
@@ -73,17 +75,31 @@ gantt
 - [x] **Renderizado en Tiempo Real en `LanScreenShare.Desktop`:**
   - Integración en `MainWindow.axaml` con control `Image` y decodificación asincrónica en Avalonia `Bitmap`.
   - Estados de conexión (transmitiendo, viendo pantalla de par, desconectado, indicador LED de estado).
+- [x] **Ajuste Dinámico de Calidad, FPS y Resolución (Fase 3):**
+  - Controles interactivos en UI (Selector de FPS: 15/30/60, Slider de Calidad JPEG: 30% a 95%, Selector de escala de resolución: 100%/75%/50%).
+  - Aplicación en caliente sin reiniciar la transmisión (`IScreenCaptureService.UpdateSettings`).
+  - Redimensionamiento acelerado por SkiaSharp (`SKSamplingOptions.Default`).
+  - Badge de métricas en tiempo real en la barra de transmisión (`FPS` reales, tasa en `KB/s` / `MB/s`, resolución y motor activo).
+- [x] **Captura Acelerada por GPU vía DirectX 11 DXGI Desktop Duplication (Fase 3):**
+  - Implementación en `DxgiScreenCaptureService` utilizando Direct3D 11 y Vortice.Direct3D11 / DXGI.
+  - Tasa de fotogramas fluida a 60 FPS con mínimo impacto en CPU.
+  - Detección y recreación automática de duplicación ante cambios de modo o pérdida de acceso (`DXGI_ERROR_ACCESS_LOST`).
+  - Superposición antialiasing del cursor del mouse sobre fotograma mapeado.
+  - Selector de motor en UI (`DirectX DXGI GPU` o `GDI BitBlt CPU`) con cambio en caliente durante la transmisión.
+- [x] **Streaming de Audio del Sistema en Tiempo Real (WASAPI Loopback):**
+  - Modelo `CapturedAudioChunk` e interfaces `IAudioCaptureService` / `IAudioPlayerService` en Core.
+  - `WasapiAudioCaptureService`: Captura del audio de altavoces/auriculares mediante `WasapiLoopbackCapture` de Windows.
+  - `WasapiAudioPlayerService`: Reproductor de baja latencia (buffer dinámico de 25ms y control de volumen/muteo) con `WasapiOut`.
+  - Protocolo TCP de audio independiente (`TcpAudioServer` y `TcpAudioClient` en puerto 5002) con Magic binario `LSA1`.
+  - Controles integrados en UI: Checkbox de transmisión de audio y botón interactivo de silenciamiento (`🔊` / `🔇`).
 
 ---
 
-### ⏳ Siguientes Pasos (Fase 3: Optimización y Audio)
+### ⏳ Siguientes Pasos (Fase 4: Control Remoto y Multiplataforma)
 
-1. **Ajuste dinámico de calidad y FPS:**
-   - Permitir ajustar calidad JPEG (50% a 90%) o resolución para adaptarse al ancho de banda de la red Wi-Fi.
-2. **Streaming de Audio del Sistema (Windows WASAPI Loopback):**
-   - Capturar el audio de reproducción del sistema en Windows usando WASAPI (`AudioClient.Initialize` en modo Loopback) y transmitirlo multiplexado o en canal paralelo.
-3. **Control Remoto (Opcional):**
-   - Transmisión de eventos de mouse y teclado desde el cliente hacia el host para soporte/control interactivo.
+1. **Control Remoto Interactivo (Mouse y Teclado):**
+   - Transmisión de eventos de mouse y teclado desde el cliente hacia el host para soporte interactivo.
+2. **Port a Linux (PipeWire / X11) y Móviles (Android / iOS):**
 
 ---
 
@@ -109,10 +125,43 @@ classDiagram
             +string Format
         }
 
+        class CapturedAudioChunk {
+            +byte[] Data
+            +int SampleRate
+            +int Channels
+            +int BitsPerSample
+            +short AudioFormat
+            +long Timestamp
+        }
+
         class IScreenCaptureService {
             <<interface>>
             +bool IsCapturing
-            +StartCapture(int targetFps, int quality) void
+            +int TargetFps
+            +int Quality
+            +double ResolutionScale
+            +StartCapture(int, int, double) void
+            +StopCapture() void
+            +UpdateSettings(int, int, double) void
+            +event FrameCaptured
+        }
+
+        class IAudioCaptureService {
+            <<interface>>
+            +bool IsCapturing
+            +StartCapture() void
+            +StopCapture() void
+            +event AudioCaptured
+        }
+
+        class IAudioPlayerService {
+            <<interface>>
+            +bool IsPlaying
+            +bool IsMuted
+            +float Volume
+            +PlayChunk(CapturedAudioChunk) void
+            +Stop() void
+        }
             +StopCapture() void
             +event FrameCaptured
         }
@@ -164,6 +213,20 @@ classDiagram
             +DisconnectAsync() Task
             +event FrameReceived
         }
+
+        class TcpAudioServer {
+            -TcpListener _listener
+            +StartAsync(int port, CancellationToken) Task
+            +BroadcastAudioAsync(CapturedAudioChunk) Task
+            +Stop() void
+        }
+
+        class TcpAudioClient {
+            -TcpClient _client
+            +ConnectAsync(string hostIp, int port, CancellationToken) Task
+            +DisconnectAsync() Task
+            +event AudioReceived
+        }
     }
 
     %% Capa Media (Específica por SO)
@@ -171,10 +234,36 @@ classDiagram
         class WindowsScreenCaptureService {
             -bool _isCapturing
             -CancellationTokenSource _cts
-            +StartCapture(int targetFps, int quality) void
+            +StartCapture(int targetFps, int quality, double resolutionScale) void
             +StopCapture() void
-            -CaptureDesktopFrame(int quality) CapturedFrame
+            +UpdateSettings(int targetFps, int quality, double resolutionScale) void
+            -CaptureDesktopFrame(int quality, double scale) CapturedFrame
             -DrawMouseCursor(IntPtr, int, int)$ void
+        }
+
+        class DxgiScreenCaptureService {
+            -bool _isCapturing
+            -CancellationTokenSource _cts
+            +StartCapture(int targetFps, int quality, double resolutionScale) void
+            +StopCapture() void
+            +UpdateSettings(int targetFps, int quality, double resolutionScale) void
+            -CaptureLoop(CancellationToken) void
+            -EncodeFrameFromPointer(IntPtr, int, int, int, int, double, int, int) CapturedFrame
+            -DrawCursorOnBitmap(SKBitmap, int, int)$ void
+        }
+
+        class WasapiAudioCaptureService {
+            -WasapiLoopbackCapture _capture
+            +StartCapture() void
+            +StopCapture() void
+            +event AudioCaptured
+        }
+
+        class WasapiAudioPlayerService {
+            -WasapiOut _wasapiOut
+            -BufferedWaveProvider _waveProvider
+            +PlayChunk(CapturedAudioChunk) void
+            +Stop() void
         }
 
         class LinuxPipeWireCaptureService {
@@ -217,22 +306,34 @@ classDiagram
     }
 
     %% Relaciones e Implementaciones
-    IScreenCaptureService <|.. WindowsScreenCaptureService : implementa Windows
+    IScreenCaptureService <|.. DxgiScreenCaptureService : implementa Windows (GPU)
+    IScreenCaptureService <|.. WindowsScreenCaptureService : implementa Windows (GDI)
     IScreenCaptureService <|.. LinuxPipeWireCaptureService : implementa Linux (futuro)
     IScreenCaptureService <|.. AndroidMediaProjectionCaptureService : implementa Android (futuro)
 
-    IStreamServer <|.. TcpStreamServer : implementa emisor
-    IStreamClient <|.. TcpStreamClient : implementa receptor
+    IStreamServer <|.. TcpStreamServer : implementa emisor video
+    IStreamClient <|.. TcpStreamClient : implementa receptor video
+    IAudioCaptureService <|.. WasapiAudioCaptureService : implementa captura audio Windows
+    IAudioPlayerService <|.. WasapiAudioPlayerService : implementa reproductor audio Windows
 
     MainWindow --> DiscoveryService : usa
     MainWindow --> IScreenCaptureService : usa
-    MainWindow --> IStreamServer : emite frames
-    MainWindow --> IStreamClient : recibe frames
+    MainWindow --> IStreamServer : emite frames video
+    MainWindow --> IStreamClient : recibe frames video
+    MainWindow --> IAudioCaptureService : captura audio
+    MainWindow --> IAudioPlayerService : reproduce audio
+    MainWindow --> TcpAudioServer : emite audio
+    MainWindow --> TcpAudioClient : recibe audio
     MainWindow ..> CapturedFrame : renderiza en Image
+    MainWindow ..> CapturedAudioChunk : reproduce en audio buffer
 
     WindowsScreenCaptureService ..> CapturedFrame : produce
+    DxgiScreenCaptureService ..> CapturedFrame : produce
+    WasapiAudioCaptureService ..> CapturedAudioChunk : produce
     TcpStreamServer ..> CapturedFrame : transporta
     TcpStreamClient ..> CapturedFrame : recibe
+    TcpAudioServer ..> CapturedAudioChunk : transporta
+    TcpAudioClient ..> CapturedAudioChunk : recibe
 ```
 
 ---
