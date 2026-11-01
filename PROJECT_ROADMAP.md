@@ -104,6 +104,12 @@ gantt
   - Cálculo geométrico preciso en `MainWindow.axaml.cs` para compensar franjas negras (*letterboxing/pillarboxing*) del control `Image` con `Stretch="Uniform"`.
   - Controles de seguridad: Casilla *"Permitir control remoto"* en el host y botón interactivo `🎮 Control` en la barra del espectador.
   - Barra lateral responsiva con `ScrollViewer` para garantizar navegación y acceso a la lista de dispositivos en cualquier resolución de pantalla.
+  - **Modo Juego 3D (Captura de Mouse y Giro 360°):**
+    - `InputEventType.MouseMoveRelative`: Envío de deltas de movimiento relativo (`dx`, `dy`) para rotación infinita de cámara 3D en juegos (Genshin Impact, FPS, RPGs) sin topar los bordes de la pantalla.
+    - Centrado continuo del cursor en el visor para evitar que el puntero físico se escape de la ventana.
+    - Ocultamiento automático del cursor duplicado (`Cursor.None`) en el visor durante el modo juego.
+    - Atajo global **`Ctrl + Alt + L`** para bloquear o liberar el cursor en cualquier momento.
+    - Botón en barra de herramientas `🎯 Modo 3D (Ctrl+Alt+L)` y HUD Banner flotante superior con el estado actual.
 
 ---
 
