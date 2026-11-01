@@ -129,6 +129,19 @@
                                   Foreground="#E4E4E7"
                                   FontSize="11"
                                   Margin="0,2,0,0"/>
+
+                        <!-- Admin Privilege Warning/Badge -->
+                        <Border x:Name="AdminStatusBorder"
+                                Background="#27272A"
+                                CornerRadius="4"
+                                Padding="8,5"
+                                Margin="0,4,0,0">
+                            <TextBlock x:Name="AdminStatusText"
+                                       Text="🛡️ Modo Estándar"
+                                       Foreground="#F59E0B"
+                                       FontSize="10"
+                                       TextWrapping="Wrap"/>
+                        </Border>
                     </StackPanel>
                 </Border>
 

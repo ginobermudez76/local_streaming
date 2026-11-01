@@ -225,6 +225,27 @@ namespace LanScreenShare.Desktop
             _metricsTimer.Tick += MetricsTimer_Tick;
             _metricsTimer.Start();
 
+            // Indicador de permisos de Administrador para control de juegos/launchers
+            var adminStatusBorder = this.FindControl<Border>("AdminStatusBorder");
+            var adminStatusText = this.FindControl<TextBlock>("AdminStatusText");
+            if (adminStatusBorder != null && adminStatusText != null)
+            {
+                if (IsRunningAsAdministrator())
+                {
+                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#14532D"));
+                    adminStatusText.Text = "🛡️ Modo Administrador Activo (Control de juegos y apps elevadas)";
+                    adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
+                    ToolTip.SetTip(adminStatusBorder, "Permisos elevados activos: Puede interactuar libremente con launchers de juegos, Administrador de Tareas y ventanas administrativas.");
+                }
+                else
+                {
+                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#451A03"));
+                    adminStatusText.Text = "⚠️ Modo Estándar: Ejecuta como Administrador para controlar launchers y juegos";
+                    adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
+                    ToolTip.SetTip(adminStatusBorder, "Windows restringe el control remoto sobre ventanas elevadas como launchers o juegos. Abre la aplicación con 'Ejecutar como Administrador' para habilitarlo.");
+                }
+            }
+
             this.Closing += MainWindow_Closing;
         }
 
@@ -926,6 +947,23 @@ namespace LanScreenShare.Desktop
             if (indicator != null)
             {
                 indicator.Fill = new SolidColorBrush(Color.Parse(hexColor));
+            }
+        }
+
+        private static bool IsRunningAsAdministrator()
+        {
+            if (!OperatingSystem.IsWindows())
+                return false;
+
+            try
+            {
+                using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+                var principal = new System.Security.Principal.WindowsPrincipal(identity);
+                return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+            }
+            catch
+            {
+                return false;
             }
         }
 
