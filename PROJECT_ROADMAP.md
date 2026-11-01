@@ -49,8 +49,8 @@ gantt
     Captura GPU DXGI Desktop Dupl.    :done,    opt2, 2026-09-29, 2026-09-30
     Streaming de Audio WASAPI Loopback:done,    opt3, 2026-09-30, 2026-10-01
     section Fase 4: Control y Multiplataforma
-    Control Remoto (Mouse y Teclado)  :active,  ctrl1, 2026-10-02, 5d
-    Port a Linux (PipeWire / X11)     :         cross1, 2026-10-15, 10d
+    Control Remoto (Mouse y Teclado)  :done,    ctrl1, 2026-10-02, 2026-10-03
+    Port a Linux (PipeWire / X11)     :active,  cross1, 2026-10-15, 10d
     Port a Android / iOS              :         cross2, after cross1, 14d
 ```
 
@@ -95,11 +95,20 @@ gantt
 
 ---
 
-### ⏳ Siguientes Pasos (Fase 4: Control Remoto y Multiplataforma)
+- [x] **Control Remoto Interactivo de Mouse y Teclado (Fase 4):**
+  - Modelo `RemoteInputMessage` con coordenadas normalizadas (0.0f a 1.0f), clics, rueda de desplazamiento y códigos de teclas virtuales.
+  - `WindowsInputSimulatorService` (`user32.dll` `SendInput`) con soporte multi-monitor (`MOUSEEVENTF_VIRTUALDESK`).
+  - Protocolo TCP de baja latencia (`TcpControlServer` y `TcpControlClient` en puerto 5003 con cabecera binaria `LSI1` de 20 bytes).
+  - Cálculo geométrico preciso en `MainWindow.axaml.cs` para compensar franjas negras (*letterboxing/pillarboxing*) del control `Image` con `Stretch="Uniform"`.
+  - Controles de seguridad: Casilla *"Permitir control remoto"* en el host y botón interactivo `🎮 Control` en la barra del espectador.
 
-1. **Control Remoto Interactivo (Mouse y Teclado):**
-   - Transmisión de eventos de mouse y teclado desde el cliente hacia el host para soporte interactivo.
-2. **Port a Linux (PipeWire / X11) y Móviles (Android / iOS):**
+---
+
+### ⏳ Siguientes Pasos (Fase 4: Multiplataforma y Empaquetado)
+
+1. **Port a Linux (PipeWire / X11) y Móviles (Android / iOS):**
+   - Abstracción de captura de escritorio mediante PipeWire / X11 XComposite en Linux.
+   - Adaptador para `MediaProjection` en Android.
 
 ---
 
@@ -132,6 +141,20 @@ classDiagram
             +int BitsPerSample
             +short AudioFormat
             +long Timestamp
+        }
+
+        class RemoteInputMessage {
+            +InputEventType Type
+            +float NormalizedX
+            +float NormalizedY
+            +RemoteMouseButton Button
+            +short WheelDelta
+            +int KeyCode
+        }
+
+        class IInputSimulatorService {
+            <<interface>>
+            +SimulateInput(RemoteInputMessage) void
         }
 
         class IScreenCaptureService {
@@ -227,6 +250,20 @@ classDiagram
             +DisconnectAsync() Task
             +event AudioReceived
         }
+
+        class TcpControlServer {
+            -TcpListener _listener
+            +StartAsync(int port, CancellationToken) Task
+            +event InputReceived
+            +Stop() void
+        }
+
+        class TcpControlClient {
+            -TcpClient _client
+            +ConnectAsync(string hostIp, int port, CancellationToken) Task
+            +SendInputAsync(RemoteInputMessage) Task
+            +DisconnectAsync() Task
+        }
     }
 
     %% Capa Media (Específica por SO)
@@ -264,6 +301,14 @@ classDiagram
             -BufferedWaveProvider _waveProvider
             +PlayChunk(CapturedAudioChunk) void
             +Stop() void
+        }
+
+        class WindowsInputSimulatorService {
+            +SimulateInput(RemoteInputMessage) void
+            -SendMouseMove(float, float)$ void
+            -SendMouseButton(RemoteMouseButton, bool, float, float)$ void
+            -SendMouseWheel(short, float, float)$ void
+            -SendKeyboard(int, bool)$ void
         }
 
         class LinuxPipeWireCaptureService {
@@ -315,6 +360,7 @@ classDiagram
     IStreamClient <|.. TcpStreamClient : implementa receptor video
     IAudioCaptureService <|.. WasapiAudioCaptureService : implementa captura audio Windows
     IAudioPlayerService <|.. WasapiAudioPlayerService : implementa reproductor audio Windows
+    IInputSimulatorService <|.. WindowsInputSimulatorService : implementa simulación entrada Windows
 
     MainWindow --> DiscoveryService : usa
     MainWindow --> IScreenCaptureService : usa
@@ -324,16 +370,23 @@ classDiagram
     MainWindow --> IAudioPlayerService : reproduce audio
     MainWindow --> TcpAudioServer : emite audio
     MainWindow --> TcpAudioClient : recibe audio
+    MainWindow --> TcpControlServer : recibe eventos control
+    MainWindow --> TcpControlClient : emite eventos control
+    MainWindow --> IInputSimulatorService : inyecta input host
     MainWindow ..> CapturedFrame : renderiza en Image
     MainWindow ..> CapturedAudioChunk : reproduce en audio buffer
+    MainWindow ..> RemoteInputMessage : envía / recibe interacción
 
     WindowsScreenCaptureService ..> CapturedFrame : produce
     DxgiScreenCaptureService ..> CapturedFrame : produce
     WasapiAudioCaptureService ..> CapturedAudioChunk : produce
+    WindowsInputSimulatorService ..> RemoteInputMessage : procesa
     TcpStreamServer ..> CapturedFrame : transporta
     TcpStreamClient ..> CapturedFrame : recibe
     TcpAudioServer ..> CapturedAudioChunk : transporta
     TcpAudioClient ..> CapturedAudioChunk : recibe
+    TcpControlServer ..> RemoteInputMessage : recibe
+    TcpControlClient ..> RemoteInputMessage : envía
 ```
 
 ---

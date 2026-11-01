@@ -6,7 +6,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -31,6 +33,12 @@ namespace LanScreenShare.Desktop
         private readonly IAudioPlayerService? _audioPlayerService;
         private readonly TcpAudioServer _audioServer;
         private readonly TcpAudioClient _audioClient;
+
+        // Servicios de control remoto (Mouse y Teclado)
+        private readonly IInputSimulatorService? _inputSimulatorService;
+        private readonly TcpControlServer _controlServer;
+        private readonly TcpControlClient _controlClient;
+        private bool _remoteControlEnabled;
 
         private bool _isHosting;
         private string? _currentConnectedDeviceName;
@@ -67,10 +75,15 @@ namespace LanScreenShare.Desktop
             _audioServer = new TcpAudioServer();
             _audioClient = new TcpAudioClient();
 
+            // Inicialización de subsistema de Control Remoto
+            _controlServer = new TcpControlServer();
+            _controlClient = new TcpControlClient();
+
             if (OperatingSystem.IsWindows())
             {
                 _audioCaptureService = new WasapiAudioCaptureService();
                 _audioPlayerService = new WasapiAudioPlayerService();
+                _inputSimulatorService = new WindowsInputSimulatorService();
 
                 _audioCaptureService.AudioCaptured += async (s, chunk) =>
                 {
@@ -85,6 +98,15 @@ namespace LanScreenShare.Desktop
                     _audioPlayerService.PlayChunk(chunk);
                 };
             }
+
+            _controlServer.InputReceived += (s, input) =>
+            {
+                var allowCb = this.FindControl<CheckBox>("AllowRemoteControlCheckBox");
+                if (allowCb?.IsChecked == true)
+                {
+                    _inputSimulatorService?.SimulateInput(input);
+                }
+            };
 
             var devicesList = this.FindControl<ListBox>("DevicesList");
             if (devicesList != null)
@@ -121,6 +143,36 @@ namespace LanScreenShare.Desktop
                         audioMuteButton.Content = _audioPlayerService.IsMuted ? "🔇" : "🔊";
                     }
                 };
+            }
+
+            var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
+            if (remoteControlBtn != null)
+            {
+                remoteControlBtn.IsCheckedChanged += (s, e) =>
+                {
+                    _remoteControlEnabled = remoteControlBtn.IsChecked == true;
+                    remoteControlBtn.Background = _remoteControlEnabled
+                        ? new SolidColorBrush(Color.Parse("#2563EB"))
+                        : new SolidColorBrush(Color.Parse("#27272A"));
+
+                    var screenImg = this.FindControl<Image>("ScreenImage");
+                    if (_remoteControlEnabled && screenImg != null)
+                    {
+                        screenImg.Focus();
+                    }
+                };
+            }
+
+            // Eventos de entrada sobre ScreenImage para control remoto
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            if (screenImage != null)
+            {
+                screenImage.PointerMoved += ScreenImage_PointerMoved;
+                screenImage.PointerPressed += ScreenImage_PointerPressed;
+                screenImage.PointerReleased += ScreenImage_PointerReleased;
+                screenImage.PointerWheelChanged += ScreenImage_PointerWheelChanged;
+                screenImage.KeyDown += ScreenImage_KeyDown;
+                screenImage.KeyUp += ScreenImage_KeyUp;
             }
 
             // Controles de ajuste de transmisión
@@ -164,6 +216,203 @@ namespace LanScreenShare.Desktop
 
             this.Closing += MainWindow_Closing;
         }
+
+        #region Remote Control Client Interaction
+
+        private bool TryGetNormalizedCoordinates(PointerEventArgs e, out float normX, out float normY)
+        {
+            normX = 0f;
+            normY = 0f;
+
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            if (screenImage?.Source == null)
+                return false;
+
+            var imageSize = screenImage.Source.Size;
+            if (imageSize.Width <= 0 || imageSize.Height <= 0)
+                return false;
+
+            var controlBounds = screenImage.Bounds;
+            if (controlBounds.Width <= 0 || controlBounds.Height <= 0)
+                return false;
+
+            double scaleX = controlBounds.Width / imageSize.Width;
+            double scaleY = controlBounds.Height / imageSize.Height;
+            double scale = Math.Min(scaleX, scaleY);
+
+            double renderedW = imageSize.Width * scale;
+            double renderedH = imageSize.Height * scale;
+
+            double offsetX = (controlBounds.Width - renderedW) / 2.0;
+            double offsetY = (controlBounds.Height - renderedH) / 2.0;
+
+            var pos = e.GetPosition(screenImage);
+
+            if (pos.X < offsetX || pos.X > offsetX + renderedW ||
+                pos.Y < offsetY || pos.Y > offsetY + renderedH)
+            {
+                return false;
+            }
+
+            normX = (float)((pos.X - offsetX) / renderedW);
+            normY = (float)((pos.Y - offsetY) / renderedH);
+            return true;
+        }
+
+        private void ScreenImage_PointerMoved(object? sender, PointerEventArgs e)
+        {
+            if (_remoteControlEnabled && _controlClient.IsConnected && TryGetNormalizedCoordinates(e, out float x, out float y))
+            {
+                _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                {
+                    Type = InputEventType.MouseMove,
+                    NormalizedX = x,
+                    NormalizedY = y
+                });
+            }
+        }
+
+        private void ScreenImage_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (_remoteControlEnabled && _controlClient.IsConnected && TryGetNormalizedCoordinates(e, out float x, out float y))
+            {
+                var screenImage = this.FindControl<Image>("ScreenImage");
+                screenImage?.Focus();
+
+                var point = e.GetCurrentPoint(screenImage);
+                var props = point.Properties;
+
+                RemoteMouseButton button = props.IsLeftButtonPressed ? RemoteMouseButton.Left
+                    : props.IsRightButtonPressed ? RemoteMouseButton.Right
+                    : props.IsMiddleButtonPressed ? RemoteMouseButton.Middle
+                    : RemoteMouseButton.None;
+
+                if (button != RemoteMouseButton.None)
+                {
+                    _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                    {
+                        Type = InputEventType.MouseDown,
+                        Button = button,
+                        NormalizedX = x,
+                        NormalizedY = y
+                    });
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private void ScreenImage_PointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (_remoteControlEnabled && _controlClient.IsConnected && TryGetNormalizedCoordinates(e, out float x, out float y))
+            {
+                var screenImage = this.FindControl<Image>("ScreenImage");
+                var point = e.GetCurrentPoint(screenImage);
+                var props = point.Properties;
+
+                RemoteMouseButton button = props.PointerUpdateKind == PointerUpdateKind.LeftButtonReleased ? RemoteMouseButton.Left
+                    : props.PointerUpdateKind == PointerUpdateKind.RightButtonReleased ? RemoteMouseButton.Right
+                    : props.PointerUpdateKind == PointerUpdateKind.MiddleButtonReleased ? RemoteMouseButton.Middle
+                    : RemoteMouseButton.Left;
+
+                _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                {
+                    Type = InputEventType.MouseUp,
+                    Button = button,
+                    NormalizedX = x,
+                    NormalizedY = y
+                });
+                e.Handled = true;
+            }
+        }
+
+        private void ScreenImage_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
+        {
+            if (_remoteControlEnabled && _controlClient.IsConnected && TryGetNormalizedCoordinates(e, out float x, out float y))
+            {
+                short delta = (short)(e.Delta.Y * 120);
+                _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                {
+                    Type = InputEventType.MouseWheel,
+                    WheelDelta = delta,
+                    NormalizedX = x,
+                    NormalizedY = y
+                });
+                e.Handled = true;
+            }
+        }
+
+        private void ScreenImage_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (_remoteControlEnabled && _controlClient.IsConnected)
+            {
+                int vk = ConvertAvaloniaKeyToWin32Vk(e.Key);
+                if (vk > 0)
+                {
+                    _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                    {
+                        Type = InputEventType.KeyDown,
+                        KeyCode = vk
+                    });
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private void ScreenImage_KeyUp(object? sender, KeyEventArgs e)
+        {
+            if (_remoteControlEnabled && _controlClient.IsConnected)
+            {
+                int vk = ConvertAvaloniaKeyToWin32Vk(e.Key);
+                if (vk > 0)
+                {
+                    _ = _controlClient.SendInputAsync(new RemoteInputMessage
+                    {
+                        Type = InputEventType.KeyUp,
+                        KeyCode = vk
+                    });
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private static int ConvertAvaloniaKeyToWin32Vk(Key key)
+        {
+            if (key >= Key.A && key <= Key.Z)
+                return (int)key - (int)Key.A + 0x41;
+
+            if (key >= Key.D0 && key <= Key.D9)
+                return (int)key - (int)Key.D0 + 0x30;
+
+            if (key >= Key.NumPad0 && key <= Key.NumPad9)
+                return (int)key - (int)Key.NumPad0 + 0x60;
+
+            if (key >= Key.F1 && key <= Key.F12)
+                return (int)key - (int)Key.F1 + 0x70;
+
+            return key switch
+            {
+                Key.Back => 0x08,
+                Key.Tab => 0x09,
+                Key.Return or Key.Enter => 0x0D,
+                Key.Escape => 0x1B,
+                Key.Space => 0x20,
+                Key.Left => 0x25,
+                Key.Up => 0x26,
+                Key.Right => 0x27,
+                Key.Down => 0x28,
+                Key.Delete => 0x2E,
+                Key.LeftShift or Key.RightShift => 0x10,
+                Key.LeftCtrl or Key.RightCtrl => 0x11,
+                Key.LeftAlt or Key.RightAlt => 0x12,
+                Key.Home => 0x24,
+                Key.End => 0x23,
+                Key.PageUp => 0x21,
+                Key.PageDown => 0x22,
+                _ => 0
+            };
+        }
+
+        #endregion
 
         #region Stream Settings Logic
 
@@ -286,7 +535,11 @@ namespace LanScreenShare.Desktop
                         ? " • 🔊 Audio"
                         : "";
 
-                    statsText.Text = $"{frames} FPS • {transferRate}{res}{engineTag}{audioTag}";
+                    string controlTag = _controlClient.IsConnected && _remoteControlEnabled
+                        ? " • 🎮 Control Activo"
+                        : "";
+
+                    statsText.Text = $"{frames} FPS • {transferRate}{res}{engineTag}{audioTag}{controlTag}";
                 }
             }
             else
@@ -349,6 +602,9 @@ namespace LanScreenShare.Desktop
                         }
                     }
 
+                    // 3. Iniciar servidor de control remoto (Puerto 5003)
+                    await _controlServer.StartAsync(5003);
+
                     _discoveryService.StartHostingBroadcast();
 
                     _isHosting = true;
@@ -377,6 +633,8 @@ namespace LanScreenShare.Desktop
 
                 _audioCaptureService?.StopCapture();
                 _audioServer.Stop();
+
+                _controlServer.Stop();
 
                 _discoveryService.StopHosting();
 
@@ -494,6 +752,16 @@ namespace LanScreenShare.Desktop
                     Console.WriteLine($"[AudioClient] Audio no disponible en el host: {ex.Message}");
                 }
 
+                // 3. Conectar canal de control remoto
+                try
+                {
+                    await _controlClient.ConnectAsync(device.IPAddress, 5003);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ControlClient] Control remoto no disponible: {ex.Message}");
+                }
+
                 var disconnectBtn = this.FindControl<Button>("DisconnectButton");
                 if (disconnectBtn != null)
                 {
@@ -505,6 +773,13 @@ namespace LanScreenShare.Desktop
                 {
                     muteBtn.IsVisible = true;
                     muteBtn.Content = (_audioPlayerService?.IsMuted ?? false) ? "🔇" : "🔊";
+                }
+
+                var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
+                if (remoteControlBtn != null)
+                {
+                    remoteControlBtn.IsVisible = true;
+                    remoteControlBtn.IsChecked = false;
                 }
             }
             catch (Exception ex)
@@ -565,6 +840,12 @@ namespace LanScreenShare.Desktop
                 {
                     muteBtn.IsVisible = _streamClient.IsConnected;
                 }
+
+                var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
+                if (remoteControlBtn != null)
+                {
+                    remoteControlBtn.IsVisible = _streamClient.IsConnected;
+                }
             });
         }
 
@@ -572,7 +853,10 @@ namespace LanScreenShare.Desktop
         {
             await _streamClient.DisconnectAsync();
             await _audioClient.DisconnectAsync();
+            await _controlClient.DisconnectAsync();
+
             _audioPlayerService?.Stop();
+            _remoteControlEnabled = false;
 
             ResetMetrics();
 
@@ -598,6 +882,13 @@ namespace LanScreenShare.Desktop
             if (muteBtn != null)
             {
                 muteBtn.IsVisible = false;
+            }
+
+            var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
+            if (remoteControlBtn != null)
+            {
+                remoteControlBtn.IsVisible = false;
+                remoteControlBtn.IsChecked = false;
             }
 
             UpdateStatus("Desconectado", "#71717A");
@@ -634,6 +925,10 @@ namespace LanScreenShare.Desktop
             _audioPlayerService?.Dispose();
             _audioServer.Dispose();
             _audioClient.Dispose();
+
+            _controlServer.Dispose();
+            _controlClient.Dispose();
+            _inputSimulatorService?.Dispose();
 
             _discoveryService.StopHosting();
             _discoveryService.StopListening();

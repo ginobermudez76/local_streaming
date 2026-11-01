@@ -121,6 +121,14 @@
                                   Foreground="#E4E4E7"
                                   FontSize="11"
                                   Margin="0,2,0,0"/>
+
+                        <!-- Remote Control Allow Toggle -->
+                        <CheckBox x:Name="AllowRemoteControlCheckBox"
+                                  Content="Permitir control remoto (Mouse/Teclas)"
+                                  IsChecked="True"
+                                  Foreground="#E4E4E7"
+                                  FontSize="11"
+                                  Margin="0,2,0,0"/>
                     </StackPanel>
                 </Border>
 
@@ -211,6 +219,16 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                        <ToggleButton x:Name="RemoteControlButton"
+                                      Content="🎮 Control"
+                                      IsVisible="False"
+                                      Background="#27272A"
+                                      Foreground="White"
+                                      Padding="10,6"
+                                      CornerRadius="4"
+                                      FontSize="12"
+                                      ToolTip.Tip="Habilitar interacción con mouse y teclado"/>
+
                         <Button x:Name="AudioMuteButton"
                                 Content="🔊"
                                 IsVisible="False"
@@ -239,7 +257,8 @@
                 <Image x:Name="ScreenImage"
                        Stretch="Uniform"
                        HorizontalAlignment="Center"
-                       VerticalAlignment="Center"/>
+                       VerticalAlignment="Center"
+                       Focusable="True"/>
 
                 <!-- Placeholder Overlay -->
                 <StackPanel x:Name="PlaceholderPanel"
