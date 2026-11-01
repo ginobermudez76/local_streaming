@@ -50,23 +50,20 @@ namespace LanScreenShare.Media
 
         private static void SendMouseMove(float normX, float normY)
         {
-            var pInputs = new INPUT[1];
-            pInputs[0].type = INPUT_MOUSE;
-            pInputs[0].u.mi = new MOUSEINPUT
-            {
-                dx = (int)Math.Round(Math.Clamp(normX, 0f, 1f) * 65535),
-                dy = (int)Math.Round(Math.Clamp(normY, 0f, 1f) * 65535),
-                dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-                mouseData = 0,
-                time = 0,
-                dwExtraInfo = IntPtr.Zero
-            };
+            int screenW = GetSystemMetrics(SM_CXSCREEN);
+            int screenH = GetSystemMetrics(SM_CYSCREEN);
 
-            SendInput(1, pInputs, Marshal.SizeOf<INPUT>());
+            int targetX = (int)Math.Round(Math.Clamp(normX, 0f, 1f) * (screenW - 1));
+            int targetY = (int)Math.Round(Math.Clamp(normY, 0f, 1f) * (screenH - 1));
+
+            SetCursorPos(targetX, targetY);
         }
 
         private static void SendMouseButton(RemoteMouseButton button, bool isDown, float normX, float normY)
         {
+            // Primero posicionar cursor en el punto exacto
+            SendMouseMove(normX, normY);
+
             uint flag = 0;
             switch (button)
             {
@@ -83,63 +80,29 @@ namespace LanScreenShare.Media
                     return;
             }
 
-            var pInputs = new INPUT[1];
-            pInputs[0].type = INPUT_MOUSE;
-            pInputs[0].u.mi = new MOUSEINPUT
-            {
-                dx = (int)Math.Round(Math.Clamp(normX, 0f, 1f) * 65535),
-                dy = (int)Math.Round(Math.Clamp(normY, 0f, 1f) * 65535),
-                dwFlags = flag | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-                mouseData = 0,
-                time = 0,
-                dwExtraInfo = IntPtr.Zero
-            };
-
-            SendInput(1, pInputs, Marshal.SizeOf<INPUT>());
+            mouse_event(flag, 0, 0, 0, UIntPtr.Zero);
         }
 
         private static void SendMouseWheel(short delta, float normX, float normY)
         {
-            var pInputs = new INPUT[1];
-            pInputs[0].type = INPUT_MOUSE;
-            pInputs[0].u.mi = new MOUSEINPUT
-            {
-                dx = (int)Math.Round(Math.Clamp(normX, 0f, 1f) * 65535),
-                dy = (int)Math.Round(Math.Clamp(normY, 0f, 1f) * 65535),
-                dwFlags = MOUSEEVENTF_WHEEL | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-                mouseData = (uint)delta,
-                time = 0,
-                dwExtraInfo = IntPtr.Zero
-            };
-
-            SendInput(1, pInputs, Marshal.SizeOf<INPUT>());
+            SendMouseMove(normX, normY);
+            mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (uint)delta, UIntPtr.Zero);
         }
 
         private static void SendKeyboard(int keyCode, bool isDown)
         {
-            if (keyCode <= 0 || keyCode > 0xFFFF)
+            if (keyCode <= 0 || keyCode > 0xFF)
                 return;
 
-            var pInputs = new INPUT[1];
-            pInputs[0].type = INPUT_KEYBOARD;
-            pInputs[0].u.ki = new KEYBDINPUT
-            {
-                wVk = (ushort)keyCode,
-                wScan = 0,
-                dwFlags = isDown ? 0 : KEYEVENTF_KEYUP,
-                time = 0,
-                dwExtraInfo = IntPtr.Zero
-            };
-
-            SendInput(1, pInputs, Marshal.SizeOf<INPUT>());
+            uint flags = isDown ? 0 : KEYEVENTF_KEYUP;
+            keybd_event((byte)keyCode, 0, flags, UIntPtr.Zero);
         }
 
         #region Win32 P/Invoke
 
-        private const uint INPUT_MOUSE = 0;
-        private const uint INPUT_KEYBOARD = 1;
+        private const int SM_CXSCREEN = 0;
+        private const int SM_CYSCREEN = 1;
 
-        private const uint MOUSEEVENTF_MOVE = 0x0001;
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
         private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
@@ -147,50 +110,20 @@ namespace LanScreenShare.Media
         private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
         private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
         private const uint MOUSEEVENTF_WHEEL = 0x0800;
-        private const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
-        private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
 
         private const uint KEYEVENTF_KEYUP = 0x0002;
 
-        [StructLayout(LayoutKind.Sequential)]
-        private struct INPUT
-        {
-            public uint type;
-            public InputUnion u;
-        }
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
 
-        [StructLayout(LayoutKind.Explicit)]
-        private struct InputUnion
-        {
-            [FieldOffset(0)]
-            public MOUSEINPUT mi;
-            [FieldOffset(0)]
-            public KEYBDINPUT ki;
-        }
+        [DllImport("user32.dll")]
+        private static extern bool SetCursorPos(int X, int Y);
 
-        [StructLayout(LayoutKind.Sequential)]
-        private struct MOUSEINPUT
-        {
-            public int dx;
-            public int dy;
-            public uint mouseData;
-            public uint dwFlags;
-            public uint time;
-            public IntPtr dwExtraInfo;
-        }
+        [DllImport("user32.dll")]
+        private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
 
-        [StructLayout(LayoutKind.Sequential)]
-        private struct KEYBDINPUT
-        {
-            public ushort wVk;
-            public ushort wScan;
-            public uint dwFlags;
-            public uint time;
-            public IntPtr dwExtraInfo;
-        }
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint SendInput(uint nInputs, [In] INPUT[] pInputs, int cbSize);
+        [DllImport("user32.dll")]
+        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
         #endregion
 

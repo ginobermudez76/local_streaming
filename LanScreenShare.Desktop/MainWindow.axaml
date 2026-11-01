@@ -256,8 +256,8 @@
                 <!-- Video Image -->
                 <Image x:Name="ScreenImage"
                        Stretch="Uniform"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center"
+                       HorizontalAlignment="Stretch"
+                       VerticalAlignment="Stretch"
                        Focusable="True"/>
 
                 <!-- Placeholder Overlay -->

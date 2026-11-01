@@ -39,6 +39,7 @@ namespace LanScreenShare.Desktop
         private readonly TcpControlServer _controlServer;
         private readonly TcpControlClient _controlClient;
         private bool _remoteControlEnabled;
+        private volatile bool _allowRemoteControl = true;
 
         private bool _isHosting;
         private string? _currentConnectedDeviceName;
@@ -99,10 +100,20 @@ namespace LanScreenShare.Desktop
                 };
             }
 
+            var allowCb = this.FindControl<CheckBox>("AllowRemoteControlCheckBox");
+            if (allowCb != null)
+            {
+                _allowRemoteControl = allowCb.IsChecked == true;
+                allowCb.IsCheckedChanged += (s, e) =>
+                {
+                    _allowRemoteControl = allowCb.IsChecked == true;
+                    Console.WriteLine($"[ControlHost] Permiso de control remoto: {_allowRemoteControl}");
+                };
+            }
+
             _controlServer.InputReceived += (s, input) =>
             {
-                var allowCb = this.FindControl<CheckBox>("AllowRemoteControlCheckBox");
-                if (allowCb?.IsChecked == true)
+                if (_allowRemoteControl)
                 {
                     _inputSimulatorService?.SimulateInput(input);
                 }
@@ -254,8 +265,8 @@ namespace LanScreenShare.Desktop
                 return false;
             }
 
-            normX = (float)((pos.X - offsetX) / renderedW);
-            normY = (float)((pos.Y - offsetY) / renderedH);
+            normX = (float)Math.Clamp((pos.X - offsetX) / renderedW, 0.0, 1.0);
+            normY = (float)Math.Clamp((pos.Y - offsetY) / renderedH, 0.0, 1.0);
             return true;
         }
 
@@ -756,6 +767,7 @@ namespace LanScreenShare.Desktop
                 try
                 {
                     await _controlClient.ConnectAsync(device.IPAddress, 5003);
+                    Console.WriteLine($"[ControlViewer] Conectado a canal de control remoto en {device.IPAddress}:5003");
                 }
                 catch (Exception ex)
                 {
@@ -780,6 +792,10 @@ namespace LanScreenShare.Desktop
                 {
                     remoteControlBtn.IsVisible = true;
                     remoteControlBtn.IsChecked = false;
+                    remoteControlBtn.IsEnabled = _controlClient.IsConnected;
+                    ToolTip.SetTip(remoteControlBtn, _controlClient.IsConnected
+                        ? "Habilitar interacción con mouse y teclado"
+                        : "Control remoto no disponible (puerto 5003 no respondió en el host)");
                 }
             }
             catch (Exception ex)

@@ -106,6 +106,10 @@ namespace LanScreenShare.Network.Streaming
                     };
 
                     InputReceived?.Invoke(this, input);
+                    if (input.Type != InputEventType.MouseMove)
+                    {
+                        Console.WriteLine($"[ControlServer] Procesado input: {input.Type} btn={input.Button} key={input.KeyCode}");
+                    }
                 }
             }
             catch (OperationCanceledException)
