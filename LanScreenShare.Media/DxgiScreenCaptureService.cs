@@ -29,13 +29,50 @@ namespace LanScreenShare.Media
         private volatile int _monitorIndex = 0;
         private MediaFoundationH264EncoderService? _h264Encoder;
 
+        private volatile string? _deviceName;
+        private volatile int _targetX = 0;
+        private volatile int _targetY = 0;
+        private volatile int _targetSourceWidth = 0;
+        private volatile int _targetSourceHeight = 0;
+
         public event EventHandler<CapturedFrame>? FrameCaptured;
+        public event EventHandler<Exception>? CaptureFailed;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
 
         public int MonitorIndex
         {
             get => _monitorIndex;
             set => _monitorIndex = Math.Max(0, value);
+        }
+
+        public string? DeviceName
+        {
+            get => _deviceName;
+            set => _deviceName = value;
+        }
+
+        public int TargetX
+        {
+            get => _targetX;
+            set => _targetX = value;
+        }
+
+        public int TargetY
+        {
+            get => _targetY;
+            set => _targetY = value;
+        }
+
+        public int TargetSourceWidth
+        {
+            get => _targetSourceWidth;
+            set => _targetSourceWidth = Math.Max(0, value);
+        }
+
+        public int TargetSourceHeight
+        {
+            get => _targetSourceHeight;
+            set => _targetSourceHeight = Math.Max(0, value);
         }
 
         public int TargetFps
@@ -169,11 +206,78 @@ namespace LanScreenShare.Media
                         {
                             throw new InvalidOperationException("No se pudo crear IDXGIFactory1");
                         }
+                        IDXGIAdapter1? selectedAdapter = null;
+                        IDXGIOutput? selectedOutput = null;
 
-                        if (factory.EnumAdapters1(0, out adapter).Failure || adapter == null)
+                        int matchOutputIdx = _monitorIndex;
+                        string? targetDev = _deviceName;
+
+                        // Enumerar todos los adaptadores grficos y salidas para encontrar la pantalla exacta
+                        for (uint aIdx = 0; factory.EnumAdapters1(aIdx, out var curAdapter).Success && curAdapter != null; aIdx++)
                         {
-                            throw new InvalidOperationException("No se pudo obtener el adaptador gráfico primario (GPU 0)");
+                            for (uint oIdx = 0; curAdapter.EnumOutputs(oIdx, out var curOutput).Success && curOutput != null; oIdx++)
+                            {
+                                string devName = curOutput.Description.DeviceName.TrimEnd('\0');
+                                var coords = curOutput.Description.DesktopCoordinates;
+                                int oWidth = coords.Right - coords.Left;
+                                int oHeight = coords.Bottom - coords.Top;
+
+                                bool match = false;
+                                if (!string.IsNullOrEmpty(targetDev) && string.Equals(devName, targetDev, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    match = true;
+                                }
+                                else if (_targetSourceWidth > 0 && _targetSourceHeight > 0 &&
+                                         coords.Left == _targetX && coords.Top == _targetY &&
+                                         oWidth == _targetSourceWidth && oHeight == _targetSourceHeight)
+                                {
+                                    match = true;
+                                }
+                                else if (selectedOutput == null && aIdx == 0 && oIdx == (uint)matchOutputIdx)
+                                {
+                                    match = true;
+                                }
+
+                                if (match && selectedOutput == null)
+                                {
+                                    selectedAdapter = curAdapter;
+                                    selectedOutput = curOutput;
+                                }
+                                else
+                                {
+                                    curOutput.Dispose();
+                                }
+                            }
+
+                            if (selectedOutput != null && selectedAdapter == curAdapter)
+                            {
+                                // Adaptador emparejado con la salida encontrada
+                            }
+                            else
+                            {
+                                curAdapter.Dispose();
+                            }
                         }
+
+                        // Si no se encontr coincidencia exacta, intentar fallback al adaptador 0 y salida 0
+                        if (selectedAdapter == null || selectedOutput == null)
+                        {
+                            selectedOutput?.Dispose();
+                            selectedAdapter?.Dispose();
+
+                            if (factory.EnumAdapters1(0, out selectedAdapter).Failure || selectedAdapter == null)
+                            {
+                                throw new InvalidOperationException("No se pudo obtener el adaptador grfico primario (GPU 0)");
+                            }
+
+                            if (selectedAdapter.EnumOutputs(0, out selectedOutput).Failure || selectedOutput == null)
+                            {
+                                throw new InvalidOperationException("No se pudo obtener la salida de pantalla principal (Monitor 0)");
+                            }
+                        }
+
+                        adapter = selectedAdapter;
+                        output = selectedOutput;
 
                         var featureLevels = new[]
                         {
@@ -196,25 +300,18 @@ namespace LanScreenShare.Media
                             throw new InvalidOperationException($"No se pudo crear el dispositivo Direct3D 11: {d3dResult}");
                         }
 
-                        // Configurar máxima prioridad para la GPU en Direct3D/DXGI (prioridad de tiempo real del GPU scheduler)
                         try
                         {
                             using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
                             if (dxgiDevice != null)
                             {
                                 dxgiDevice.SetGPUThreadPriority(7);
-                                Console.WriteLine("[DXGI] GPU Thread Priority establecido al nivel máximo (7)");
+                                Console.WriteLine("[DXGI] GPU Thread Priority establecido al nivel mximo (7)");
                             }
                         }
                         catch (Exception ex)
                         {
                             Console.WriteLine($"[DXGI] Advertencia configurando GPU Thread Priority: {ex.Message}");
-                        }
-
-                        if ((adapter.EnumOutputs((uint)_monitorIndex, out output).Failure || output == null) &&
-                            (adapter.EnumOutputs(0, out output).Failure || output == null))
-                        {
-                            throw new InvalidOperationException("No se pudo obtener la salida de pantalla principal (Monitor 0)");
                         }
 
                         output1 = output.QueryInterface<IDXGIOutput1>();
@@ -331,6 +428,7 @@ namespace LanScreenShare.Media
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[DXGI Capture] Error en bucle DXGI: {ex.Message}");
+                        CaptureFailed?.Invoke(this, ex);
                         Thread.Sleep(500); // Pausa antes de reintentar
                     }
                     finally

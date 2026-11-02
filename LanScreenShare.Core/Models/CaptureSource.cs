@@ -17,6 +17,7 @@ namespace LanScreenShare.Core.Models
         public string? Subtitle { get; set; }
         public IntPtr Handle { get; set; } = IntPtr.Zero;
         public int MonitorIndex { get; set; } = 0;
+        public string? DeviceName { get; set; }
         public string? ProcessName { get; set; }
         public int X { get; set; }
         public int Y { get; set; }
@@ -25,3 +26,4 @@ namespace LanScreenShare.Core.Models
         public bool IsPrimary { get; set; }
     }
 }
+

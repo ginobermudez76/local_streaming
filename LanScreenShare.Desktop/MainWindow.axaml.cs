@@ -105,31 +105,23 @@ namespace LanScreenShare.Desktop
 
             _appSettings = SettingsService.Load();
 
-            if (!string.IsNullOrEmpty(_appSettings.CaptureSourceId))
+            if (OperatingSystem.IsWindows())
             {
-                _currentSource.Id = _appSettings.CaptureSourceId;
-                _currentSource.Name = string.IsNullOrEmpty(_appSettings.CaptureSourceName) ? "Pantalla 1" : _appSettings.CaptureSourceName;
-                if (_currentSource.Id.StartsWith("screen:"))
+                var availableScreens = CaptureSourceDiscoveryService.GetScreenSources();
+                CaptureSource? matched = null;
+
+                if (!string.IsNullOrEmpty(_appSettings.CaptureSourceId) && !_appSettings.CaptureSourceId.StartsWith("window:"))
                 {
-                    if (_currentSource.Id == "screen:all")
-                    {
-                        _currentSource.Type = CaptureSourceType.AllScreens;
-                    }
-                    else
-                    {
-                        _currentSource.Type = CaptureSourceType.Screen;
-                        if (int.TryParse(_currentSource.Id.Replace("screen:", ""), out int mIdx))
-                        {
-                            _currentSource.MonitorIndex = mIdx;
-                        }
-                    }
+                    matched = availableScreens.FirstOrDefault(s => s.Id == _appSettings.CaptureSourceId);
                 }
-                else if (_currentSource.Id.StartsWith("window:"))
+
+                if (matched != null)
                 {
-                    _currentSource.Type = CaptureSourceType.Screen;
-                    _currentSource.Id = "screen:0";
-                    _currentSource.Name = "Pantalla 1";
-                    _currentSource.MonitorIndex = 0;
+                    _currentSource = matched;
+                }
+                else if (availableScreens.Count > 0)
+                {
+                    _currentSource = availableScreens.FirstOrDefault(s => s.IsPrimary) ?? availableScreens[0];
                 }
             }
 
@@ -1584,31 +1576,35 @@ namespace LanScreenShare.Desktop
             return 30;
         }
 
-        private void InitializeResolutionOptions()
+        private void InitializeResolutionOptions(CaptureSource? source = null)
         {
+            source ??= _currentSource;
             var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
             if (scaleCombo == null) return;
 
-            int nativeW = 1920;
-            int nativeH = 1080;
+            int nativeW = (source != null && source.Width > 0) ? source.Width : 1920;
+            int nativeH = (source != null && source.Height > 0) ? source.Height : 1080;
 
-            if (OperatingSystem.IsWindows())
+            if (source == null || source.Width <= 0 || source.Height <= 0)
             {
-                int sw = GetSystemMetrics(SM_CXSCREEN);
-                int sh = GetSystemMetrics(SM_CYSCREEN);
-                if (sw > 0 && sh > 0)
+                if (OperatingSystem.IsWindows())
                 {
-                    nativeW = sw;
-                    nativeH = sh;
+                    int sw = GetSystemMetrics(SM_CXSCREEN);
+                    int sh = GetSystemMetrics(SM_CYSCREEN);
+                    if (sw > 0 && sh > 0)
+                    {
+                        nativeW = sw;
+                        nativeH = sh;
+                    }
+                }
+                else if (Screens?.Primary != null)
+                {
+                    nativeW = Screens.Primary.Bounds.Width;
+                    nativeH = Screens.Primary.Bounds.Height;
                 }
             }
-            else if (Screens?.Primary != null)
-            {
-                nativeW = Screens.Primary.Bounds.Width;
-                nativeH = Screens.Primary.Bounds.Height;
-            }
 
-            double nativeAspect = (double)nativeW / nativeH;
+            double nativeAspect = (double)nativeW / Math.Max(1, nativeH);
 
             var commonResolutions = new (int w, int h, string label)[]
             {
@@ -1637,23 +1633,49 @@ namespace LanScreenShare.Desktop
                 Tag = $"{nativeW}x{nativeH}"
             });
 
-            // 2. Filtrar resoluciones menores compatibles con la relación de aspecto
-            foreach (var (w, h, label) in commonResolutions)
+            // 2. Si es configuración multi-pantalla extendida (aspecto muy ancho > 2.2)
+            if (nativeAspect > 2.2)
             {
-                if (w >= nativeW && h >= nativeH)
-                    continue;
-
-                if (w > nativeW || h > nativeH)
-                    continue;
-
-                double aspect = (double)w / h;
-                if (Math.Abs(aspect - nativeAspect) <= 0.06)
+                var ratios = new (double s, string label)[]
                 {
-                    items.Add(new ComboBoxItem
+                    (0.75, "75% Extendido"),
+                    (0.50, "50% Extendido"),
+                    (0.3557, "1366x384 Extendido")
+                };
+                foreach (var (rScale, rLabel) in ratios)
+                {
+                    int scaledW = (int)Math.Round((nativeW * rScale) / 2.0) * 2;
+                    int scaledH = (int)Math.Round((nativeH * rScale) / 2.0) * 2;
+                    if (scaledW > 0 && scaledH > 0 && scaledW < nativeW)
                     {
-                        Content = $"{w}×{h} ({label})",
-                        Tag = $"{w}x{h}"
-                    });
+                        items.Add(new ComboBoxItem
+                        {
+                            Content = $"{scaledW}×{scaledH} ({rLabel})",
+                            Tag = $"{scaledW}x{scaledH}"
+                        });
+                    }
+                }
+            }
+            else
+            {
+                // Filtrar resoluciones menores compatibles con la relación de aspecto
+                foreach (var (w, h, label) in commonResolutions)
+                {
+                    if (w >= nativeW && h >= nativeH)
+                        continue;
+
+                    if (w > nativeW || h > nativeH)
+                        continue;
+
+                    double aspect = (double)w / h;
+                    if (Math.Abs(aspect - nativeAspect) <= 0.08)
+                    {
+                        items.Add(new ComboBoxItem
+                        {
+                            Content = $"{w}×{h} ({label})",
+                            Tag = $"{w}x{h}"
+                        });
+                    }
                 }
             }
 
@@ -1715,13 +1737,41 @@ namespace LanScreenShare.Desktop
 
             if (source.Type == CaptureSourceType.AllScreens || engine == "gdi")
             {
-                return new WindowsScreenCaptureService();
+                var gdi = new WindowsScreenCaptureService();
+                if (source.Type == CaptureSourceType.AllScreens)
+                {
+                    gdi.SetTargetBounds(0, 0, 0, 0, allScreens: true);
+                }
+                else
+                {
+                    gdi.SetTargetBounds(source.X, source.Y, source.Width, source.Height, allScreens: false);
+                }
+                return gdi;
             }
 
-            return new DxgiScreenCaptureService
+            var dxgi = new DxgiScreenCaptureService
             {
-                MonitorIndex = source.MonitorIndex
+                MonitorIndex = source.MonitorIndex,
+                DeviceName = source.DeviceName,
+                TargetX = source.X,
+                TargetY = source.Y,
+                TargetSourceWidth = source.Width,
+                TargetSourceHeight = source.Height
             };
+
+            dxgi.CaptureFailed += (s, ex) =>
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (_isHosting && _screenCaptureService is DxgiScreenCaptureService)
+                    {
+                        UpdateStatus($"DXGI no disponible en esta pantalla ({ex.Message}), cambiando a GDI...", "#F59E0B");
+                        SwitchCaptureSource(_currentSource, "gdi", GetSelectedFps(), 75, 1.0, GetSelectedCodec());
+                    }
+                });
+            };
+
+            return dxgi;
         }
 
         private async void SelectSourceButton_Click(object? sender, RoutedEventArgs e)
@@ -1738,6 +1788,7 @@ namespace LanScreenShare.Desktop
         {
             _currentSource = source;
             UpdateSourceUI();
+            InitializeResolutionOptions(_currentSource);
             SaveCurrentSettings();
 
             _inputSimulatorService?.SetTargetSource(_currentSource);

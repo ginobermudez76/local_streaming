@@ -25,8 +25,53 @@ namespace LanScreenShare.Media
         private volatile string _codec = "h264";
         private MediaFoundationH264EncoderService? _h264Encoder;
 
+        private volatile int _captureX = 0;
+        private volatile int _captureY = 0;
+        private volatile int _captureWidth = 0;
+        private volatile int _captureHeight = 0;
+        private volatile bool _captureAllScreens = false;
+
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
+
+        public int CaptureX
+        {
+            get => _captureX;
+            set => _captureX = value;
+        }
+
+        public int CaptureY
+        {
+            get => _captureY;
+            set => _captureY = value;
+        }
+
+        public int CaptureWidth
+        {
+            get => _captureWidth;
+            set => _captureWidth = Math.Max(0, value);
+        }
+
+        public int CaptureHeight
+        {
+            get => _captureHeight;
+            set => _captureHeight = Math.Max(0, value);
+        }
+
+        public bool CaptureAllScreens
+        {
+            get => _captureAllScreens;
+            set => _captureAllScreens = value;
+        }
+
+        public void SetTargetBounds(int x, int y, int width, int height, bool allScreens = false)
+        {
+            _captureX = x;
+            _captureY = y;
+            _captureWidth = Math.Max(0, width);
+            _captureHeight = Math.Max(0, height);
+            _captureAllScreens = allScreens;
+        }
 
         public int TargetFps
         {
@@ -172,17 +217,32 @@ namespace LanScreenShare.Media
 
         private CapturedFrame? CaptureDesktopFrame(int quality, double scale, int customTargetW = 0, int customTargetH = 0)
         {
-            int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-            int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-            int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-            int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            int left;
+            int top;
+            int width;
+            int height;
 
-            if (width <= 0 || height <= 0)
+            if (_captureAllScreens || (_captureWidth <= 0 || _captureHeight <= 0))
             {
-                width = GetSystemMetrics(SM_CXSCREEN);
-                height = GetSystemMetrics(SM_CYSCREEN);
-                left = 0;
-                top = 0;
+                left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+                if (width <= 0 || height <= 0)
+                {
+                    width = GetSystemMetrics(SM_CXSCREEN);
+                    height = GetSystemMetrics(SM_CYSCREEN);
+                    left = 0;
+                    top = 0;
+                }
+            }
+            else
+            {
+                left = _captureX;
+                top = _captureY;
+                width = _captureWidth;
+                height = _captureHeight;
             }
 
             if (width <= 0 || height <= 0)
