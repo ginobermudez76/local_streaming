@@ -173,11 +173,15 @@
                                 CornerRadius="4"
                                 Padding="8,5"
                                 Margin="0,4,0,0">
-                            <TextBlock x:Name="AdminStatusText"
-                                       Text="🛡️ Modo Estándar"
-                                       Foreground="#F59E0B"
-                                       FontSize="10"
-                                       TextWrapping="Wrap"/>
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <PathIcon x:Name="AdminStatusIcon" Data="{StaticResource IconShield}" Width="12" Height="12" Foreground="#F59E0B" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="AdminStatusText"
+                                           Text="Modo Estándar"
+                                           Foreground="#F59E0B"
+                                           FontSize="10"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
                         </Border>
                     </StackPanel>
                 </Border>
@@ -272,44 +276,53 @@
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                         <ToggleButton x:Name="RemoteControlButton"
-                                      Content="🎮 Control"
                                       IsVisible="False"
                                       Background="#27272A"
                                       Foreground="White"
                                       Padding="10,6"
                                       CornerRadius="4"
-                                      FontSize="12"
-                                      ToolTip.Tip="Habilitar interacción con mouse y teclado"/>
+                                      ToolTip.Tip="Habilitar interacción con mouse y teclado">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <PathIcon Data="{StaticResource IconGamepad}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
+                                <TextBlock Text="Control" FontSize="12" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </ToggleButton>
 
                         <ToggleButton x:Name="GameModeButton"
-                                      Content="🎯 Modo 3D (Ctrl+Alt+L)"
                                       IsVisible="False"
                                       Background="#27272A"
                                       Foreground="White"
                                       Padding="10,6"
                                       CornerRadius="4"
-                                      FontSize="12"
-                                      ToolTip.Tip="Captura el mouse para juegos 3D (giro 360°). Presiona Ctrl+Alt+L para liberar el cursor"/>
+                                      ToolTip.Tip="Captura el mouse para juegos 3D (giro 360°). Presiona Ctrl+Alt+L para liberar el cursor">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <PathIcon Data="{StaticResource Icon3dRotation}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
+                                <TextBlock Text="Modo 3D (Ctrl+Alt+L)" FontSize="12" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </ToggleButton>
 
                         <Button x:Name="AudioMuteButton"
-                                Content="🔊"
                                 IsVisible="False"
                                 Background="#27272A"
                                 Foreground="White"
-                                Padding="10,6"
+                                Padding="8,6"
                                 CornerRadius="4"
-                                FontSize="13"
-                                ToolTip.Tip="Silenciar / Activar audio"/>
+                                ToolTip.Tip="Silenciar / Activar audio">
+                            <PathIcon x:Name="AudioMuteIcon" Data="{StaticResource IconVolumeUp}" Width="14" Height="14" Foreground="White"/>
+                        </Button>
 
                         <Button x:Name="FullscreenButton"
-                                Content="⛶ Pantalla Completa"
                                 IsVisible="False"
                                 Background="#27272A"
                                 Foreground="White"
                                 Padding="10,6"
                                 CornerRadius="4"
-                                FontSize="12"
-                                ToolTip.Tip="Alternar Pantalla Completa (F11 / Doble Clic)"/>
+                                ToolTip.Tip="Alternar Pantalla Completa (F11 / Doble Clic)">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <PathIcon x:Name="FullscreenButtonIcon" Data="{StaticResource IconFullscreen}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="FullscreenButtonText" Text="Pantalla Completa" FontSize="12" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
 
                         <Button x:Name="DisconnectButton"
                                 Content="Desconectar"
@@ -334,7 +347,6 @@
 
                 <!-- Floating Exit Fullscreen Button -->
                 <Button x:Name="ExitFullscreenFloatButton"
-                        Content="🗗 Salir (F11 / Esc)"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Top"
                         Margin="0,14,14,0"
@@ -343,11 +355,14 @@
                         BorderBrush="#38BDF8"
                         BorderThickness="1"
                         CornerRadius="6"
-                        Padding="12,6"
-                        FontSize="11"
-                        FontWeight="Medium"
+                        Padding="10,6"
                         IsVisible="False"
-                        ZIndex="50"/>
+                        ZIndex="50">
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <PathIcon Data="{StaticResource IconFullscreenExit}" Width="12" Height="12" Foreground="#38BDF8" VerticalAlignment="Center"/>
+                        <TextBlock Text="Salir (F11 / Esc)" FontSize="11" FontWeight="Medium" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
 
                 <!-- Host Stream Connection Request Approval Banner -->
                 <Border x:Name="StreamApprovalBanner"
@@ -362,7 +377,7 @@
                         IsVisible="False"
                         ZIndex="60">
                     <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
-                        <TextBlock Text="🔔" FontSize="20" VerticalAlignment="Center"/>
+                        <PathIcon Data="{StaticResource IconNotifications}" Width="20" Height="20" Foreground="#3B82F6" VerticalAlignment="Center"/>
                         <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock x:Name="StreamApprovalTitle" Text="Solicitud de Visualización de Pantalla" FontWeight="SemiBold" Foreground="White" FontSize="12"/>
                             <TextBlock x:Name="StreamApprovalSubtitle" Text="Un dispositivo solicita conectarse a la transmisión." Foreground="#A1A1AA" FontSize="11"/>
@@ -387,7 +402,7 @@
                         IsVisible="False"
                         ZIndex="60">
                     <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
-                        <TextBlock Text="🎮" FontSize="20" VerticalAlignment="Center"/>
+                        <PathIcon Data="{StaticResource IconGamepad}" Width="20" Height="20" Foreground="#F59E0B" VerticalAlignment="Center"/>
                         <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock x:Name="ControlApprovalTitle" Text="Solicitud de Control Remoto (Mouse y Teclado)" FontWeight="SemiBold" Foreground="White" FontSize="12"/>
                             <TextBlock x:Name="ControlApprovalSubtitle" Text="Un dispositivo solicita controlar tu mouse y teclado." Foreground="#A1A1AA" FontSize="11"/>
@@ -411,11 +426,15 @@
                         Margin="0,14,0,0"
                         IsVisible="False"
                         IsHitTestVisible="False">
-                    <TextBlock x:Name="GameModeBannerText"
-                               Text="🎯 Modo Juego 3D Activo — Presiona Ctrl + Alt + L para liberar el mouse"
-                               Foreground="#38BDF8"
-                               FontSize="12"
-                               FontWeight="SemiBold"/>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <PathIcon x:Name="GameModeBannerIcon" Data="{StaticResource Icon3dRotation}" Width="14" Height="14" Foreground="#38BDF8" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="GameModeBannerText"
+                                   Text="Modo Juego 3D Activo — Presiona Ctrl + Alt + L para liberar el mouse"
+                                   Foreground="#38BDF8"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Border>
 
                 <!-- Placeholder Overlay -->
@@ -425,7 +444,7 @@
                             Spacing="12"
                             MaxWidth="400">
                     <Border Width="64" Height="64" CornerRadius="32" Background="#27272A" HorizontalAlignment="Center">
-                        <TextBlock Text="📺" FontSize="28" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <PathIcon Data="{StaticResource IconTv}" Width="28" Height="28" Foreground="#A1A1AA" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <TextBlock Text="Área de Transmisión"
                                FontSize="18"

@@ -218,7 +218,11 @@ namespace LanScreenShare.Desktop
                     if (_audioPlayerService != null)
                     {
                         _audioPlayerService.IsMuted = !_audioPlayerService.IsMuted;
-                        audioMuteButton.Content = _audioPlayerService.IsMuted ? "🔇" : "🔊";
+                        var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
+                        if (muteIcon != null)
+                        {
+                            muteIcon.Data = (this.FindResource(_audioPlayerService.IsMuted ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
+                        }
                     }
                 };
             }
@@ -402,20 +406,23 @@ namespace LanScreenShare.Desktop
             // Indicador de permisos de Administrador para control de juegos/launchers
             var adminStatusBorder = this.FindControl<Border>("AdminStatusBorder");
             var adminStatusText = this.FindControl<TextBlock>("AdminStatusText");
+            var adminStatusIcon = this.FindControl<PathIcon>("AdminStatusIcon");
             if (adminStatusBorder != null && adminStatusText != null)
             {
                 if (IsRunningAsAdministrator())
                 {
                     adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#14532D"));
-                    adminStatusText.Text = "🛡️ Modo Administrador Activo (Control de juegos y apps elevadas)";
+                    adminStatusText.Text = "Modo Administrador Activo (Control de juegos y apps elevadas)";
                     adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
+                    if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
                     ToolTip.SetTip(adminStatusBorder, "Permisos elevados activos: Puede interactuar libremente con launchers de juegos, Administrador de Tareas y ventanas administrativas.");
                 }
                 else
                 {
                     adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#451A03"));
-                    adminStatusText.Text = "⚠️ Modo Estándar: Ejecuta como Administrador para controlar launchers y juegos";
+                    adminStatusText.Text = "Modo Estándar: Ejecuta como Administrador para controlar launchers y juegos";
                     adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
+                    if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
                     ToolTip.SetTip(adminStatusBorder, "Windows restringe el control remoto sobre ventanas elevadas como launchers o juegos. Abre la aplicación con 'Ejecutar como Administrador' para habilitarlo.");
                 }
             }
@@ -504,6 +511,9 @@ namespace LanScreenShare.Desktop
             var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
             var floatExitBtn = this.FindControl<Button>("ExitFullscreenFloatButton");
 
+            var fullscreenIcon = this.FindControl<PathIcon>("FullscreenButtonIcon");
+            var fullscreenText = this.FindControl<TextBlock>("FullscreenButtonText");
+
             if (_isFullscreen)
             {
                 _previousWindowState = this.WindowState;
@@ -511,7 +521,8 @@ namespace LanScreenShare.Desktop
 
                 if (sidebar != null) sidebar.IsVisible = false;
                 if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("0,*");
-                if (fullscreenBtn != null) fullscreenBtn.Content = "🗗 Salir";
+                if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreenExit") as StreamGeometry)!;
+                if (fullscreenText != null) fullscreenText.Text = "Salir";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = true;
             }
             else
@@ -520,7 +531,8 @@ namespace LanScreenShare.Desktop
 
                 if (sidebar != null) sidebar.IsVisible = true;
                 if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("310,*");
-                if (fullscreenBtn != null) fullscreenBtn.Content = "⛶ Pantalla Completa";
+                if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreen") as StreamGeometry)!;
+                if (fullscreenText != null) fullscreenText.Text = "Pantalla Completa";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = false;
             }
         }
@@ -672,11 +684,17 @@ namespace LanScreenShare.Desktop
                     SetCursorPos(center.X, center.Y);
                 }
 
+                var bannerIcon = this.FindControl<PathIcon>("GameModeBannerIcon");
                 _gameModeBannerTimer?.Stop();
                 if (banner != null && bannerText != null)
                 {
                     banner.IsVisible = true;
-                    bannerText.Text = "🎯 Modo Juego 3D Activo — Presiona Ctrl + Alt + L para liberar el mouse";
+                    if (bannerIcon != null)
+                    {
+                        bannerIcon.Data = (this.FindResource("Icon3dRotation") as StreamGeometry)!;
+                        bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
+                    }
+                    bannerText.Text = "Modo Juego 3D Activo — Presiona Ctrl + Alt + L para liberar el mouse";
                     bannerText.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
                 }
             }
@@ -687,10 +705,16 @@ namespace LanScreenShare.Desktop
                     screenImage.Cursor = Cursor.Default;
                 }
 
+                var bannerIcon = this.FindControl<PathIcon>("GameModeBannerIcon");
                 if (banner != null && bannerText != null)
                 {
                     banner.IsVisible = true;
-                    bannerText.Text = "🔓 Mouse Liberado — Presiona Ctrl + Alt + L para recapturar";
+                    if (bannerIcon != null)
+                    {
+                        bannerIcon.Data = (this.FindResource("IconLockOpen") as StreamGeometry)!;
+                        bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
+                    }
+                    bannerText.Text = "Mouse Liberado — Presiona Ctrl + Alt + L para recapturar";
                     bannerText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
 
                     _gameModeBannerTimer?.Stop();
@@ -1125,11 +1149,11 @@ namespace LanScreenShare.Desktop
                         : "";
 
                     string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient.IsConnected && _audioClient.IsConnected)
-                        ? " • 🔊 Audio"
+                        ? " • Audio"
                         : "";
 
                     string controlTag = _controlClient.IsConnected && _remoteControlEnabled
-                        ? " • 🎮 Control Activo"
+                        ? " • Control Activo"
                         : "";
 
                     statsText.Text = $"{frames} FPS • {transferRate}{res}{engineTag}{codecTag}{audioTag}{controlTag}";
@@ -1404,7 +1428,7 @@ namespace LanScreenShare.Desktop
                 }
 
                 // El control remoto NO se conecta automáticamente aquí para no solicitar permisos antes de tiempo.
-                // Se conecta únicamente a demanda cuando el visor hace clic en '🎮 Control' o '🎯 Modo 3D'.
+                // Se conecta únicamente a demanda cuando el visor hace clic en 'Control' o 'Modo 3D'.
 
                 var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
                 if (fullscreenBtn != null)
@@ -1422,7 +1446,11 @@ namespace LanScreenShare.Desktop
                 if (muteBtn != null)
                 {
                     muteBtn.IsVisible = true;
-                    muteBtn.Content = (_audioPlayerService?.IsMuted ?? false) ? "🔇" : "🔊";
+                    var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
+                    if (muteIcon != null)
+                    {
+                        muteIcon.Data = (this.FindResource((_audioPlayerService?.IsMuted ?? false) ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
+                    }
                 }
 
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");

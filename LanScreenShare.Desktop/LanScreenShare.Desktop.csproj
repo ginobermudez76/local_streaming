@@ -23,4 +23,7 @@
     <ProjectReference Include="..\LanScreenShare.Network\LanScreenShare.Network.csproj" />
     <ProjectReference Include="..\LanScreenShare.Media\LanScreenShare.Media.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
 </Project>
