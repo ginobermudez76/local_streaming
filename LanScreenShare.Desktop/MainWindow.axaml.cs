@@ -50,6 +50,8 @@ namespace LanScreenShare.Desktop
 
         private bool _isHosting;
         private string? _currentConnectedDeviceName;
+        private string? _currentConnectedDeviceIp;
+        private bool _currentDeviceAllowsRemoteControl;
 
         // Pantalla completa
         private bool _isFullscreen;
@@ -137,13 +139,41 @@ namespace LanScreenShare.Desktop
                 };
             }
 
+            _discoveryService.IsRemoteControlAllowedProvider = () => _allowRemoteControl;
+
             var allowCb = this.FindControl<CheckBox>("AllowRemoteControlCheckBox");
+            var controlAccessPanel = this.FindControl<StackPanel>("ControlAccessModePanel");
+
             if (allowCb != null)
             {
                 _allowRemoteControl = allowCb.IsChecked == true;
+                if (controlAccessPanel != null)
+                {
+                    controlAccessPanel.IsVisible = _allowRemoteControl;
+                }
+
                 allowCb.IsCheckedChanged += (s, e) =>
                 {
                     _allowRemoteControl = allowCb.IsChecked == true;
+                    if (controlAccessPanel != null)
+                    {
+                        controlAccessPanel.IsVisible = _allowRemoteControl;
+                    }
+
+                    if (_isHosting)
+                    {
+                        if (_allowRemoteControl)
+                        {
+                            if (!_controlServer.IsRunning)
+                            {
+                                _ = _controlServer.StartAsync(5003);
+                            }
+                        }
+                        else
+                        {
+                            _controlServer.Stop();
+                        }
+                    }
                     Console.WriteLine($"[ControlHost] Permiso de control remoto: {_allowRemoteControl}");
                 };
             }
@@ -196,17 +226,34 @@ namespace LanScreenShare.Desktop
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
             if (remoteControlBtn != null)
             {
-                remoteControlBtn.IsCheckedChanged += (s, e) =>
+                remoteControlBtn.IsCheckedChanged += async (s, e) =>
                 {
-                    _remoteControlEnabled = remoteControlBtn.IsChecked == true;
-                    remoteControlBtn.Background = _remoteControlEnabled
-                        ? new SolidColorBrush(Color.Parse("#2563EB"))
-                        : new SolidColorBrush(Color.Parse("#27272A"));
-
-                    var screenImg = this.FindControl<Image>("ScreenImage");
-                    if (_remoteControlEnabled && screenImg != null)
+                    if (remoteControlBtn.IsChecked == true)
                     {
-                        screenImg.Focus();
+                        bool connected = await EnsureControlConnectedAsync();
+                        if (!connected)
+                        {
+                            remoteControlBtn.IsChecked = false;
+                            _remoteControlEnabled = false;
+                            return;
+                        }
+
+                        _remoteControlEnabled = true;
+                        remoteControlBtn.Background = new SolidColorBrush(Color.Parse("#2563EB"));
+
+                        var screenImg = this.FindControl<Image>("ScreenImage");
+                        screenImg?.Focus();
+                    }
+                    else
+                    {
+                        _remoteControlEnabled = false;
+                        remoteControlBtn.Background = new SolidColorBrush(Color.Parse("#27272A"));
+
+                        if (_isGameMode)
+                        {
+                            _isGameMode = false;
+                            UpdateGameModeUI();
+                        }
                     }
                 };
             }
@@ -279,7 +326,7 @@ namespace LanScreenShare.Desktop
             // Aprobación de control remoto
             _controlServer.ClientApprovalCallback = async (clientId) =>
             {
-                if (!_allowRemoteControl || _remoteControlMode == "disabled")
+                if (!_allowRemoteControl)
                     return false;
 
                 if (_remoteControlMode == "auto")
@@ -540,12 +587,50 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void ToggleGameMode()
+        private async Task<bool> EnsureControlConnectedAsync()
         {
-            if (!_controlClient.IsConnected)
-                return;
+            if (_controlClient.IsConnected)
+                return true;
 
-            _isGameMode = !_isGameMode;
+            if (string.IsNullOrEmpty(_currentConnectedDeviceIp))
+                return false;
+
+            UpdateStatus("Solicitando acceso de control remoto al anfitrión...", "#F59E0B");
+
+            try
+            {
+                await _controlClient.ConnectAsync(_currentConnectedDeviceIp, 5003);
+                Console.WriteLine($"[ControlViewer] Conectado a canal de control remoto en {_currentConnectedDeviceIp}:5003");
+                UpdateStatus($"Conectado a {_currentConnectedDeviceName} • Control remoto activo", "#22C55E");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlClient] Control remoto denegado o no disponible: {ex.Message}");
+                UpdateStatus("Control remoto rechazado o no disponible en el anfitrión", "#EF4444");
+                return false;
+            }
+        }
+
+        private async void ToggleGameMode()
+        {
+            if (!_isGameMode)
+            {
+                bool connected = await EnsureControlConnectedAsync();
+                if (!connected)
+                {
+                    var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
+                    if (gameModeBtn != null) gameModeBtn.IsChecked = false;
+                    return;
+                }
+
+                _isGameMode = true;
+            }
+            else
+            {
+                _isGameMode = false;
+            }
+
             UpdateGameModeUI();
         }
 
@@ -1111,8 +1196,11 @@ namespace LanScreenShare.Desktop
                         }
                     }
 
-                    // 3. Iniciar servidor de control remoto (Puerto 5003)
-                    await _controlServer.StartAsync(5003);
+                    // 3. Iniciar servidor de control remoto (Puerto 5003) si está habilitado
+                    if (_allowRemoteControl)
+                    {
+                        await _controlServer.StartAsync(5003);
+                    }
 
                     _discoveryService.StartHostingBroadcast();
 
@@ -1255,10 +1343,30 @@ namespace LanScreenShare.Desktop
                 {
                     existing.Name = device.Name;
                     existing.LastSeen = device.LastSeen;
+                    existing.IsRemoteControlAllowed = device.IsRemoteControlAllowed;
                 }
                 else
                 {
                     Devices.Add(device);
+                }
+
+                if (_streamClient.IsConnected && _currentConnectedDeviceIp == device.IPAddress)
+                {
+                    _currentDeviceAllowsRemoteControl = device.IsRemoteControlAllowed;
+
+                    var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
+                    if (remoteControlBtn != null)
+                    {
+                        remoteControlBtn.IsVisible = _currentDeviceAllowsRemoteControl;
+                        if (!_currentDeviceAllowsRemoteControl) remoteControlBtn.IsChecked = false;
+                    }
+
+                    var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
+                    if (gameModeBtn != null)
+                    {
+                        gameModeBtn.IsVisible = _currentDeviceAllowsRemoteControl;
+                        if (!_currentDeviceAllowsRemoteControl) gameModeBtn.IsChecked = false;
+                    }
                 }
             });
         }
@@ -1275,6 +1383,8 @@ namespace LanScreenShare.Desktop
         {
             StopDeviceSearch();
             _currentConnectedDeviceName = device.Name;
+            _currentConnectedDeviceIp = device.IPAddress;
+            _currentDeviceAllowsRemoteControl = device.IsRemoteControlAllowed;
             UpdateStatus($"Conectando a {device.Name} ({device.IPAddress}:5001)...", "#F59E0B");
             ResetMetrics();
 
@@ -1293,16 +1403,8 @@ namespace LanScreenShare.Desktop
                     Console.WriteLine($"[AudioClient] Audio no disponible en el host: {ex.Message}");
                 }
 
-                // 3. Conectar canal de control remoto
-                try
-                {
-                    await _controlClient.ConnectAsync(device.IPAddress, 5003);
-                    Console.WriteLine($"[ControlViewer] Conectado a canal de control remoto en {device.IPAddress}:5003");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[ControlClient] Control remoto no disponible: {ex.Message}");
-                }
+                // El control remoto NO se conecta automáticamente aquí para no solicitar permisos antes de tiempo.
+                // Se conecta únicamente a demanda cuando el visor hace clic en '🎮 Control' o '🎯 Modo 3D'.
 
                 var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
                 if (fullscreenBtn != null)
@@ -1326,20 +1428,18 @@ namespace LanScreenShare.Desktop
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
                 if (remoteControlBtn != null)
                 {
-                    remoteControlBtn.IsVisible = true;
+                    remoteControlBtn.IsVisible = _currentDeviceAllowsRemoteControl;
                     remoteControlBtn.IsChecked = false;
-                    remoteControlBtn.IsEnabled = _controlClient.IsConnected;
-                    ToolTip.SetTip(remoteControlBtn, _controlClient.IsConnected
-                        ? "Habilitar interacción con mouse y teclado"
-                        : "Control remoto no disponible (puerto 5003 no respondió en el host)");
+                    remoteControlBtn.IsEnabled = true;
+                    ToolTip.SetTip(remoteControlBtn, "Habilitar interacción con mouse y teclado");
                 }
 
                 var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
                 if (gameModeBtn != null)
                 {
-                    gameModeBtn.IsVisible = true;
+                    gameModeBtn.IsVisible = _currentDeviceAllowsRemoteControl;
                     gameModeBtn.IsChecked = false;
-                    gameModeBtn.IsEnabled = _controlClient.IsConnected;
+                    gameModeBtn.IsEnabled = true;
                 }
             }
             catch (Exception ex)
@@ -1457,13 +1557,14 @@ namespace LanScreenShare.Desktop
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
                 if (remoteControlBtn != null)
                 {
-                    remoteControlBtn.IsVisible = _streamClient.IsConnected;
+                    remoteControlBtn.IsVisible = _streamClient.IsConnected && _currentDeviceAllowsRemoteControl;
+                    if (!_streamClient.IsConnected) remoteControlBtn.IsChecked = false;
                 }
 
                 var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
                 if (gameModeBtn != null)
                 {
-                    gameModeBtn.IsVisible = _streamClient.IsConnected;
+                    gameModeBtn.IsVisible = _streamClient.IsConnected && _currentDeviceAllowsRemoteControl;
                     if (!_streamClient.IsConnected) gameModeBtn.IsChecked = false;
                 }
             });
@@ -1473,6 +1574,9 @@ namespace LanScreenShare.Desktop
         {
             SetFullscreen(false);
             StopDeviceSearch();
+            _currentDeviceAllowsRemoteControl = false;
+            _currentConnectedDeviceIp = null;
+            _currentConnectedDeviceName = null;
 
             await _streamClient.DisconnectAsync();
             await _audioClient.DisconnectAsync();

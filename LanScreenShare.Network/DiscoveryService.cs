@@ -20,6 +20,7 @@ namespace LanScreenShare.Network
         private CancellationTokenSource? _listenCts;
 
         public event EventHandler<DeviceInfo>? OnDeviceDiscovered;
+        public Func<bool>? IsRemoteControlAllowedProvider { get; set; }
 
         public void StartHostingBroadcast()
         {
@@ -46,7 +47,8 @@ namespace LanScreenShare.Network
                                 using var udpClient = new UdpClient();
                                 udpClient.EnableBroadcast = true;
 
-                                var message = $"{BroadcastMessagePrefix}|{pcName}|{target.LocalIp}";
+                                var rcAllowed = IsRemoteControlAllowedProvider?.Invoke() ?? true;
+                                var message = $"{BroadcastMessagePrefix}|{pcName}|{target.LocalIp}|{(rcAllowed ? "1" : "0")}";
                                 var bytes = Encoding.UTF8.GetBytes(message);
 
                                 // 1. Broadcast dirigido a la subred de esta interfaz física (ej. 192.168.100.255)
@@ -107,6 +109,7 @@ namespace LanScreenShare.Network
                         {
                             var senderName = parts[1];
                             var reportedIp = parts[2];
+                            bool isRemoteControlAllowed = parts.Length < 4 || parts[3] == "1";
                             var remoteIp = result.RemoteEndPoint.Address.ToString();
 
                             // Evitar auto-descubrimiento si es este mismo equipo
@@ -124,7 +127,8 @@ namespace LanScreenShare.Network
                             {
                                 Name = senderName,
                                 IPAddress = finalIp,
-                                LastSeen = DateTime.Now
+                                LastSeen = DateTime.Now,
+                                IsRemoteControlAllowed = isRemoteControlAllowed
                             };
 
                             OnDeviceDiscovered?.Invoke(this, device);

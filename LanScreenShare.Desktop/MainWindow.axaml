@@ -156,7 +156,7 @@
                         </StackPanel>
 
                         <!-- Remote Control Access Mode -->
-                        <StackPanel Spacing="3" Margin="0,2,0,0">
+                        <StackPanel x:Name="ControlAccessModePanel" Spacing="3" Margin="0,2,0,0" IsVisible="False">
                             <TextBlock Text="Aprobación de Control Remoto" FontSize="11" Foreground="#A1A1AA"/>
                             <ComboBox x:Name="ControlAccessModeComboBox"
                                       HorizontalAlignment="Stretch"
@@ -164,7 +164,6 @@
                                       SelectedIndex="0">
                                 <ComboBoxItem Content="Cualquiera con permiso (Automático)" Tag="auto"/>
                                 <ComboBoxItem Content="Solicitar aprobación antes de interactuar" Tag="ask"/>
-                                <ComboBoxItem Content="Bloquear control remoto" Tag="disabled"/>
                             </ComboBox>
                         </StackPanel>
 
