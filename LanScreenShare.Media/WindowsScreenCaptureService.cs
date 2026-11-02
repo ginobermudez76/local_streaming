@@ -20,6 +20,8 @@ namespace LanScreenShare.Media
         private volatile int _targetFps = 30;
         private volatile int _quality = 75;
         private volatile int _scalePercent = 100;
+        private volatile int _targetWidth = 0;
+        private volatile int _targetHeight = 0;
         private volatile string _codec = "h264";
         private MediaFoundationH264EncoderService? _h264Encoder;
 
@@ -44,21 +46,35 @@ namespace LanScreenShare.Media
             set => _scalePercent = (int)Math.Round(Math.Clamp(value, 0.25, 1.0) * 100);
         }
 
+        public int TargetWidth
+        {
+            get => _targetWidth;
+            set => _targetWidth = Math.Max(0, value);
+        }
+
+        public int TargetHeight
+        {
+            get => _targetHeight;
+            set => _targetHeight = Math.Max(0, value);
+        }
+
         public string Codec
         {
             get => _codec;
             set => _codec = value.ToLowerInvariant() == "h264" ? "h264" : "jpeg";
         }
 
-        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "h264")
+        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "h264", int targetWidth = 0, int targetHeight = 0)
         {
             TargetFps = targetFps;
             Quality = quality;
             ResolutionScale = resolutionScale;
             Codec = codec;
+            TargetWidth = targetWidth;
+            TargetHeight = targetHeight;
         }
 
-        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0, string codec = "h264")
+        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0, string codec = "h264", int targetWidth = 0, int targetHeight = 0)
         {
             if (IsCapturing)
                 return;
@@ -67,6 +83,8 @@ namespace LanScreenShare.Media
             _quality = Math.Clamp(quality, 10, 100);
             ResolutionScale = resolutionScale;
             Codec = codec;
+            TargetWidth = targetWidth;
+            TargetHeight = targetHeight;
 
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
@@ -84,7 +102,7 @@ namespace LanScreenShare.Media
 
                     try
                     {
-                        var frame = CaptureDesktopFrame(_quality, ResolutionScale);
+                        var frame = CaptureDesktopFrame(_quality, ResolutionScale, _targetWidth, _targetHeight);
                         if (frame != null)
                         {
                             FrameCaptured?.Invoke(this, frame);
@@ -128,7 +146,7 @@ namespace LanScreenShare.Media
             _captureTask = null;
         }
 
-        private CapturedFrame? CaptureDesktopFrame(int quality, double scale)
+        private CapturedFrame? CaptureDesktopFrame(int quality, double scale, int customTargetW = 0, int customTargetH = 0)
         {
             int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
             int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -194,19 +212,18 @@ namespace LanScreenShare.Media
                     SKBitmap bitmapToEncode = skBitmap;
                     SKBitmap? resizedBitmap = null;
 
-                    if (scale > 0.2 && scale < 0.99)
+                    int targetW = customTargetW > 0 ? customTargetW : (scale > 0.2 && scale < 0.99 ? (int)(width * scale) : 0);
+                    int targetH = customTargetH > 0 ? customTargetH : (scale > 0.2 && scale < 0.99 ? (int)(height * scale) : 0);
+
+                    if (targetW > 0 && targetH > 0 && (targetW != width || targetH != height))
                     {
-                        int targetW = (int)(width * scale);
-                        int targetH = (int)(height * scale);
-                        if (targetW > 0 && targetH > 0)
+                        // Remuestreo cúbico CatmullRom para máxima nitidez en textos y detalles finos sin pixelación
+                        resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKCubicResampler.CatmullRom));
+                        if (resizedBitmap != null)
                         {
-                            resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), SKSamplingOptions.Default);
-                            if (resizedBitmap != null)
-                            {
-                                bitmapToEncode = resizedBitmap;
-                                finalWidth = targetW;
-                                finalHeight = targetH;
-                            }
+                            bitmapToEncode = resizedBitmap;
+                            finalWidth = targetW;
+                            finalHeight = targetH;
                         }
                     }
 

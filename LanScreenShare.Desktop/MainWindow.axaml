@@ -115,16 +115,12 @@
                         <StackPanel Spacing="4">
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock Grid.Column="0" Text="Resolución" FontSize="11" Foreground="#A1A1AA"/>
-                                <TextBlock Grid.Column="1" x:Name="ScaleValueLabel" Text="100%" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
+                                <TextBlock Grid.Column="1" x:Name="ScaleValueLabel" Text="Nativa" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
                             </Grid>
                             <ComboBox x:Name="ScaleComboBox"
                                       HorizontalAlignment="Stretch"
                                       FontSize="12"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="100% (Nativa)" Tag="1.0"/>
-                                <ComboBoxItem Content="75% (Equilibrado)" Tag="0.75"/>
-                                <ComboBoxItem Content="50% (Rápido / Wi-Fi)" Tag="0.5"/>
-                            </ComboBox>
+                                      SelectedIndex="0"/>
                         </StackPanel>
 
                         <!-- Audio Share Toggle -->
@@ -343,7 +339,8 @@
                        Stretch="Uniform"
                        HorizontalAlignment="Stretch"
                        VerticalAlignment="Stretch"
-                       Focusable="True"/>
+                       Focusable="True"
+                       RenderOptions.BitmapInterpolationMode="HighQuality"/>
 
                 <!-- Floating Exit Fullscreen Button -->
                 <Button x:Name="ExitFullscreenFloatButton"

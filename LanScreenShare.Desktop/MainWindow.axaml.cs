@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
@@ -388,6 +389,8 @@ namespace LanScreenShare.Desktop
                     }
                 };
             }
+
+            InitializeResolutionOptions();
 
             var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
             if (scaleCombo != null)
@@ -1047,15 +1050,108 @@ namespace LanScreenShare.Desktop
             return 30;
         }
 
-        private double GetSelectedScale()
+        private void InitializeResolutionOptions()
         {
-            var combo = this.FindControl<ComboBox>("ScaleComboBox");
-            if (combo?.SelectedItem is ComboBoxItem item && item.Tag is string tag &&
-                double.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out double scale))
+            var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
+            if (scaleCombo == null) return;
+
+            int nativeW = 1920;
+            int nativeH = 1080;
+
+            if (OperatingSystem.IsWindows())
             {
-                return scale;
+                int sw = GetSystemMetrics(SM_CXSCREEN);
+                int sh = GetSystemMetrics(SM_CYSCREEN);
+                if (sw > 0 && sh > 0)
+                {
+                    nativeW = sw;
+                    nativeH = sh;
+                }
             }
-            return 1.0;
+            else if (Screens?.Primary != null)
+            {
+                nativeW = Screens.Primary.Bounds.Width;
+                nativeH = Screens.Primary.Bounds.Height;
+            }
+
+            double nativeAspect = (double)nativeW / nativeH;
+
+            var commonResolutions = new (int w, int h, string label)[]
+            {
+                (3840, 2160, "4K UHD"),
+                (2560, 1440, "2K QHD"),
+                (2560, 1080, "UltraWide"),
+                (1920, 1200, "WUXGA"),
+                (1920, 1080, "1080p FHD"),
+                (1680, 1050, "WSXGA+"),
+                (1600, 900, "900p HD+"),
+                (1440, 900, "WXGA+"),
+                (1366, 768, "768p Laptop"),
+                (1280, 800, "WXGA"),
+                (1280, 720, "720p HD"),
+                (1024, 768, "XGA"),
+                (960, 540, "540p qHD"),
+                (854, 480, "480p SD")
+            };
+
+            var items = new List<ComboBoxItem>();
+
+            // 1. Resolución nativa como primera opción
+            items.Add(new ComboBoxItem
+            {
+                Content = $"{nativeW}×{nativeH} (Nativa)",
+                Tag = $"{nativeW}x{nativeH}"
+            });
+
+            // 2. Filtrar resoluciones menores compatibles con la relación de aspecto
+            foreach (var (w, h, label) in commonResolutions)
+            {
+                if (w >= nativeW && h >= nativeH)
+                    continue;
+
+                if (w > nativeW || h > nativeH)
+                    continue;
+
+                double aspect = (double)w / h;
+                if (Math.Abs(aspect - nativeAspect) <= 0.06)
+                {
+                    items.Add(new ComboBoxItem
+                    {
+                        Content = $"{w}×{h} ({label})",
+                        Tag = $"{w}x{h}"
+                    });
+                }
+            }
+
+            scaleCombo.ItemsSource = items;
+            scaleCombo.SelectedIndex = 0;
+        }
+
+        private void GetSelectedResolution(out int targetW, out int targetH, out double scale)
+        {
+            targetW = 0;
+            targetH = 0;
+            scale = 1.0;
+
+            var combo = this.FindControl<ComboBox>("ScaleComboBox");
+            if (combo?.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            {
+                if (tag.Contains('x'))
+                {
+                    var parts = tag.Split('x');
+                    if (parts.Length == 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h))
+                    {
+                        targetW = w;
+                        targetH = h;
+                        return;
+                    }
+                }
+                else if (double.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out double s))
+                {
+                    scale = s;
+                    return;
+                }
+            }
         }
 
         private void OnEngineChanged()
@@ -1064,17 +1160,17 @@ namespace LanScreenShare.Desktop
             {
                 int fps = GetSelectedFps();
                 int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
-                double scale = GetSelectedScale();
+                GetSelectedResolution(out int targetW, out int targetH, out double scale);
                 string engine = GetSelectedEngine();
                 string codec = GetSelectedCodec();
 
-                SwitchCaptureEngine(engine, fps, quality, scale, codec);
+                SwitchCaptureEngine(engine, fps, quality, scale, codec, targetW, targetH);
                 string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
                 UpdateStatus($"Cambiado a motor {engineName} ({codec.ToUpper()}) en caliente", "#22C55E");
             }
         }
 
-        private void SwitchCaptureEngine(string engine, int fps, int quality, double scale, string codec)
+        private void SwitchCaptureEngine(string engine, int fps, int quality, double scale, string codec, int targetW = 0, int targetH = 0)
         {
             _screenCaptureService.StopCapture();
             _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
@@ -1090,14 +1186,14 @@ namespace LanScreenShare.Desktop
             }
 
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
-            _screenCaptureService.StartCapture(fps, quality, scale, codec);
+            _screenCaptureService.StartCapture(fps, quality, scale, codec, targetW, targetH);
         }
 
         private void OnSettingChanged()
         {
             int fps = GetSelectedFps();
             int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
-            double scale = GetSelectedScale();
+            GetSelectedResolution(out int targetW, out int targetH, out double scale);
             string codec = GetSelectedCodec();
 
             var fpsLabel = this.FindControl<TextBlock>("FpsValueLabel");
@@ -1115,10 +1211,17 @@ namespace LanScreenShare.Desktop
             var scaleLabel = this.FindControl<TextBlock>("ScaleValueLabel");
             if (scaleLabel != null)
             {
-                scaleLabel.Text = $"{scale * 100:0}%";
+                if (targetW > 0 && targetH > 0)
+                {
+                    scaleLabel.Text = $"{targetW}×{targetH}";
+                }
+                else
+                {
+                    scaleLabel.Text = $"{scale * 100:0}%";
+                }
             }
 
-            _screenCaptureService.UpdateSettings(fps, quality, scale, codec);
+            _screenCaptureService.UpdateSettings(fps, quality, scale, codec, targetW, targetH);
         }
 
         private void MetricsTimer_Tick(object? sender, EventArgs e)
@@ -1197,13 +1300,13 @@ namespace LanScreenShare.Desktop
                 {
                     int fps = GetSelectedFps();
                     int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
-                    double scale = GetSelectedScale();
+                    GetSelectedResolution(out int targetW, out int targetH, out double scale);
                     string engine = GetSelectedEngine();
                     string codec = GetSelectedCodec();
 
                     // 1. Iniciar servidor de video (Puerto 5001)
                     await _streamServer.StartAsync(5001);
-                    SwitchCaptureEngine(engine, fps, quality, scale, codec);
+                    SwitchCaptureEngine(engine, fps, quality, scale, codec, targetW, targetH);
 
                     // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
                     bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
@@ -1704,13 +1807,18 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        #region Win32 P/Invoke for Mouse Centering
+        #region Win32 P/Invoke for Mouse Centering and Screen Metrics
 
         [DllImport("user32.dll")]
         private static extern bool SetCursorPos(int X, int Y);
 
         [DllImport("user32.dll")]
         private static extern bool GetCursorPos(out POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+        private const int SM_CXSCREEN = 0;
+        private const int SM_CYSCREEN = 1;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT
