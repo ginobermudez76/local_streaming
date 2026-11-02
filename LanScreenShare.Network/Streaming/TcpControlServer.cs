@@ -49,7 +49,9 @@ namespace LanScreenShare.Network.Streaming
                         var client = await _listener.AcceptTcpClientAsync(token);
                         client.NoDelay = true;
 
-                        var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
+                        _ = Task.Run(async () =>
+                        {
+                            var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
 
                         if (ClientApprovalCallback != null)
                         {
@@ -58,8 +60,9 @@ namespace LanScreenShare.Network.Streaming
                             {
                                 approved = await ClientApprovalCallback(clientId);
                             }
-                            catch
+                            catch (Exception ex)
                             {
+                                Console.WriteLine($"[ControlServer] Error evaluando aprobación para {clientId}: {ex.Message}");
                                 approved = false;
                             }
 
@@ -67,7 +70,7 @@ namespace LanScreenShare.Network.Streaming
                             {
                                 Console.WriteLine($"[ControlServer] Control remoto denegado por el anfitrión para: {clientId}");
                                 try { client.Close(); } catch { }
-                                continue;
+                                return;
                             }
                         }
                         var stream = client.GetStream();
@@ -77,6 +80,7 @@ namespace LanScreenShare.Network.Streaming
                         ClientConnected?.Invoke(this, clientId);
 
                         _ = ProcessClientInputAsync(clientId, client, stream, token);
+                        }, token);
                     }
                     catch (OperationCanceledException)
                     {

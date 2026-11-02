@@ -57,49 +57,53 @@ namespace LanScreenShare.Network.Streaming
                         var client = await _listener.AcceptTcpClientAsync(token);
                         client.NoDelay = true; // Deshabilitar Nagle para menor latencia
 
-                        var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
-
-                        if (ClientApprovalCallback != null)
+                        _ = Task.Run(async () =>
                         {
-                            bool approved = false;
-                            try
+                            var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
+
+                            if (ClientApprovalCallback != null)
                             {
-                                approved = await ClientApprovalCallback(clientId);
+                                bool approved = false;
+                                try
+                                {
+                                    approved = await ClientApprovalCallback(clientId);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"[StreamServer] Error evaluando aprobación para {clientId}: {ex.Message}");
+                                    approved = false;
+                                }
+
+                                if (!approved)
+                                {
+                                    Console.WriteLine($"[StreamServer] Conexión rechazada por el anfitrión para: {clientId}");
+                                    try { client.Close(); } catch { }
+                                    return;
+                                }
                             }
-                            catch
+
+                            var stream = client.GetStream();
+
+                            // Cola acotada de 1 frame: si el cliente no puede descargar a tiempo, se descarta el frame viejo
+                            var channel = Channel.CreateBounded<CapturedFrame>(new BoundedChannelOptions(1)
                             {
-                                approved = false;
-                            }
+                                FullMode = BoundedChannelFullMode.DropOldest
+                            });
 
-                            if (!approved)
+                            var ctx = new ClientContext
                             {
-                                Console.WriteLine($"[StreamServer] Conexión rechazada por el anfitrión para: {clientId}");
-                                try { client.Close(); } catch { }
-                                continue;
-                            }
-                        }
+                                Client = client,
+                                Stream = stream,
+                                Channel = channel
+                            };
 
-                        var stream = client.GetStream();
+                            _clients[clientId] = ctx;
+                            Console.WriteLine($"[StreamServer] Cliente conectado: {clientId}");
+                            ClientConnected?.Invoke(this, clientId);
 
-                        // Cola acotada de 1 frame: si el cliente no puede descargar a tiempo, se descarta el frame viejo
-                        var channel = Channel.CreateBounded<CapturedFrame>(new BoundedChannelOptions(1)
-                        {
-                            FullMode = BoundedChannelFullMode.DropOldest
-                        });
-
-                        var ctx = new ClientContext
-                        {
-                            Client = client,
-                            Stream = stream,
-                            Channel = channel
-                        };
-
-                        _clients[clientId] = ctx;
-                        Console.WriteLine($"[StreamServer] Cliente conectado: {clientId}");
-                        ClientConnected?.Invoke(this, clientId);
-
-                        // Iniciar bomba de envío secuencial dedicada para este cliente
-                        _ = PumpClientFramesAsync(clientId, ctx, token);
+                            // Iniciar bomba de envío secuencial dedicada para este cliente
+                            _ = PumpClientFramesAsync(clientId, ctx, token);
+                        }, token);
                     }
                     catch (OperationCanceledException)
                     {

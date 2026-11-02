@@ -59,14 +59,10 @@ namespace LanScreenShare.Desktop
         private DispatcherTimer? _searchTimer;
 
         // Control de acceso y aprobación de conexiones
+        private volatile bool _requireStreamApproval = false;
+        private volatile string _remoteControlMode = "auto";
         private TaskCompletionSource<bool>? _streamApprovalTcs;
         private TaskCompletionSource<bool>? _controlApprovalTcs;
-
-        private bool RequireStreamApproval =>
-            (this.FindControl<ComboBox>("StreamAccessModeComboBox")?.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
-
-        private string RemoteControlMode =>
-            (this.FindControl<ComboBox>("ControlAccessModeComboBox")?.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
 
         // Decodificador de video por hardware (H.264)
         private readonly IVideoDecoderService? _h264Decoder;
@@ -242,10 +238,33 @@ namespace LanScreenShare.Desktop
                 exitFloatBtn.Click += (s, e) => SetFullscreen(false);
             }
 
+            // Modos de acceso y aprobación de conexiones
+            var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
+            if (streamAccessCombo != null)
+            {
+                _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
+                streamAccessCombo.SelectionChanged += (s, e) =>
+                {
+                    _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
+                    Console.WriteLine($"[AccessHost] Aprobación de stream requerida: {_requireStreamApproval}");
+                };
+            }
+
+            var controlAccessCombo = this.FindControl<ComboBox>("ControlAccessModeComboBox");
+            if (controlAccessCombo != null)
+            {
+                _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+                controlAccessCombo.SelectionChanged += (s, e) =>
+                {
+                    _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+                    Console.WriteLine($"[AccessHost] Modo de control remoto: {_remoteControlMode}");
+                };
+            }
+
             // Aprobación de conexión de espectadores (Streaming)
             _streamServer.ClientApprovalCallback = async (clientId) =>
             {
-                if (!RequireStreamApproval)
+                if (!_requireStreamApproval)
                     return true;
 
                 return await RequestStreamApprovalAsync(clientId);
@@ -260,10 +279,10 @@ namespace LanScreenShare.Desktop
             // Aprobación de control remoto
             _controlServer.ClientApprovalCallback = async (clientId) =>
             {
-                if (!_allowRemoteControl || RemoteControlMode == "disabled")
+                if (!_allowRemoteControl || _remoteControlMode == "disabled")
                     return false;
 
-                if (RemoteControlMode == "auto")
+                if (_remoteControlMode == "auto")
                     return true;
 
                 return await RequestControlApprovalAsync(clientId);
@@ -461,66 +480,64 @@ namespace LanScreenShare.Desktop
 
         private async Task<bool> RequestStreamApprovalAsync(string clientId)
         {
-            return await Dispatcher.UIThread.InvokeAsync(async () =>
-            {
-                _streamApprovalTcs?.TrySetResult(false);
-                _streamApprovalTcs = new TaskCompletionSource<bool>();
+            _streamApprovalTcs?.TrySetResult(false);
+            var tcs = new TaskCompletionSource<bool>();
+            _streamApprovalTcs = tcs;
 
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
                 var banner = this.FindControl<Border>("StreamApprovalBanner");
                 var subtitle = this.FindControl<TextBlock>("StreamApprovalSubtitle");
                 if (subtitle != null) subtitle.Text = $"El dispositivo '{clientId}' solicita ver tu pantalla.";
                 if (banner != null) banner.IsVisible = true;
-
-                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
-                timer.Tick += (s, e) =>
-                {
-                    timer.Stop();
-                    _streamApprovalTcs?.TrySetResult(false);
-                };
-                timer.Start();
-
-                try
-                {
-                    return await _streamApprovalTcs.Task;
-                }
-                finally
-                {
-                    timer.Stop();
-                    if (banner != null) banner.IsVisible = false;
-                }
             });
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+            using var reg = cts.Token.Register(() => tcs.TrySetResult(false));
+
+            try
+            {
+                return await tcs.Task;
+            }
+            finally
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    var banner = this.FindControl<Border>("StreamApprovalBanner");
+                    if (banner != null) banner.IsVisible = false;
+                });
+            }
         }
 
         private async Task<bool> RequestControlApprovalAsync(string clientId)
         {
-            return await Dispatcher.UIThread.InvokeAsync(async () =>
-            {
-                _controlApprovalTcs?.TrySetResult(false);
-                _controlApprovalTcs = new TaskCompletionSource<bool>();
+            _controlApprovalTcs?.TrySetResult(false);
+            var tcs = new TaskCompletionSource<bool>();
+            _controlApprovalTcs = tcs;
 
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
                 var banner = this.FindControl<Border>("ControlApprovalBanner");
                 var subtitle = this.FindControl<TextBlock>("ControlApprovalSubtitle");
                 if (subtitle != null) subtitle.Text = $"El dispositivo '{clientId}' solicita controlar tu mouse y teclado.";
                 if (banner != null) banner.IsVisible = true;
-
-                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
-                timer.Tick += (s, e) =>
-                {
-                    timer.Stop();
-                    _controlApprovalTcs?.TrySetResult(false);
-                };
-                timer.Start();
-
-                try
-                {
-                    return await _controlApprovalTcs.Task;
-                }
-                finally
-                {
-                    timer.Stop();
-                    if (banner != null) banner.IsVisible = false;
-                }
             });
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+            using var reg = cts.Token.Register(() => tcs.TrySetResult(false));
+
+            try
+            {
+                return await tcs.Task;
+            }
+            finally
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    var banner = this.FindControl<Border>("ControlApprovalBanner");
+                    if (banner != null) banner.IsVisible = false;
+                });
+            }
         }
 
         private void ToggleGameMode()
