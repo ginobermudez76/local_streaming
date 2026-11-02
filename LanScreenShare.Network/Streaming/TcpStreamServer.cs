@@ -125,7 +125,7 @@ namespace LanScreenShare.Network.Streaming
 
         private async Task PumpClientFramesAsync(string clientId, ClientContext ctx, CancellationToken token)
         {
-            byte[] header = new byte[24];
+            byte[] header = new byte[32];
             try
             {
                 while (await ctx.Channel.Reader.WaitToReadAsync(token))
@@ -141,6 +141,8 @@ namespace LanScreenShare.Network.Streaming
                             writer.Write(frame.Width);
                             writer.Write(frame.Height);
                             writer.Write(frame.Timestamp);
+                            writer.Write(frame.HostFps);
+                            writer.Write(frame.HostFrameTimeMs);
                         }
 
                         await ctx.Stream.WriteAsync(header, 0, header.Length, token);

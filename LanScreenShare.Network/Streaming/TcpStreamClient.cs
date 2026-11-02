@@ -41,20 +41,22 @@ namespace LanScreenShare.Network.Streaming
             _ = Task.Run(async () =>
             {
                 var stream = _client.GetStream();
-                byte[] headerBuffer = new byte[24];
+                byte[] headerBuffer = new byte[32];
 
                 try
                 {
                     while (!token.IsCancellationRequested && _client.Connected)
                     {
-                        // 1. Leer encabezado completo de 24 bytes
-                        await ReadExactBytesAsync(stream, headerBuffer, 0, 24, token);
+                        // 1. Leer encabezado completo de 32 bytes
+                        await ReadExactBytesAsync(stream, headerBuffer, 0, 32, token);
 
                         uint magic;
                         int dataLength;
                         int width;
                         int height;
                         long timestamp;
+                        int hostFps;
+                        int hostFrameTimeMs;
 
                         using (var ms = new MemoryStream(headerBuffer))
                         using (var reader = new BinaryReader(ms))
@@ -64,6 +66,8 @@ namespace LanScreenShare.Network.Streaming
                             width = reader.ReadInt32();
                             height = reader.ReadInt32();
                             timestamp = reader.ReadInt64();
+                            hostFps = reader.ReadInt32();
+                            hostFrameTimeMs = reader.ReadInt32();
                         }
 
                         if ((magic != FrameHeaderMagicJpeg && magic != FrameHeaderMagicH264) || dataLength <= 0 || dataLength > 50 * 1024 * 1024)
@@ -82,7 +86,9 @@ namespace LanScreenShare.Network.Streaming
                             Width = width,
                             Height = height,
                             Timestamp = timestamp,
-                            Format = magic == FrameHeaderMagicH264 ? "h264" : "jpeg"
+                            Format = magic == FrameHeaderMagicH264 ? "h264" : "jpeg",
+                            HostFps = hostFps,
+                            HostFrameTimeMs = hostFrameTimeMs
                         };
 
                         FrameReceived?.Invoke(this, frame);

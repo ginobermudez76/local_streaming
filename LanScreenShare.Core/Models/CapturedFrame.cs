@@ -9,5 +9,7 @@ namespace LanScreenShare.Core.Models
         public int Height { get; set; }
         public long Timestamp { get; set; }
         public string Format { get; set; } = "jpeg";
+        public int HostFps { get; set; }
+        public int HostFrameTimeMs { get; set; }
     }
 }

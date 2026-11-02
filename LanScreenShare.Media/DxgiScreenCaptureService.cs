@@ -113,166 +113,240 @@ namespace LanScreenShare.Media
 
         private void CaptureLoop(CancellationToken token)
         {
-            var stopwatch = new Stopwatch();
-
-            while (!token.IsCancellationRequested)
+            IntPtr mmcssHandle = IntPtr.Zero;
+            int mmcssTaskIndex = 0;
+            try
             {
-                IDXGIFactory1? factory = null;
-                IDXGIAdapter1? adapter = null;
-                IDXGIOutput? output = null;
-                IDXGIOutput1? output1 = null;
-                ID3D11Device? device = null;
-                ID3D11DeviceContext? context = null;
-                IDXGIOutputDuplication? duplication = null;
-                ID3D11Texture2D? stagingTexture = null;
-
+                Thread.CurrentThread.Priority = ThreadPriority.Highest;
                 try
                 {
-                    if (DXGI.CreateDXGIFactory1(out factory).Failure || factory == null)
-                    {
-                        throw new InvalidOperationException("No se pudo crear IDXGIFactory1");
-                    }
-
-                    if (factory.EnumAdapters1(0, out adapter).Failure || adapter == null)
-                    {
-                        throw new InvalidOperationException("No se pudo obtener el adaptador gráfico primario (GPU 0)");
-                    }
-
-                    var featureLevels = new[]
-                    {
-                        FeatureLevel.Level_11_1,
-                        FeatureLevel.Level_11_0,
-                        FeatureLevel.Level_10_1,
-                        FeatureLevel.Level_10_0
-                    };
-
-                    var d3dResult = D3D11.D3D11CreateDevice(
-                        adapter,
-                        DriverType.Unknown,
-                        DeviceCreationFlags.BgraSupport,
-                        featureLevels,
-                        out device,
-                        out context);
-
-                    if (d3dResult.Failure || device == null || context == null)
-                    {
-                        throw new InvalidOperationException($"No se pudo crear el dispositivo Direct3D 11: {d3dResult}");
-                    }
-
-                    if (adapter.EnumOutputs(0, out output).Failure || output == null)
-                    {
-                        throw new InvalidOperationException("No se pudo obtener la salida de pantalla principal (Monitor 0)");
-                    }
-
-                    output1 = output.QueryInterface<IDXGIOutput1>();
-
-                    var bounds = output.Description.DesktopCoordinates;
-                    int screenWidth = bounds.Right - bounds.Left;
-                    int screenHeight = bounds.Bottom - bounds.Top;
-                    int screenLeft = bounds.Left;
-                    int screenTop = bounds.Top;
-
-                    duplication = output1.DuplicateOutput(device);
-
-                    var stagingDesc = new Texture2DDescription
-                    {
-                        Width = (uint)screenWidth,
-                        Height = (uint)screenHeight,
-                        MipLevels = 1,
-                        ArraySize = 1,
-                        Format = Format.B8G8R8A8_UNorm,
-                        SampleDescription = new SampleDescription(1, 0),
-                        Usage = ResourceUsage.Staging,
-                        BindFlags = BindFlags.None,
-                        CPUAccessFlags = CpuAccessFlags.Read,
-                        MiscFlags = ResourceOptionFlags.None
-                    };
-
-                    stagingTexture = device.CreateTexture2D(stagingDesc);
-
-                    while (!token.IsCancellationRequested)
-                    {
-                        stopwatch.Restart();
-
-                        int currentFps = _targetFps;
-                        int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, currentFps));
-
-                        // Adquirir el siguiente frame de la GPU
-                        var acquireResult = duplication.AcquireNextFrame((uint)Math.Max(10, frameIntervalMs), out _, out IDXGIResource? desktopResource);
-
-                        if (acquireResult.Success && desktopResource != null)
-                        {
-                            try
-                            {
-                                using var desktopTexture = desktopResource.QueryInterface<ID3D11Texture2D>();
-                                context.CopyResource(stagingTexture, desktopTexture);
-                            }
-                            finally
-                            {
-                                duplication.ReleaseFrame();
-                                desktopResource.Dispose();
-                            }
-
-                            // Leer pixels mapeados desde CPU
-                            var mapped = context.Map(stagingTexture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
-                            try
-                            {
-                                var frame = EncodeFrameFromPointer(
-                                    mapped.DataPointer,
-                                    screenWidth,
-                                    screenHeight,
-                                    (int)mapped.RowPitch,
-                                    _quality,
-                                    ResolutionScale,
-                                    screenLeft,
-                                    screenTop,
-                                    _targetWidth,
-                                    _targetHeight);
-
-                                if (frame != null)
-                                {
-                                    FrameCaptured?.Invoke(this, frame);
-                                }
-                            }
-                            finally
-                            {
-                                context.Unmap(stagingTexture, 0);
-                            }
-                        }
-                        else if (acquireResult.Code == Vortice.DXGI.ResultCode.WaitTimeout.Code)
-                        {
-                            // La pantalla no cambió en este intervalo; normal en DXGI.
-                        }
-                        else if (acquireResult.Code == Vortice.DXGI.ResultCode.AccessLost.Code ||
-                                 acquireResult.Code == Vortice.DXGI.ResultCode.AccessDenied.Code)
-                        {
-                            Console.WriteLine("[DXGI] Acceso perdido o cambio de escritorio. Reinicializando...");
-                            break; // Romper bucle interno para reinicializar
-                        }
-
-                        int elapsed = (int)stopwatch.ElapsedMilliseconds;
-                        int delay = frameIntervalMs - elapsed;
-                        if (delay > 0)
-                        {
-                            Thread.Sleep(delay);
-                        }
-                    }
+                    Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[DXGI Capture] Error en bucle DXGI: {ex.Message}");
-                    Thread.Sleep(500); // Pausa antes de reintentar
+                    Console.WriteLine($"[DXGI] No se pudo elevar prioridad del proceso: {ex.Message}");
                 }
-                finally
+
+                mmcssHandle = AvSetMmThreadCharacteristics("DisplayPostProcessing", ref mmcssTaskIndex);
+                if (mmcssHandle != IntPtr.Zero)
                 {
-                    stagingTexture?.Dispose();
-                    duplication?.Dispose();
-                    output1?.Dispose();
-                    output?.Dispose();
-                    context?.Dispose();
-                    device?.Dispose();
-                    adapter?.Dispose();
-                    factory?.Dispose();
+                    Console.WriteLine("[DXGI] Hilo de captura registrado exitosamente en MMCSS (DisplayPostProcessing)");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DXGI] Advertencia configurando MMCSS/Prioridad de hilo: {ex.Message}");
+            }
+
+            var stopwatch = new Stopwatch();
+            var fpsStopwatch = Stopwatch.StartNew();
+            int capturedFramesCount = 0;
+            int currentHostFps = 0;
+
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    IDXGIFactory1? factory = null;
+                    IDXGIAdapter1? adapter = null;
+                    IDXGIOutput? output = null;
+                    IDXGIOutput1? output1 = null;
+                    ID3D11Device? device = null;
+                    ID3D11DeviceContext? context = null;
+                    IDXGIOutputDuplication? duplication = null;
+                    ID3D11Texture2D? stagingTexture = null;
+
+                    try
+                    {
+                        if (DXGI.CreateDXGIFactory1(out factory).Failure || factory == null)
+                        {
+                            throw new InvalidOperationException("No se pudo crear IDXGIFactory1");
+                        }
+
+                        if (factory.EnumAdapters1(0, out adapter).Failure || adapter == null)
+                        {
+                            throw new InvalidOperationException("No se pudo obtener el adaptador gráfico primario (GPU 0)");
+                        }
+
+                        var featureLevels = new[]
+                        {
+                            FeatureLevel.Level_11_1,
+                            FeatureLevel.Level_11_0,
+                            FeatureLevel.Level_10_1,
+                            FeatureLevel.Level_10_0
+                        };
+
+                        var d3dResult = D3D11.D3D11CreateDevice(
+                            adapter,
+                            DriverType.Unknown,
+                            DeviceCreationFlags.BgraSupport,
+                            featureLevels,
+                            out device,
+                            out context);
+
+                        if (d3dResult.Failure || device == null || context == null)
+                        {
+                            throw new InvalidOperationException($"No se pudo crear el dispositivo Direct3D 11: {d3dResult}");
+                        }
+
+                        // Configurar máxima prioridad para la GPU en Direct3D/DXGI (prioridad de tiempo real del GPU scheduler)
+                        try
+                        {
+                            using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
+                            if (dxgiDevice != null)
+                            {
+                                dxgiDevice.SetGPUThreadPriority(7);
+                                Console.WriteLine("[DXGI] GPU Thread Priority establecido al nivel máximo (7)");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[DXGI] Advertencia configurando GPU Thread Priority: {ex.Message}");
+                        }
+
+                        if (adapter.EnumOutputs(0, out output).Failure || output == null)
+                        {
+                            throw new InvalidOperationException("No se pudo obtener la salida de pantalla principal (Monitor 0)");
+                        }
+
+                        output1 = output.QueryInterface<IDXGIOutput1>();
+
+                        var bounds = output.Description.DesktopCoordinates;
+                        int screenWidth = bounds.Right - bounds.Left;
+                        int screenHeight = bounds.Bottom - bounds.Top;
+                        int screenLeft = bounds.Left;
+                        int screenTop = bounds.Top;
+
+                        duplication = output1.DuplicateOutput(device);
+
+                        var stagingDesc = new Texture2DDescription
+                        {
+                            Width = (uint)screenWidth,
+                            Height = (uint)screenHeight,
+                            MipLevels = 1,
+                            ArraySize = 1,
+                            Format = Format.B8G8R8A8_UNorm,
+                            SampleDescription = new SampleDescription(1, 0),
+                            Usage = ResourceUsage.Staging,
+                            BindFlags = BindFlags.None,
+                            CPUAccessFlags = CpuAccessFlags.Read,
+                            MiscFlags = ResourceOptionFlags.None
+                        };
+
+                        stagingTexture = device.CreateTexture2D(stagingDesc);
+
+                        while (!token.IsCancellationRequested)
+                        {
+                            stopwatch.Restart();
+
+                            int currentFps = _targetFps;
+                            int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, currentFps));
+
+                            // Medir duración de captura y codificación (frame time)
+                            var frameProcStopwatch = Stopwatch.StartNew();
+
+                            // Adquirir el siguiente frame de la GPU
+                            var acquireResult = duplication.AcquireNextFrame((uint)Math.Max(10, frameIntervalMs), out _, out IDXGIResource? desktopResource);
+
+                            if (acquireResult.Success && desktopResource != null)
+                            {
+                                try
+                                {
+                                    using var desktopTexture = desktopResource.QueryInterface<ID3D11Texture2D>();
+                                    context.CopyResource(stagingTexture, desktopTexture);
+                                }
+                                finally
+                                {
+                                    duplication.ReleaseFrame();
+                                    desktopResource.Dispose();
+                                }
+
+                                // Leer pixels mapeados desde CPU
+                                var mapped = context.Map(stagingTexture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+                                try
+                                {
+                                    var frame = EncodeFrameFromPointer(
+                                        mapped.DataPointer,
+                                        screenWidth,
+                                        screenHeight,
+                                        (int)mapped.RowPitch,
+                                        _quality,
+                                        ResolutionScale,
+                                        screenLeft,
+                                        screenTop,
+                                        _targetWidth,
+                                        _targetHeight);
+
+                                    if (frame != null)
+                                    {
+                                        frameProcStopwatch.Stop();
+                                        int frameTimeMs = (int)frameProcStopwatch.ElapsedMilliseconds;
+
+                                        capturedFramesCount++;
+                                        if (fpsStopwatch.ElapsedMilliseconds >= 1000)
+                                        {
+                                            currentHostFps = (int)Math.Round(capturedFramesCount * 1000.0 / fpsStopwatch.ElapsedMilliseconds);
+                                            capturedFramesCount = 0;
+                                            fpsStopwatch.Restart();
+                                        }
+
+                                        frame.HostFps = currentHostFps > 0 ? currentHostFps : capturedFramesCount;
+                                        frame.HostFrameTimeMs = frameTimeMs;
+
+                                        FrameCaptured?.Invoke(this, frame);
+                                    }
+                                }
+                                finally
+                                {
+                                    context.Unmap(stagingTexture, 0);
+                                }
+                            }
+                            else if (acquireResult.Code == Vortice.DXGI.ResultCode.WaitTimeout.Code)
+                            {
+                                // La pantalla no cambió en este intervalo; normal en DXGI.
+                            }
+                            else if (acquireResult.Code == Vortice.DXGI.ResultCode.AccessLost.Code ||
+                                     acquireResult.Code == Vortice.DXGI.ResultCode.AccessDenied.Code)
+                            {
+                                Console.WriteLine("[DXGI] Acceso perdido o cambio de escritorio. Reinicializando...");
+                                break; // Romper bucle interno para reinicializar
+                            }
+
+                            int elapsed = (int)stopwatch.ElapsedMilliseconds;
+                            int delay = frameIntervalMs - elapsed;
+                            if (delay > 0)
+                            {
+                                Thread.Sleep(delay);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[DXGI Capture] Error en bucle DXGI: {ex.Message}");
+                        Thread.Sleep(500); // Pausa antes de reintentar
+                    }
+                    finally
+                    {
+                        stagingTexture?.Dispose();
+                        duplication?.Dispose();
+                        output1?.Dispose();
+                        output?.Dispose();
+                        context?.Dispose();
+                        device?.Dispose();
+                        adapter?.Dispose();
+                        factory?.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                if (mmcssHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        AvRevertMmThreadCharacteristics(mmcssHandle);
+                    }
+                    catch { }
                 }
             }
         }
@@ -446,6 +520,12 @@ namespace LanScreenShare.Media
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool GetCursorInfo(out CURSORINFO pci);
+
+        [DllImport("avrt.dll", SetLastError = true)]
+        private static extern IntPtr AvSetMmThreadCharacteristics(string taskName, ref int taskIndex);
+
+        [DllImport("avrt.dll", SetLastError = true)]
+        private static extern bool AvRevertMmThreadCharacteristics(IntPtr avrtHandle);
 
         #endregion
 

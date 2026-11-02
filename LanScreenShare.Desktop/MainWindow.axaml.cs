@@ -84,6 +84,8 @@ namespace LanScreenShare.Desktop
         private long _metricBytesCount;
         private int _lastFrameWidth;
         private int _lastFrameHeight;
+        private int _lastHostFps;
+        private int _lastHostFrameTimeMs;
         private readonly DispatcherTimer _metricsTimer;
 
         public ObservableCollection<DeviceInfo> Devices { get; } = new();
@@ -1631,6 +1633,12 @@ namespace LanScreenShare.Desktop
                         ? $"{(kbPerSec / 1024.0):F1} MB/s"
                         : $"{kbPerSec:F0} KB/s";
 
+                    string fpsInfo = _isHosting
+                        ? $"Host: {frames} FPS"
+                        : (_lastHostFps > 0
+                            ? $"Host: {_lastHostFps} FPS ({_lastHostFrameTimeMs} ms) • Red: {frames} FPS"
+                            : $"{frames} FPS");
+
                     string res = _lastFrameWidth > 0 ? $" • {_lastFrameWidth}x{_lastFrameHeight}" : "";
                     string engineTag = _isHosting
                         ? (_screenCaptureService is DxgiScreenCaptureService ? " • DXGI GPU" : " • GDI CPU")
@@ -1648,7 +1656,7 @@ namespace LanScreenShare.Desktop
                         ? " • Control Activo"
                         : "";
 
-                    statsText.Text = $"{frames} FPS • {transferRate}{res}{engineTag}{codecTag}{audioTag}{controlTag}";
+                    statsText.Text = $"{fpsInfo} • {transferRate}{res}{engineTag}{codecTag}{audioTag}{controlTag}";
 
                     if (_isPopoutActive && _popoutWindow != null)
                     {
@@ -1671,6 +1679,8 @@ namespace LanScreenShare.Desktop
             Interlocked.Exchange(ref _metricBytesCount, 0);
             _lastFrameWidth = 0;
             _lastFrameHeight = 0;
+            _lastHostFps = 0;
+            _lastHostFrameTimeMs = 0;
 
             var statsBadge = this.FindControl<Border>("StatsBadge");
             if (statsBadge != null)
@@ -1987,6 +1997,8 @@ namespace LanScreenShare.Desktop
             Interlocked.Add(ref _metricBytesCount, frame.Data.Length);
             _lastFrameWidth = frame.Width;
             _lastFrameHeight = frame.Height;
+            _lastHostFps = frame.HostFps;
+            _lastHostFrameTimeMs = frame.HostFrameTimeMs;
 
             try
             {

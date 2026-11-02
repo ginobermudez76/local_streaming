@@ -91,7 +91,16 @@ namespace LanScreenShare.Media
 
             _captureTask = Task.Run(async () =>
             {
+                try
+                {
+                    Thread.CurrentThread.Priority = ThreadPriority.Highest;
+                }
+                catch { }
+
                 var stopwatch = new Stopwatch();
+                var fpsStopwatch = Stopwatch.StartNew();
+                int capturedFramesCount = 0;
+                int currentHostFps = 0;
 
                 while (!token.IsCancellationRequested)
                 {
@@ -102,9 +111,24 @@ namespace LanScreenShare.Media
 
                     try
                     {
+                        var frameProcStopwatch = Stopwatch.StartNew();
                         var frame = CaptureDesktopFrame(_quality, ResolutionScale, _targetWidth, _targetHeight);
                         if (frame != null)
                         {
+                            frameProcStopwatch.Stop();
+                            int frameTimeMs = (int)frameProcStopwatch.ElapsedMilliseconds;
+
+                            capturedFramesCount++;
+                            if (fpsStopwatch.ElapsedMilliseconds >= 1000)
+                            {
+                                currentHostFps = (int)Math.Round(capturedFramesCount * 1000.0 / fpsStopwatch.ElapsedMilliseconds);
+                                capturedFramesCount = 0;
+                                fpsStopwatch.Restart();
+                            }
+
+                            frame.HostFps = currentHostFps > 0 ? currentHostFps : capturedFramesCount;
+                            frame.HostFrameTimeMs = frameTimeMs;
+
                             FrameCaptured?.Invoke(this, frame);
                         }
                     }
