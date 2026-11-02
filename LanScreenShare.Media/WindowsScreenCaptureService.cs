@@ -217,13 +217,23 @@ namespace LanScreenShare.Media
                     {
                         if (currentCodec == "h264")
                         {
-                            _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps);
-                            byte[] bgraBytes = new byte[finalWidth * finalHeight * 4];
-                            Marshal.Copy(bitmapToEncode.GetPixels(), bgraBytes, 0, bgraBytes.Length);
-                            encodedBytes = _h264Encoder.EncodeFrame(bgraBytes, finalWidth, finalHeight);
+                            try
+                            {
+                                _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps);
+                                byte[] bgraBytes = new byte[finalWidth * finalHeight * 4];
+                                Marshal.Copy(bitmapToEncode.GetPixels(), bgraBytes, 0, bgraBytes.Length);
+                                encodedBytes = _h264Encoder.EncodeFrame(bgraBytes, finalWidth, finalHeight);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[GDI] H.264 error, fallback automático a JPEG: {ex.Message}");
+                                encodedBytes = null;
+                            }
                         }
-                        else
+
+                        if (encodedBytes == null || encodedBytes.Length == 0)
                         {
+                            currentCodec = "jpeg";
                             using var image = SKImage.FromBitmap(bitmapToEncode);
                             if (image != null)
                             {

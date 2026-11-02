@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
@@ -16,8 +17,15 @@ namespace LanScreenShare.Network.Streaming
         private const uint FrameHeaderMagicH264 = 0x4C535332; // "LSS2"
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
-        private readonly ConcurrentDictionary<string, NetworkStream> _clients = new();
+        private readonly ConcurrentDictionary<string, ClientContext> _clients = new();
         private bool _disposed;
+
+        private class ClientContext
+        {
+            public TcpClient Client { get; set; } = null!;
+            public NetworkStream Stream { get; set; } = null!;
+            public Channel<CapturedFrame> Channel { get; set; } = null!;
+        }
 
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
@@ -51,12 +59,25 @@ namespace LanScreenShare.Network.Streaming
                         var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
                         var stream = client.GetStream();
 
-                        _clients[clientId] = stream;
+                        // Cola acotada de 1 frame: si el cliente no puede descargar a tiempo, se descarta el frame viejo
+                        var channel = Channel.CreateBounded<CapturedFrame>(new BoundedChannelOptions(1)
+                        {
+                            FullMode = BoundedChannelFullMode.DropOldest
+                        });
+
+                        var ctx = new ClientContext
+                        {
+                            Client = client,
+                            Stream = stream,
+                            Channel = channel
+                        };
+
+                        _clients[clientId] = ctx;
                         Console.WriteLine($"[StreamServer] Cliente conectado: {clientId}");
                         ClientConnected?.Invoke(this, clientId);
 
-                        // Monitorear desconexión del cliente en segundo plano
-                        _ = MonitorClientLifecycleAsync(clientId, client, stream, token);
+                        // Iniciar bomba de envío secuencial dedicada para este cliente
+                        _ = PumpClientFramesAsync(clientId, ctx, token);
                     }
                     catch (OperationCanceledException)
                     {
@@ -76,85 +97,62 @@ namespace LanScreenShare.Network.Streaming
             return Task.CompletedTask;
         }
 
-        private async Task MonitorClientLifecycleAsync(string clientId, TcpClient client, NetworkStream stream, CancellationToken token)
+        private async Task PumpClientFramesAsync(string clientId, ClientContext ctx, CancellationToken token)
         {
-            var buffer = new byte[1];
+            byte[] header = new byte[24];
             try
             {
-                while (!token.IsCancellationRequested && client.Connected)
+                while (await ctx.Channel.Reader.WaitToReadAsync(token))
                 {
-                    // Si el cliente cierra el socket, ReadAsync retornará 0
-                    int read = await stream.ReadAsync(buffer, 0, 1, token);
-                    if (read == 0)
-                        break;
+                    while (ctx.Channel.Reader.TryRead(out var frame))
+                    {
+                        using (var ms = new MemoryStream(header))
+                        using (var writer = new BinaryWriter(ms))
+                        {
+                            uint magic = frame.Format == "h264" ? FrameHeaderMagicH264 : FrameHeaderMagicJpeg;
+                            writer.Write(magic);
+                            writer.Write(frame.Data.Length);
+                            writer.Write(frame.Width);
+                            writer.Write(frame.Height);
+                            writer.Write(frame.Timestamp);
+                        }
+
+                        await ctx.Stream.WriteAsync(header, 0, header.Length, token);
+                        await ctx.Stream.WriteAsync(frame.Data, 0, frame.Data.Length, token);
+                        await ctx.Stream.FlushAsync(token);
+                    }
                 }
             }
             catch
             {
-                // Conexión finalizada o error de lectura
+                // Desconexión normal
             }
             finally
             {
-                RemoveClient(clientId, client);
+                RemoveClient(clientId);
             }
         }
 
-        public async Task BroadcastFrameAsync(CapturedFrame frame)
+        public Task BroadcastFrameAsync(CapturedFrame frame)
         {
             if (_clients.IsEmpty || frame.Data.Length == 0)
-                return;
+                return Task.CompletedTask;
 
-            // Formato de encabezado:
-            // 4 bytes: Magic (0x4C535331)
-            // 4 bytes: Data length
-            // 4 bytes: Width
-            // 4 bytes: Height
-            // 8 bytes: Timestamp
-            // Total header = 24 bytes
-            byte[] header = new byte[24];
-            using (var ms = new MemoryStream(header))
-            using (var writer = new BinaryWriter(ms))
-            {
-                uint magic = frame.Format == "h264" ? FrameHeaderMagicH264 : FrameHeaderMagicJpeg;
-                writer.Write(magic);
-                writer.Write(frame.Data.Length);
-                writer.Write(frame.Width);
-                writer.Write(frame.Height);
-                writer.Write(frame.Timestamp);
-            }
-
-            var sendTasks = new System.Collections.Generic.List<Task>();
             foreach (var kvp in _clients)
             {
-                var clientId = kvp.Key;
-                var stream = kvp.Value;
-
-                sendTasks.Add(Task.Run(async () =>
-                {
-                    try
-                    {
-                        await stream.WriteAsync(header, 0, header.Length);
-                        await stream.WriteAsync(frame.Data, 0, frame.Data.Length);
-                        await stream.FlushAsync();
-                    }
-                    catch (Exception)
-                    {
-                        // Si falla la escritura, desconectar cliente
-                        _clients.TryRemove(clientId, out _);
-                        ClientDisconnected?.Invoke(this, clientId);
-                    }
-                }));
+                kvp.Value.Channel.Writer.TryWrite(frame);
             }
 
-            await Task.WhenAll(sendTasks);
+            return Task.CompletedTask;
         }
 
-        private void RemoveClient(string clientId, TcpClient client)
+        private void RemoveClient(string clientId)
         {
-            if (_clients.TryRemove(clientId, out var stream))
+            if (_clients.TryRemove(clientId, out var ctx))
             {
-                try { stream.Dispose(); } catch { }
-                try { client.Close(); } catch { }
+                try { ctx.Channel.Writer.Complete(); } catch { }
+                try { ctx.Stream.Dispose(); } catch { }
+                try { ctx.Client.Close(); } catch { }
                 Console.WriteLine($"[StreamServer] Cliente desconectado: {clientId}");
                 ClientDisconnected?.Invoke(this, clientId);
             }
@@ -168,7 +166,9 @@ namespace LanScreenShare.Network.Streaming
 
             foreach (var kvp in _clients)
             {
-                try { kvp.Value.Dispose(); } catch { }
+                try { kvp.Value.Channel.Writer.Complete(); } catch { }
+                try { kvp.Value.Stream.Dispose(); } catch { }
+                try { kvp.Value.Client.Close(); } catch { }
             }
             _clients.Clear();
 

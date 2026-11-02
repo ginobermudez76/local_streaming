@@ -76,8 +76,8 @@
                                       HorizontalAlignment="Stretch"
                                       FontSize="12"
                                       SelectedIndex="0">
+                                <ComboBoxItem Content="JPEG (Ultra Baja Latencia / Estable)" Tag="jpeg"/>
                                 <ComboBoxItem Content="H.264 / AVC (Aceleración GPU)" Tag="h264"/>
-                                <ComboBoxItem Content="JPEG (Compatibilidad Universal)" Tag="jpeg"/>
                             </ComboBox>
                         </StackPanel>
 

@@ -718,7 +718,7 @@ namespace LanScreenShare.Desktop
             {
                 return tag;
             }
-            return "h264";
+            return "jpeg";
         }
 
         private int GetSelectedFps()
