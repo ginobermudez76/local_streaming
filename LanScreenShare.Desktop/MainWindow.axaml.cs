@@ -60,6 +60,11 @@ namespace LanScreenShare.Desktop
         private readonly DispatcherTimer _headerAutoHideTimer;
         private bool _isMouseOverHeaderBar;
 
+        // Ventana emergente (Pop-out) y modo de ajuste de pantalla
+        private StreamPopoutWindow? _popoutWindow;
+        private bool _isPopoutActive;
+        private Stretch _currentStretchMode = Stretch.Uniform;
+
         // Búsqueda de dispositivos
         private DispatcherTimer? _searchTimer;
 
@@ -325,6 +330,24 @@ namespace LanScreenShare.Desktop
                 fullscreenBtn.Click += (s, e) => ToggleFullscreen();
             }
 
+            var stretchBtn = this.FindControl<Button>("StretchModeButton");
+            if (stretchBtn != null)
+            {
+                stretchBtn.Click += (s, e) => ToggleStretchMode();
+            }
+
+            var popoutBtn = this.FindControl<Button>("PopoutWindowButton");
+            if (popoutBtn != null)
+            {
+                popoutBtn.Click += (s, e) => OpenPopoutWindow();
+            }
+
+            var reattachBtn = this.FindControl<Button>("ReattachStreamButton");
+            if (reattachBtn != null)
+            {
+                reattachBtn.Click += (s, e) => ClosePopoutWindow();
+            }
+
             var exitFloatBtn = this.FindControl<Button>("ExitFullscreenFloatButton");
             if (exitFloatBtn != null)
             {
@@ -493,6 +516,15 @@ namespace LanScreenShare.Desktop
             if (controlBounds.Width <= 0 || controlBounds.Height <= 0)
                 return false;
 
+            var pos = e.GetPosition(screenImage);
+
+            if (screenImage.Stretch == Stretch.Fill)
+            {
+                normX = (float)Math.Clamp(pos.X / controlBounds.Width, 0.0, 1.0);
+                normY = (float)Math.Clamp(pos.Y / controlBounds.Height, 0.0, 1.0);
+                return true;
+            }
+
             double scaleX = controlBounds.Width / imageSize.Width;
             double scaleY = controlBounds.Height / imageSize.Height;
             double scale = Math.Min(scaleX, scaleY);
@@ -502,8 +534,6 @@ namespace LanScreenShare.Desktop
 
             double offsetX = (controlBounds.Width - renderedW) / 2.0;
             double offsetY = (controlBounds.Height - renderedH) / 2.0;
-
-            var pos = e.GetPosition(screenImage);
 
             if (pos.X < offsetX || pos.X > offsetX + renderedW ||
                 pos.Y < offsetY || pos.Y > offsetY + renderedH)
@@ -654,6 +684,160 @@ namespace LanScreenShare.Desktop
                     Grid.SetRow(viewportGrid, 1);
                     Grid.SetRowSpan(viewportGrid, 1);
                 }
+            }
+        }
+
+        private void ToggleStretchMode()
+        {
+            _currentStretchMode = _currentStretchMode == Stretch.Uniform ? Stretch.Fill : Stretch.Uniform;
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            if (screenImage != null)
+            {
+                screenImage.Stretch = _currentStretchMode;
+            }
+
+            var stretchBtnText = this.FindControl<TextBlock>("StretchModeButtonText");
+            if (stretchBtnText != null)
+            {
+                stretchBtnText.Text = _currentStretchMode == Stretch.Uniform ? "Ajustar" : "Llenar";
+            }
+
+            if (_popoutWindow != null)
+            {
+                _popoutWindow.SetStretchMode(_currentStretchMode);
+            }
+        }
+
+        private void OpenPopoutWindow()
+        {
+            if (_isPopoutActive) return;
+
+            if (_isFullscreen)
+            {
+                SetFullscreen(false);
+            }
+
+            _isPopoutActive = true;
+
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            var popoutPanel = this.FindControl<StackPanel>("PopoutActivePanel");
+            if (screenImage != null) screenImage.IsVisible = false;
+            if (popoutPanel != null) popoutPanel.IsVisible = true;
+
+            _popoutWindow = new StreamPopoutWindow();
+            _popoutWindow.Title = $"Visor Remoto - {_currentConnectedDeviceName ?? "LanScreenShare"}";
+            _popoutWindow.SetRemoteControlAllowed(_currentDeviceAllowsRemoteControl);
+            _popoutWindow.SetRemoteControlState(_remoteControlEnabled);
+            _popoutWindow.SetGameModeState(_isGameMode);
+            _popoutWindow.SetMuteState(_audioPlayerService?.IsMuted ?? false);
+            _popoutWindow.SetStretchMode(_currentStretchMode);
+
+            if (screenImage?.Source != null)
+            {
+                _popoutWindow.UpdateFrame(screenImage.Source);
+            }
+
+            _popoutWindow.ReattachRequested += ClosePopoutWindow;
+            _popoutWindow.DisconnectRequested += () => DisconnectButton_Click(null, null);
+
+            _popoutWindow.RemoteControlToggled += async (enabled) =>
+            {
+                var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
+                if (enabled)
+                {
+                    bool connected = await EnsureControlConnectedAsync();
+                    if (!connected)
+                    {
+                        _popoutWindow?.SetRemoteControlState(false);
+                        if (remoteControlBtn != null) remoteControlBtn.IsChecked = false;
+                        _remoteControlEnabled = false;
+                        return;
+                    }
+                    _remoteControlEnabled = true;
+                    if (remoteControlBtn != null)
+                    {
+                        remoteControlBtn.IsChecked = true;
+                        remoteControlBtn.Background = new SolidColorBrush(Color.Parse("#2563EB"));
+                    }
+                    _popoutWindow?.SetRemoteControlState(true);
+                }
+                else
+                {
+                    _remoteControlEnabled = false;
+                    if (remoteControlBtn != null)
+                    {
+                        remoteControlBtn.IsChecked = false;
+                        remoteControlBtn.Background = new SolidColorBrush(Color.Parse("#27272A"));
+                    }
+                    if (_isGameMode)
+                    {
+                        _isGameMode = false;
+                        UpdateGameModeUI();
+                        _popoutWindow?.SetGameModeState(false);
+                    }
+                    _popoutWindow?.SetRemoteControlState(false);
+                }
+            };
+
+            _popoutWindow.GameModeToggled += () =>
+            {
+                ToggleGameMode();
+                _popoutWindow?.SetGameModeState(_isGameMode);
+            };
+
+            _popoutWindow.MuteToggled += () =>
+            {
+                if (_audioPlayerService != null)
+                {
+                    _audioPlayerService.IsMuted = !_audioPlayerService.IsMuted;
+                    var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
+                    if (muteIcon != null)
+                    {
+                        muteIcon.Data = (this.FindResource(_audioPlayerService.IsMuted ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
+                    }
+                    _popoutWindow?.SetMuteState(_audioPlayerService.IsMuted);
+                }
+            };
+
+            _popoutWindow.StretchModeChanged += (stretch) =>
+            {
+                _currentStretchMode = stretch;
+                if (screenImage != null) screenImage.Stretch = stretch;
+                var stretchBtnText = this.FindControl<TextBlock>("StretchModeButtonText");
+                if (stretchBtnText != null) stretchBtnText.Text = stretch == Stretch.Uniform ? "Ajustar" : "Llenar";
+            };
+
+            _popoutWindow.RemoteInputSent += async (input) =>
+            {
+                if (_controlClient.IsConnected && _remoteControlEnabled)
+                {
+                    await _controlClient.SendInputAsync(input);
+                }
+            };
+
+            _popoutWindow.Show();
+        }
+
+        private void ClosePopoutWindow()
+        {
+            if (!_isPopoutActive) return;
+
+            _isPopoutActive = false;
+
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            var popoutPanel = this.FindControl<StackPanel>("PopoutActivePanel");
+            if (screenImage != null) screenImage.IsVisible = true;
+            if (popoutPanel != null) popoutPanel.IsVisible = false;
+
+            if (_popoutWindow != null)
+            {
+                var win = _popoutWindow;
+                _popoutWindow = null;
+                try
+                {
+                    win.Close();
+                }
+                catch { }
             }
         }
 
@@ -1399,6 +1583,11 @@ namespace LanScreenShare.Desktop
                         : "";
 
                     statsText.Text = $"{frames} FPS • {transferRate}{res}{engineTag}{codecTag}{audioTag}{controlTag}";
+
+                    if (_isPopoutActive && _popoutWindow != null)
+                    {
+                        _popoutWindow.UpdateMetrics(statsText.Text);
+                    }
                 }
             }
             else
@@ -1678,6 +1867,18 @@ namespace LanScreenShare.Desktop
                     fullscreenBtn.IsVisible = true;
                 }
 
+                var stretchBtn = this.FindControl<Button>("StretchModeButton");
+                if (stretchBtn != null)
+                {
+                    stretchBtn.IsVisible = true;
+                }
+
+                var popoutBtn = this.FindControl<Button>("PopoutWindowButton");
+                if (popoutBtn != null)
+                {
+                    popoutBtn.IsVisible = true;
+                }
+
                 var disconnectBtn = this.FindControl<Button>("DisconnectButton");
                 if (disconnectBtn != null)
                 {
@@ -1763,6 +1964,11 @@ namespace LanScreenShare.Desktop
                                     screenImage.InvalidateVisual();
                                 }
 
+                                if (_isPopoutActive && _popoutWindow != null && _viewerWriteableBitmap != null)
+                                {
+                                    _popoutWindow.UpdateFrame(_viewerWriteableBitmap);
+                                }
+
                                 var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
                                 if (placeholder != null && placeholder.IsVisible)
                                 {
@@ -1789,6 +1995,11 @@ namespace LanScreenShare.Desktop
                     if (screenImage != null)
                     {
                         screenImage.Source = bitmap;
+                    }
+
+                    if (_isPopoutActive && _popoutWindow != null)
+                    {
+                        _popoutWindow.UpdateFrame(bitmap);
                     }
 
                     var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
@@ -1840,8 +2051,9 @@ namespace LanScreenShare.Desktop
             });
         }
 
-        private async void DisconnectButton_Click(object? sender, RoutedEventArgs e)
+        private async void DisconnectButton_Click(object? sender, RoutedEventArgs? e = null)
         {
+            ClosePopoutWindow();
             SetFullscreen(false);
             StopDeviceSearch();
             _currentDeviceAllowsRemoteControl = false;
@@ -1880,6 +2092,20 @@ namespace LanScreenShare.Desktop
             {
                 fullscreenBtn.IsVisible = false;
             }
+
+            var stretchBtn = this.FindControl<Button>("StretchModeButton");
+            if (stretchBtn != null)
+            {
+                stretchBtn.IsVisible = false;
+            }
+
+            var popoutBtn = this.FindControl<Button>("PopoutWindowButton");
+            if (popoutBtn != null)
+            {
+                popoutBtn.IsVisible = false;
+            }
+
+            ClosePopoutWindow();
 
             var disconnectBtn = this.FindControl<Button>("DisconnectButton");
             if (disconnectBtn != null)
@@ -1970,6 +2196,7 @@ namespace LanScreenShare.Desktop
 
         private void MainWindow_Closing(object? sender, WindowClosingEventArgs e)
         {
+            ClosePopoutWindow();
             SetFullscreen(false);
             StopDeviceSearch();
             _headerAutoHideTimer.Stop();
