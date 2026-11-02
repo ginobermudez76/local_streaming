@@ -87,12 +87,16 @@ namespace LanScreenShare.Desktop
         private int _lastHostFps;
         private int _lastHostFrameTimeMs;
         private readonly DispatcherTimer _metricsTimer;
+        private AppSettings _appSettings = new();
+        private bool _isInitializingSettings = true;
 
         public ObservableCollection<DeviceInfo> Devices { get; } = new();
 
         public MainWindow()
         {
             InitializeComponent();
+
+            _appSettings = SettingsService.Load();
 
             if (OperatingSystem.IsWindows())
             {
@@ -109,8 +113,17 @@ namespace LanScreenShare.Desktop
             _discoveryService = new DiscoveryService();
             _discoveryService.OnDeviceDiscovered += DiscoveryService_OnDeviceDiscovered;
 
-            // Iniciar por defecto con el motor DXGI (acelerado por GPU)
-            _screenCaptureService = new DxgiScreenCaptureService();
+            // Iniciar con el motor guardado en configuración (DXGI o GDI)
+            if (OperatingSystem.IsWindows())
+            {
+                _screenCaptureService = _appSettings.Engine == "gdi"
+                    ? new WindowsScreenCaptureService()
+                    : new DxgiScreenCaptureService();
+            }
+            else
+            {
+                _screenCaptureService = new WindowsScreenCaptureService();
+            }
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
 
             _streamServer = new TcpStreamServer();
@@ -156,7 +169,8 @@ namespace LanScreenShare.Desktop
 
             if (allowCb != null)
             {
-                _allowRemoteControl = allowCb.IsChecked == true;
+                allowCb.IsChecked = _appSettings.AllowRemoteControl;
+                _allowRemoteControl = _appSettings.AllowRemoteControl;
                 if (controlAccessPanel != null)
                 {
                     controlAccessPanel.IsVisible = _allowRemoteControl;
@@ -185,6 +199,7 @@ namespace LanScreenShare.Desktop
                         }
                     }
                     Console.WriteLine($"[ControlHost] Permiso de control remoto: {_allowRemoteControl}");
+                    SaveCurrentSettings();
                 };
             }
 
@@ -229,6 +244,7 @@ namespace LanScreenShare.Desktop
             var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
             if (volumeSlider != null)
             {
+                volumeSlider.Value = Math.Clamp((int)Math.Round(_appSettings.AudioVolume * 100), 0, 100);
                 volumeSlider.PropertyChanged += (s, e) =>
                 {
                     if (e.Property.Name == nameof(Slider.Value))
@@ -236,6 +252,13 @@ namespace LanScreenShare.Desktop
                         SetAudioVolume((float)Math.Clamp(volumeSlider.Value / 100.0, 0.0, 1.0));
                     }
                 };
+            }
+
+            if (_audioPlayerService != null)
+            {
+                _audioPlayerService.Volume = _appSettings.AudioVolume;
+                _audioPlayerService.IsMuted = _appSettings.AudioMuted;
+                UpdateAudioUI();
             }
 
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
@@ -333,10 +356,21 @@ namespace LanScreenShare.Desktop
                 fullscreenBtn.Click += (s, e) => ToggleFullscreen();
             }
 
+            _currentStretchMode = _appSettings.StretchMode == "Fill" ? Stretch.Fill : Stretch.Uniform;
             var stretchBtn = this.FindControl<Button>("StretchModeButton");
             if (stretchBtn != null)
             {
                 stretchBtn.Click += (s, e) => ToggleStretchMode();
+            }
+            var initialScreenImage = this.FindControl<Image>("ScreenImage");
+            if (initialScreenImage != null)
+            {
+                initialScreenImage.Stretch = _currentStretchMode;
+            }
+            var initialStretchBtnText = this.FindControl<TextBlock>("StretchModeButtonText");
+            if (initialStretchBtnText != null)
+            {
+                initialStretchBtnText.Text = _currentStretchMode == Stretch.Uniform ? "Ajustar" : "Llenar";
             }
 
             var popoutBtn = this.FindControl<Button>("PopoutWindowButton");
@@ -361,22 +395,40 @@ namespace LanScreenShare.Desktop
             var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
             if (streamAccessCombo != null)
             {
+                for (int i = 0; i < streamAccessCombo.Items.Count; i++)
+                {
+                    if (streamAccessCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.StreamAccessMode)
+                    {
+                        streamAccessCombo.SelectedIndex = i;
+                        break;
+                    }
+                }
                 _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
                 streamAccessCombo.SelectionChanged += (s, e) =>
                 {
                     _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
                     Console.WriteLine($"[AccessHost] Aprobación de stream requerida: {_requireStreamApproval}");
+                    SaveCurrentSettings();
                 };
             }
 
             var controlAccessCombo = this.FindControl<ComboBox>("ControlAccessModeComboBox");
             if (controlAccessCombo != null)
             {
+                for (int i = 0; i < controlAccessCombo.Items.Count; i++)
+                {
+                    if (controlAccessCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.ControlAccessMode)
+                    {
+                        controlAccessCombo.SelectedIndex = i;
+                        break;
+                    }
+                }
                 _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
                 controlAccessCombo.SelectionChanged += (s, e) =>
                 {
                     _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
                     Console.WriteLine($"[AccessHost] Modo de control remoto: {_remoteControlMode}");
+                    SaveCurrentSettings();
                 };
             }
 
@@ -438,29 +490,67 @@ namespace LanScreenShare.Desktop
             var engineCombo = this.FindControl<ComboBox>("EngineComboBox");
             if (engineCombo != null)
             {
-                engineCombo.SelectionChanged += (s, e) => OnEngineChanged();
+                for (int i = 0; i < engineCombo.Items.Count; i++)
+                {
+                    if (engineCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.Engine)
+                    {
+                        engineCombo.SelectedIndex = i;
+                        break;
+                    }
+                }
+                engineCombo.SelectionChanged += (s, e) =>
+                {
+                    OnEngineChanged();
+                    SaveCurrentSettings();
+                };
             }
 
             var codecCombo = this.FindControl<ComboBox>("CodecComboBox");
             if (codecCombo != null)
             {
-                codecCombo.SelectionChanged += (s, e) => OnSettingChanged();
+                for (int i = 0; i < codecCombo.Items.Count; i++)
+                {
+                    if (codecCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.Codec)
+                    {
+                        codecCombo.SelectedIndex = i;
+                        break;
+                    }
+                }
+                codecCombo.SelectionChanged += (s, e) =>
+                {
+                    OnSettingChanged();
+                    SaveCurrentSettings();
+                };
             }
 
             var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
             if (fpsCombo != null)
             {
-                fpsCombo.SelectionChanged += (s, e) => OnSettingChanged();
+                for (int i = 0; i < fpsCombo.Items.Count; i++)
+                {
+                    if (fpsCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.Fps.ToString())
+                    {
+                        fpsCombo.SelectedIndex = i;
+                        break;
+                    }
+                }
+                fpsCombo.SelectionChanged += (s, e) =>
+                {
+                    OnSettingChanged();
+                    SaveCurrentSettings();
+                };
             }
 
             var qualitySlider = this.FindControl<Slider>("QualitySlider");
             if (qualitySlider != null)
             {
+                qualitySlider.Value = Math.Clamp(_appSettings.Quality, (int)qualitySlider.Minimum, (int)qualitySlider.Maximum);
                 qualitySlider.PropertyChanged += (s, e) =>
                 {
                     if (e.Property.Name == nameof(Slider.Value))
                     {
                         OnSettingChanged();
+                        SaveCurrentSettings();
                     }
                 };
             }
@@ -470,7 +560,18 @@ namespace LanScreenShare.Desktop
             var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
             if (scaleCombo != null)
             {
-                scaleCombo.SelectionChanged += (s, e) => OnSettingChanged();
+                scaleCombo.SelectionChanged += (s, e) =>
+                {
+                    OnSettingChanged();
+                    SaveCurrentSettings();
+                };
+            }
+
+            var audioShareCb = this.FindControl<CheckBox>("AudioShareCheckBox");
+            if (audioShareCb != null)
+            {
+                audioShareCb.IsChecked = _appSettings.ShareAudio;
+                audioShareCb.IsCheckedChanged += (s, e) => SaveCurrentSettings();
             }
 
             // Temporizador de métricas (1 segundo)
@@ -506,6 +607,9 @@ namespace LanScreenShare.Desktop
             }
 
             this.Closing += MainWindow_Closing;
+
+            _isInitializingSettings = false;
+            OnSettingChanged();
         }
 
         #region Remote Control Client Interaction
@@ -717,6 +821,7 @@ namespace LanScreenShare.Desktop
             {
                 _popoutWindow.SetStretchMode(_currentStretchMode);
             }
+            SaveCurrentSettings();
         }
 
         private void ToggleMute()
@@ -729,6 +834,7 @@ namespace LanScreenShare.Desktop
                     _audioPlayerService.Volume = 0.5f;
                 }
                 UpdateAudioUI();
+                SaveCurrentSettings();
             }
         }
 
@@ -746,6 +852,7 @@ namespace LanScreenShare.Desktop
                     _audioPlayerService.IsMuted = false;
                 }
                 UpdateAudioUI();
+                SaveCurrentSettings();
             }
         }
 
@@ -873,6 +980,7 @@ namespace LanScreenShare.Desktop
                 if (screenImage != null) screenImage.Stretch = stretch;
                 var stretchBtnText = this.FindControl<TextBlock>("StretchModeButtonText");
                 if (stretchBtnText != null) stretchBtnText.Text = stretch == Stretch.Uniform ? "Ajustar" : "Llenar";
+                SaveCurrentSettings();
             };
 
             _popoutWindow.RemoteInputSent += async (input) =>
@@ -1515,7 +1623,20 @@ namespace LanScreenShare.Desktop
             }
 
             scaleCombo.ItemsSource = items;
-            scaleCombo.SelectedIndex = 0;
+
+            int selectedIndex = 0;
+            if (!string.IsNullOrEmpty(_appSettings.ResolutionTag))
+            {
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (items[i].Tag as string == _appSettings.ResolutionTag)
+                    {
+                        selectedIndex = i;
+                        break;
+                    }
+                }
+            }
+            scaleCombo.SelectedIndex = selectedIndex;
         }
 
         private void GetSelectedResolution(out int targetW, out int targetH, out double scale)
@@ -1613,6 +1734,51 @@ namespace LanScreenShare.Desktop
             }
 
             _screenCaptureService.UpdateSettings(fps, quality, scale, codec, targetW, targetH);
+        }
+
+        private void SaveCurrentSettings()
+        {
+            if (_isInitializingSettings)
+                return;
+
+            try
+            {
+                _appSettings.Engine = GetSelectedEngine();
+                _appSettings.Codec = GetSelectedCodec();
+                _appSettings.Fps = GetSelectedFps();
+                _appSettings.Quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
+
+                var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
+                if (scaleCombo?.SelectedItem is ComboBoxItem scaleItem && scaleItem.Tag is string tag)
+                {
+                    _appSettings.ResolutionTag = tag;
+                }
+
+                _appSettings.ShareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
+                _appSettings.AllowRemoteControl = this.FindControl<CheckBox>("AllowRemoteControlCheckBox")?.IsChecked ?? true;
+
+                var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
+                if (streamAccessCombo?.SelectedItem is ComboBoxItem streamItem && streamItem.Tag is string streamTag)
+                {
+                    _appSettings.StreamAccessMode = streamTag;
+                }
+
+                var controlAccessCombo = this.FindControl<ComboBox>("ControlAccessModeComboBox");
+                if (controlAccessCombo?.SelectedItem is ComboBoxItem controlItem && controlItem.Tag is string controlTag)
+                {
+                    _appSettings.ControlAccessMode = controlTag;
+                }
+
+                _appSettings.AudioVolume = _audioPlayerService?.Volume ?? 1.0f;
+                _appSettings.AudioMuted = _audioPlayerService?.IsMuted ?? false;
+                _appSettings.StretchMode = _currentStretchMode == Stretch.Fill ? "Fill" : "Uniform";
+
+                SettingsService.Save(_appSettings);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Settings] Error al guardar configuración actual: {ex.Message}");
+            }
         }
 
         private void MetricsTimer_Tick(object? sender, EventArgs e)
@@ -2274,6 +2440,7 @@ namespace LanScreenShare.Desktop
 
         private void MainWindow_Closing(object? sender, WindowClosingEventArgs e)
         {
+            SaveCurrentSettings();
             ClosePopoutWindow();
             SetFullscreen(false);
             StopDeviceSearch();
