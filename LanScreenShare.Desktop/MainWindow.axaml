@@ -238,9 +238,10 @@
     </Border>
 
         <!-- Main Area (Stream Preview) -->
-        <Grid Grid.Column="1" RowDefinitions="Auto,*">
+        <Grid Grid.Column="1" x:Name="MainAreaGrid" RowDefinitions="Auto,*">
             <!-- Stream Header Bar -->
-            <Border Grid.Row="0"
+            <Border x:Name="StreamHeaderBar"
+                    Grid.Row="0"
                     Background="#1F1F23"
                     BorderBrush="#2D2D35"
                     BorderThickness="0,0,0,1"
@@ -333,7 +334,7 @@
             </Border>
 
             <!-- Stream Viewport -->
-            <Grid Grid.Row="1" Background="#09090B">
+            <Grid x:Name="StreamViewportGrid" Grid.Row="1" Background="#09090B">
                 <!-- Video Image -->
                 <Image x:Name="ScreenImage"
                        Stretch="Uniform"

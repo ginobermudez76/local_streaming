@@ -54,9 +54,11 @@ namespace LanScreenShare.Desktop
         private string? _currentConnectedDeviceIp;
         private bool _currentDeviceAllowsRemoteControl;
 
-        // Pantalla completa
+        // Pantalla completa y barra superior auto-ocultable
         private bool _isFullscreen;
         private WindowState _previousWindowState = WindowState.Normal;
+        private readonly DispatcherTimer _headerAutoHideTimer;
+        private bool _isMouseOverHeaderBar;
 
         // Búsqueda de dispositivos
         private DispatcherTimer? _searchTimer;
@@ -277,7 +279,46 @@ namespace LanScreenShare.Desktop
 
             this.KeyDown += MainWindow_KeyDown;
 
-            // Controles de Pantalla Completa
+            // Controles de Pantalla Completa y Barra Superior Auto-Ocultable
+            _headerAutoHideTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(2.5)
+            };
+            _headerAutoHideTimer.Tick += (s, e) =>
+            {
+                if (_isFullscreen && !_isMouseOverHeaderBar)
+                {
+                    var header = this.FindControl<Border>("StreamHeaderBar");
+                    if (header != null)
+                    {
+                        header.IsVisible = false;
+                    }
+                    _headerAutoHideTimer.Stop();
+                }
+            };
+
+            var headerBar = this.FindControl<Border>("StreamHeaderBar");
+            if (headerBar != null)
+            {
+                headerBar.PointerEntered += (s, e) =>
+                {
+                    _isMouseOverHeaderBar = true;
+                    _headerAutoHideTimer.Stop();
+                };
+
+                headerBar.PointerExited += (s, e) =>
+                {
+                    _isMouseOverHeaderBar = false;
+                    if (_isFullscreen)
+                    {
+                        _headerAutoHideTimer.Stop();
+                        _headerAutoHideTimer.Start();
+                    }
+                };
+            }
+
+            this.AddHandler(InputElement.PointerMovedEvent, MainWindow_GlobalPointerMoved, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+
             var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
             if (fullscreenBtn != null)
             {
@@ -501,6 +542,46 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void MainWindow_GlobalPointerMoved(object? sender, PointerEventArgs e)
+        {
+            if (!_isFullscreen || _isGameMode)
+                return;
+
+            var headerBar = this.FindControl<Border>("StreamHeaderBar");
+            if (headerBar == null)
+                return;
+
+            var pos = e.GetPosition(this);
+
+            // Si el cursor se acerca al borde superior de la pantalla (primeros 20px)
+            if (pos.Y <= 20)
+            {
+                if (!headerBar.IsVisible)
+                {
+                    headerBar.IsVisible = true;
+                }
+                _headerAutoHideTimer.Stop();
+                _headerAutoHideTimer.Start();
+            }
+            else if (headerBar.IsVisible)
+            {
+                double headerHeight = headerBar.Bounds.Height > 0 ? headerBar.Bounds.Height : 50;
+
+                if (pos.Y <= headerHeight)
+                {
+                    // Mantener visible mientras el cursor esté interactuando con la barra
+                    _headerAutoHideTimer.Stop();
+                    _headerAutoHideTimer.Start();
+                }
+                else if (pos.Y > headerHeight + 25)
+                {
+                    // Si el cursor baja a la zona de transmisión, ocultar la barra
+                    headerBar.IsVisible = false;
+                    _headerAutoHideTimer.Stop();
+                }
+            }
+        }
+
         private void ToggleFullscreen()
         {
             SetFullscreen(!_isFullscreen);
@@ -517,6 +598,10 @@ namespace LanScreenShare.Desktop
             var fullscreenIcon = this.FindControl<PathIcon>("FullscreenButtonIcon");
             var fullscreenText = this.FindControl<TextBlock>("FullscreenButtonText");
 
+            var mainAreaGrid = this.FindControl<Grid>("MainAreaGrid");
+            var headerBar = this.FindControl<Border>("StreamHeaderBar");
+            var viewportGrid = this.FindControl<Grid>("StreamViewportGrid");
+
             if (_isFullscreen)
             {
                 _previousWindowState = this.WindowState;
@@ -526,7 +611,23 @@ namespace LanScreenShare.Desktop
                 if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("0,*");
                 if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreenExit") as StreamGeometry)!;
                 if (fullscreenText != null) fullscreenText.Text = "Salir";
-                if (floatExitBtn != null) floatExitBtn.IsVisible = true;
+                if (floatExitBtn != null) floatExitBtn.IsVisible = false;
+
+                // El viewport de transmisión ocupa el 100% de la pantalla sin franjas ni barras
+                if (mainAreaGrid != null) mainAreaGrid.RowDefinitions = new RowDefinitions("*");
+                if (viewportGrid != null)
+                {
+                    Grid.SetRow(viewportGrid, 0);
+                    Grid.SetRowSpan(viewportGrid, 1);
+                }
+                if (headerBar != null)
+                {
+                    Grid.SetRow(headerBar, 0);
+                    headerBar.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top;
+                    headerBar.ZIndex = 100;
+                    headerBar.Background = new SolidColorBrush(Color.Parse("#F218181B"));
+                    headerBar.IsVisible = false; // Permanece oculta hasta que el cursor se acerca arriba
+                }
             }
             else
             {
@@ -537,6 +638,22 @@ namespace LanScreenShare.Desktop
                 if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreen") as StreamGeometry)!;
                 if (fullscreenText != null) fullscreenText.Text = "Pantalla Completa";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = false;
+
+                // Restaurar la barra fija en la parte superior y el viewport abajo
+                if (mainAreaGrid != null) mainAreaGrid.RowDefinitions = new RowDefinitions("Auto,*");
+                if (headerBar != null)
+                {
+                    Grid.SetRow(headerBar, 0);
+                    headerBar.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
+                    headerBar.ZIndex = 0;
+                    headerBar.Background = new SolidColorBrush(Color.Parse("#1F1F23"));
+                    headerBar.IsVisible = true;
+                }
+                if (viewportGrid != null)
+                {
+                    Grid.SetRow(viewportGrid, 1);
+                    Grid.SetRowSpan(viewportGrid, 1);
+                }
             }
         }
 
@@ -747,9 +864,22 @@ namespace LanScreenShare.Desktop
             return new Avalonia.PixelPoint(winCenterX, winCenterY);
         }
 
+        private bool IsPointerOverFullscreenHeader(PointerEventArgs e)
+        {
+            if (!_isFullscreen) return false;
+            var header = this.FindControl<Border>("StreamHeaderBar");
+            if (header == null || !header.IsVisible) return false;
+            var pos = e.GetPosition(this);
+            double headerHeight = header.Bounds.Height > 0 ? header.Bounds.Height : 50;
+            return pos.Y <= headerHeight;
+        }
+
         private void ScreenImage_PointerMoved(object? sender, PointerEventArgs e)
         {
             if (!_remoteControlEnabled || !_controlClient.IsConnected)
+                return;
+
+            if (IsPointerOverFullscreenHeader(e))
                 return;
 
             if (_isGameMode)
@@ -801,6 +931,9 @@ namespace LanScreenShare.Desktop
             if (!_remoteControlEnabled || !_controlClient.IsConnected)
                 return;
 
+            if (IsPointerOverFullscreenHeader(e))
+                return;
+
             var screenImage = this.FindControl<Image>("ScreenImage");
             screenImage?.Focus();
 
@@ -846,6 +979,9 @@ namespace LanScreenShare.Desktop
             if (!_remoteControlEnabled || !_controlClient.IsConnected)
                 return;
 
+            if (IsPointerOverFullscreenHeader(e))
+                return;
+
             var screenImage = this.FindControl<Image>("ScreenImage");
             var point = e.GetCurrentPoint(screenImage);
             var props = point.Properties;
@@ -884,6 +1020,9 @@ namespace LanScreenShare.Desktop
         private void ScreenImage_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
         {
             if (!_remoteControlEnabled || !_controlClient.IsConnected)
+                return;
+
+            if (IsPointerOverFullscreenHeader(e))
                 return;
 
             short delta = (short)(e.Delta.Y * 120);
@@ -1833,6 +1972,7 @@ namespace LanScreenShare.Desktop
         {
             SetFullscreen(false);
             StopDeviceSearch();
+            _headerAutoHideTimer.Stop();
             _metricsTimer.Stop();
 
             _h264Decoder?.Dispose();
