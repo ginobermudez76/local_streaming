@@ -1,0 +1,197 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:models="using:LanScreenShare.Core.Models"
+        mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="520"
+        x:Class="LanScreenShare.Desktop.SourcePickerWindow"
+        Title="Seleccionar qué transmitir - LanScreenShare"
+        Width="640" Height="520"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#18181B">
+
+    <Window.Styles>
+        <Style Selector="ListBoxItem">
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16" Spacing="4">
+            <TextBlock Text="Elegir qué transmitir"
+                       FontSize="18"
+                       FontWeight="SemiBold"
+                       Foreground="#FAFAFA"/>
+            <TextBlock Text="Selecciona una pantalla completa o una aplicación abierta para compartir en tu red local."
+                       FontSize="12"
+                       Foreground="#A1A1AA"/>
+        </StackPanel>
+
+        <!-- Tabs Content -->
+        <TabControl Grid.Row="1" Background="Transparent" Padding="0,10,0,0">
+            <!-- PANTALLAS -->
+            <TabItem Header="Pantallas">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ListBox x:Name="ScreensListBox"
+                             Background="Transparent"
+                             SelectionMode="Single">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="models:CaptureSource">
+                                <Border Background="#27272A"
+                                        BorderBrush="#3F3F46"
+                                        BorderThickness="1"
+                                        CornerRadius="8"
+                                        Padding="14,12"
+                                        Margin="0,3">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+                                        <Border Grid.Column="0"
+                                                Background="#1E293B"
+                                                CornerRadius="6"
+                                                Width="44" Height="44"
+                                                Margin="0,0,14,0">
+                                            <PathIcon Data="{StaticResource IconTv}"
+                                                      Width="24" Height="24"
+                                                      Foreground="#38BDF8"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"/>
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                            <TextBlock Text="{Binding Name}"
+                                                       FontSize="13"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="#F4F4F5"/>
+                                            <TextBlock Text="{Binding Subtitle}"
+                                                       FontSize="11"
+                                                       Foreground="#A1A1AA"/>
+                                        </StackPanel>
+                                        <Border Grid.Column="2"
+                                                IsVisible="{Binding IsPrimary}"
+                                                Background="#14532D"
+                                                CornerRadius="4"
+                                                Padding="6,2"
+                                                VerticalAlignment="Center">
+                                            <TextBlock Text="Principal" FontSize="10" Foreground="#4ADE80" FontWeight="Medium"/>
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- VENTANAS -->
+            <TabItem Header="Ventanas y Aplicaciones">
+                <Grid RowDefinitions="Auto,*">
+                    <Grid Grid.Row="0" Margin="0,0,0,10" ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0"
+                                   Text="Ventanas activas detectadas"
+                                   FontSize="12"
+                                   Foreground="#A1A1AA"
+                                   VerticalAlignment="Center"/>
+                        <Button Grid.Column="1"
+                                x:Name="RefreshWindowsButton"
+                                Background="#27272A"
+                                BorderBrush="#3F3F46"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="8,4"
+                                Cursor="Hand">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <PathIcon Data="{StaticResource IconRefresh}" Width="12" Height="12" Foreground="#38BDF8"/>
+                                <TextBlock Text="Actualizar lista" FontSize="11" Foreground="#E4E4E7"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <ListBox x:Name="WindowsListBox"
+                                 Background="Transparent"
+                                 SelectionMode="Single">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="models:CaptureSource">
+                                    <Border Background="#27272A"
+                                            BorderBrush="#3F3F46"
+                                            BorderThickness="1"
+                                            CornerRadius="8"
+                                            Padding="14,12"
+                                            Margin="0,3">
+                                        <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+                                            <Border Grid.Column="0"
+                                                    Background="#2E1065"
+                                                    CornerRadius="6"
+                                                    Width="44" Height="44"
+                                                    Margin="0,0,14,0">
+                                                <PathIcon Data="{StaticResource IconWindow}"
+                                                          Width="22" Height="22"
+                                                          Foreground="#A78BFA"
+                                                          HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"/>
+                                            </Border>
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                                <TextBlock Text="{Binding Name}"
+                                                           FontSize="13"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="#F4F4F5"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Text="{Binding Subtitle}"
+                                                           FontSize="11"
+                                                           Foreground="#A1A1AA"/>
+                                            </StackPanel>
+                                            <Border Grid.Column="2"
+                                                    Background="#18181B"
+                                                    CornerRadius="4"
+                                                    Padding="6,2"
+                                                    Margin="8,0,0,0"
+                                                    VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding ProcessName}" FontSize="10" Foreground="#C084FC"/>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <!-- Footer Actions -->
+        <Grid Grid.Row="2" Margin="0,16,0,0" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Grid.Column="0"
+                       x:Name="SelectedSourceInfoText"
+                       Text="Selecciona una fuente para continuar"
+                       FontSize="11"
+                       Foreground="#71717A"
+                       VerticalAlignment="Center"/>
+
+            <Button Grid.Column="1"
+                    x:Name="CancelButton"
+                    Content="Cancelar"
+                    Background="#27272A"
+                    Foreground="#E4E4E7"
+                    BorderBrush="#3F3F46"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="14,8"
+                    Margin="0,0,10,0"
+                    Cursor="Hand"/>
+
+            <Button Grid.Column="2"
+                    x:Name="SelectButton"
+                    Content="Seleccionar Fuente"
+                    Background="#2563EB"
+                    Foreground="White"
+                    FontWeight="Medium"
+                    CornerRadius="6"
+                    Padding="16,8"
+                    Cursor="Hand"/>
+        </Grid>
+    </Grid>
+</Window>

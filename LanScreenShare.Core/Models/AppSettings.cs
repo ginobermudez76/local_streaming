@@ -7,6 +7,8 @@ namespace LanScreenShare.Core.Models
         public int Fps { get; set; } = 30;
         public int Quality { get; set; } = 75;
         public string ResolutionTag { get; set; } = "";
+        public string CaptureSourceId { get; set; } = "screen:0";
+        public string CaptureSourceName { get; set; } = "Pantalla 1";
         public bool ShareAudio { get; set; } = true;
         public bool AllowRemoteControl { get; set; } = true;
         public string StreamAccessMode { get; set; } = "auto";
@@ -16,4 +18,3 @@ namespace LanScreenShare.Core.Models
         public string StretchMode { get; set; } = "Uniform";
     }
 }
-

@@ -26,10 +26,17 @@ namespace LanScreenShare.Media
         private volatile int _targetWidth = 0;
         private volatile int _targetHeight = 0;
         private volatile string _codec = "h264";
+        private volatile int _monitorIndex = 0;
         private MediaFoundationH264EncoderService? _h264Encoder;
 
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
+
+        public int MonitorIndex
+        {
+            get => _monitorIndex;
+            set => _monitorIndex = Math.Max(0, value);
+        }
 
         public int TargetFps
         {
@@ -204,7 +211,8 @@ namespace LanScreenShare.Media
                             Console.WriteLine($"[DXGI] Advertencia configurando GPU Thread Priority: {ex.Message}");
                         }
 
-                        if (adapter.EnumOutputs(0, out output).Failure || output == null)
+                        if ((adapter.EnumOutputs((uint)_monitorIndex, out output).Failure || output == null) &&
+                            (adapter.EnumOutputs(0, out output).Failure || output == null))
                         {
                             throw new InvalidOperationException("No se pudo obtener la salida de pantalla principal (Monitor 0)");
                         }

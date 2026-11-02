@@ -89,6 +89,13 @@ namespace LanScreenShare.Desktop
         private readonly DispatcherTimer _metricsTimer;
         private AppSettings _appSettings = new();
         private bool _isInitializingSettings = true;
+        private CaptureSource _currentSource = new()
+        {
+            Type = CaptureSourceType.Screen,
+            Id = "screen:0",
+            Name = "Pantalla 1",
+            MonitorIndex = 0
+        };
 
         public ObservableCollection<DeviceInfo> Devices { get; } = new();
 
@@ -97,6 +104,34 @@ namespace LanScreenShare.Desktop
             InitializeComponent();
 
             _appSettings = SettingsService.Load();
+
+            if (!string.IsNullOrEmpty(_appSettings.CaptureSourceId))
+            {
+                _currentSource.Id = _appSettings.CaptureSourceId;
+                _currentSource.Name = string.IsNullOrEmpty(_appSettings.CaptureSourceName) ? "Pantalla 1" : _appSettings.CaptureSourceName;
+                if (_currentSource.Id.StartsWith("screen:"))
+                {
+                    if (_currentSource.Id == "screen:all")
+                    {
+                        _currentSource.Type = CaptureSourceType.AllScreens;
+                    }
+                    else
+                    {
+                        _currentSource.Type = CaptureSourceType.Screen;
+                        if (int.TryParse(_currentSource.Id.Replace("screen:", ""), out int mIdx))
+                        {
+                            _currentSource.MonitorIndex = mIdx;
+                        }
+                    }
+                }
+                else if (_currentSource.Id.StartsWith("window:"))
+                {
+                    _currentSource.Type = CaptureSourceType.Screen;
+                    _currentSource.Id = "screen:0";
+                    _currentSource.Name = "Pantalla 1";
+                    _currentSource.MonitorIndex = 0;
+                }
+            }
 
             if (OperatingSystem.IsWindows())
             {
@@ -113,17 +148,9 @@ namespace LanScreenShare.Desktop
             _discoveryService = new DiscoveryService();
             _discoveryService.OnDeviceDiscovered += DiscoveryService_OnDeviceDiscovered;
 
-            // Iniciar con el motor guardado en configuración (DXGI o GDI)
-            if (OperatingSystem.IsWindows())
-            {
-                _screenCaptureService = _appSettings.Engine == "gdi"
-                    ? new WindowsScreenCaptureService()
-                    : new DxgiScreenCaptureService();
-            }
-            else
-            {
-                _screenCaptureService = new WindowsScreenCaptureService();
-            }
+            // Iniciar con la fuente y motor guardados en configuración
+            _screenCaptureService = CreateCaptureService(_currentSource, _appSettings.Engine);
+
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
 
             _streamServer = new TcpStreamServer();
@@ -485,6 +512,14 @@ namespace LanScreenShare.Desktop
                 screenImage.KeyDown += ScreenImage_KeyDown;
                 screenImage.KeyUp += ScreenImage_KeyUp;
             }
+
+            // Selector de fuente de transmisión (Pantalla completa / Ventana de app)
+            var selectSourceBtn = this.FindControl<Button>("SelectSourceButton");
+            if (selectSourceBtn != null)
+            {
+                selectSourceBtn.Click += SelectSourceButton_Click;
+            }
+            UpdateSourceUI();
 
             // Controles de ajuste de transmisión
             var engineCombo = this.FindControl<ComboBox>("EngineComboBox");
@@ -1666,6 +1701,104 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private IScreenCaptureService CreateCaptureService(CaptureSource source, string engine)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return new WindowsScreenCaptureService();
+            }
+
+            if (source.Type == CaptureSourceType.Window && source.Handle != IntPtr.Zero)
+            {
+                return new WindowCaptureService(source.Handle);
+            }
+
+            if (source.Type == CaptureSourceType.AllScreens || engine == "gdi")
+            {
+                return new WindowsScreenCaptureService();
+            }
+
+            return new DxgiScreenCaptureService
+            {
+                MonitorIndex = source.MonitorIndex
+            };
+        }
+
+        private async void SelectSourceButton_Click(object? sender, RoutedEventArgs e)
+        {
+            var picker = new SourcePickerWindow(_currentSource.Id);
+            var selected = await picker.ShowDialog<CaptureSource?>(this);
+            if (selected != null)
+            {
+                SetCaptureSource(selected);
+            }
+        }
+
+        private void SetCaptureSource(CaptureSource source)
+        {
+            _currentSource = source;
+            UpdateSourceUI();
+            SaveCurrentSettings();
+
+            _inputSimulatorService?.SetTargetSource(_currentSource);
+
+            if (_isHosting)
+            {
+                int fps = GetSelectedFps();
+                int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
+                GetSelectedResolution(out int targetW, out int targetH, out double scale);
+                string engine = GetSelectedEngine();
+                string codec = GetSelectedCodec();
+
+                SwitchCaptureSource(source, engine, fps, quality, scale, codec, targetW, targetH);
+                UpdateStatus($"Transmitiendo: {source.Name}", "#22C55E");
+            }
+        }
+
+        private void UpdateSourceUI()
+        {
+            var sourceNameText = this.FindControl<TextBlock>("SelectedSourceNameText");
+            if (sourceNameText != null)
+            {
+                sourceNameText.Text = _currentSource.Name;
+            }
+
+            var badgeText = this.FindControl<TextBlock>("SourceTypeBadge");
+            if (badgeText != null)
+            {
+                badgeText.Text = _currentSource.Type switch
+                {
+                    CaptureSourceType.Window => "Ventana",
+                    CaptureSourceType.AllScreens => "Escritorio",
+                    _ => "Pantalla"
+                };
+            }
+
+            var icon = this.FindControl<PathIcon>("SourceIcon");
+            if (icon != null)
+            {
+                string iconKey = _currentSource.Type == CaptureSourceType.Window ? "IconWindow" : "IconTv";
+                if (this.TryFindResource(iconKey, out var res) && res is StreamGeometry geom)
+                {
+                    icon.Data = geom;
+                    icon.Foreground = new SolidColorBrush(_currentSource.Type == CaptureSourceType.Window
+                        ? Color.Parse("#A78BFA")
+                        : Color.Parse("#38BDF8"));
+                }
+            }
+        }
+
+        private void SwitchCaptureSource(CaptureSource source, string engine, int fps, int quality, double scale, string codec, int targetW = 0, int targetH = 0)
+        {
+            _screenCaptureService.StopCapture();
+            _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
+            _screenCaptureService.Dispose();
+
+            _screenCaptureService = CreateCaptureService(source, engine);
+            _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
+            _screenCaptureService.StartCapture(fps, quality, scale, codec, targetW, targetH);
+        }
+
         private void OnEngineChanged()
         {
             if (_isHosting)
@@ -1676,31 +1809,11 @@ namespace LanScreenShare.Desktop
                 string engine = GetSelectedEngine();
                 string codec = GetSelectedCodec();
 
-                SwitchCaptureEngine(engine, fps, quality, scale, codec, targetW, targetH);
+                SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH);
                 string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
                 UpdateStatus($"Cambiado a motor {engineName} ({codec.ToUpper()}) en caliente", "#22C55E");
             }
         }
-
-        private void SwitchCaptureEngine(string engine, int fps, int quality, double scale, string codec, int targetW = 0, int targetH = 0)
-        {
-            _screenCaptureService.StopCapture();
-            _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
-            _screenCaptureService.Dispose();
-
-            if (engine == "dxgi")
-            {
-                _screenCaptureService = new DxgiScreenCaptureService();
-            }
-            else
-            {
-                _screenCaptureService = new WindowsScreenCaptureService();
-            }
-
-            _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
-            _screenCaptureService.StartCapture(fps, quality, scale, codec, targetW, targetH);
-        }
-
         private void OnSettingChanged()
         {
             int fps = GetSelectedFps();
@@ -1772,6 +1885,8 @@ namespace LanScreenShare.Desktop
                 _appSettings.AudioVolume = _audioPlayerService?.Volume ?? 1.0f;
                 _appSettings.AudioMuted = _audioPlayerService?.IsMuted ?? false;
                 _appSettings.StretchMode = _currentStretchMode == Stretch.Fill ? "Fill" : "Uniform";
+                _appSettings.CaptureSourceId = _currentSource.Id;
+                _appSettings.CaptureSourceName = _currentSource.Name;
 
                 SettingsService.Save(_appSettings);
             }
@@ -1876,7 +1991,8 @@ namespace LanScreenShare.Desktop
 
                     // 1. Iniciar servidor de video (Puerto 5001)
                     await _streamServer.StartAsync(5001);
-                    SwitchCaptureEngine(engine, fps, quality, scale, codec, targetW, targetH);
+                    SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH);
+                    _inputSimulatorService?.SetTargetSource(_currentSource);
 
                     // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
                     bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
@@ -1912,7 +2028,7 @@ namespace LanScreenShare.Desktop
 
                     string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
                     string audioStatus = shareAudio ? " + Audio WASAPI" : "";
-                    UpdateStatus($"Transmitiendo pantalla con {engineName}{audioStatus} - Esperando espectadores", "#22C55E");
+                    UpdateStatus($"Transmitiendo {_currentSource.Name} con {engineName}{audioStatus} - Esperando espectadores", "#22C55E");
                 }
                 catch (Exception ex)
                 {

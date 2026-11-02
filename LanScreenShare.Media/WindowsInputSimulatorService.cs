@@ -10,6 +10,12 @@ namespace LanScreenShare.Media
     public class WindowsInputSimulatorService : IInputSimulatorService
     {
         private bool _disposed;
+        private CaptureSource? _currentTargetSource;
+
+        public void SetTargetSource(CaptureSource source)
+        {
+            _currentTargetSource = source;
+        }
 
         public void SimulateInput(RemoteInputMessage input)
         {
@@ -52,13 +58,38 @@ namespace LanScreenShare.Media
             }
         }
 
-        private static void SendMouseMove(float normX, float normY)
+        private void SendMouseMove(float normX, float normY)
         {
+            int targetX;
+            int targetY;
+
+            if (_currentTargetSource != null && _currentTargetSource.Type == CaptureSourceType.Window && _currentTargetSource.Handle != IntPtr.Zero)
+            {
+                if (GetClientRect(_currentTargetSource.Handle, out RECT clientRect))
+                {
+                    POINT pt = new POINT { x = 0, y = 0 };
+                    ClientToScreen(_currentTargetSource.Handle, ref pt);
+                    int winW = clientRect.Right - clientRect.Left;
+                    int winH = clientRect.Bottom - clientRect.Top;
+                    targetX = pt.x + (int)Math.Round(Math.Clamp(normX, 0f, 1f) * Math.Max(1, winW - 1));
+                    targetY = pt.y + (int)Math.Round(Math.Clamp(normY, 0f, 1f) * Math.Max(1, winH - 1));
+                    SetCursorPos(targetX, targetY);
+                    return;
+                }
+            }
+            else if (_currentTargetSource != null && _currentTargetSource.Width > 0 && _currentTargetSource.Height > 0)
+            {
+                targetX = _currentTargetSource.X + (int)Math.Round(Math.Clamp(normX, 0f, 1f) * (_currentTargetSource.Width - 1));
+                targetY = _currentTargetSource.Y + (int)Math.Round(Math.Clamp(normY, 0f, 1f) * (_currentTargetSource.Height - 1));
+                SetCursorPos(targetX, targetY);
+                return;
+            }
+
             int screenW = GetSystemMetrics(SM_CXSCREEN);
             int screenH = GetSystemMetrics(SM_CYSCREEN);
 
-            int targetX = (int)Math.Round(Math.Clamp(normX, 0f, 1f) * (screenW - 1));
-            int targetY = (int)Math.Round(Math.Clamp(normY, 0f, 1f) * (screenH - 1));
+            targetX = (int)Math.Round(Math.Clamp(normX, 0f, 1f) * (screenW - 1));
+            targetY = (int)Math.Round(Math.Clamp(normY, 0f, 1f) * (screenH - 1));
 
             SetCursorPos(targetX, targetY);
         }
@@ -71,11 +102,17 @@ namespace LanScreenShare.Media
             mouse_event(MOUSEEVENTF_MOVE, (uint)dx, (uint)dy, 0, UIntPtr.Zero);
         }
 
-        private static void SendMouseButton(RemoteMouseButton button, bool isDown, float normX, float normY)
+        private void SendMouseButton(RemoteMouseButton button, bool isDown, float normX, float normY)
         {
             if (normX >= 0f && normY >= 0f)
             {
                 SendMouseMove(normX, normY);
+            }
+
+            // Si es una ventana específica, enfocarla al hacer clic
+            if (isDown && _currentTargetSource?.Type == CaptureSourceType.Window && _currentTargetSource.Handle != IntPtr.Zero)
+            {
+                SetForegroundWindow(_currentTargetSource.Handle);
             }
 
             uint flag = 0;
@@ -97,7 +134,7 @@ namespace LanScreenShare.Media
             mouse_event(flag, 0, 0, 0, UIntPtr.Zero);
         }
 
-        private static void SendMouseWheel(short delta, float normX, float normY)
+        private void SendMouseWheel(short delta, float normX, float normY)
         {
             if (normX >= 0f && normY >= 0f)
             {
@@ -131,6 +168,22 @@ namespace LanScreenShare.Media
 
         private const uint KEYEVENTF_KEYUP = 0x0002;
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int x;
+            public int y;
+        }
+
         [DllImport("user32.dll")]
         private static extern int GetSystemMetrics(int nIndex);
 
@@ -142,6 +195,15 @@ namespace LanScreenShare.Media
 
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         #endregion
 

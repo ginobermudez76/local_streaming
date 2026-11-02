@@ -57,6 +57,46 @@
                                    FontSize="12"
                                    FontWeight="SemiBold"/>
 
+                        <!-- Source Selector -->
+                        <StackPanel Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Fuente a Transmitir" FontSize="11" Foreground="#A1A1AA"/>
+                                <TextBlock Grid.Column="1" x:Name="SourceTypeBadge" Text="Pantalla" FontSize="10" Foreground="#38BDF8" FontWeight="Medium"/>
+                            </Grid>
+                            <Button x:Name="SelectSourceButton"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Stretch"
+                                    Background="#27272A"
+                                    BorderBrush="#3F3F46"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10,8"
+                                    Cursor="Hand">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <PathIcon Grid.Column="0"
+                                              x:Name="SourceIcon"
+                                              Data="{StaticResource IconTv}"
+                                              Width="16" Height="16"
+                                              Foreground="#38BDF8"
+                                              Margin="0,0,8,0"
+                                              VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1"
+                                               x:Name="SelectedSourceNameText"
+                                               Text="Pantalla 1"
+                                               FontSize="12"
+                                               Foreground="#F4F4F5"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="2"
+                                               Text="Cambiar ▾"
+                                               FontSize="11"
+                                               Foreground="#93C5FD"
+                                               VerticalAlignment="Center"
+                                               Margin="4,0,0,0"/>
+                                </Grid>
+                            </Button>
+                        </StackPanel>
+
                         <!-- Engine Selector -->
                         <StackPanel Spacing="4">
                             <TextBlock Text="Motor de Captura" FontSize="11" Foreground="#A1A1AA"/>

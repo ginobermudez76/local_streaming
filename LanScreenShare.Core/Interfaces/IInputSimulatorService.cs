@@ -6,5 +6,6 @@ namespace LanScreenShare.Core.Interfaces
     public interface IInputSimulatorService : IDisposable
     {
         void SimulateInput(RemoteInputMessage input);
+        void SetTargetSource(CaptureSource source);
     }
 }
