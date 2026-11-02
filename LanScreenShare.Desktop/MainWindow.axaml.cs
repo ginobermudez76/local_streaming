@@ -221,16 +221,17 @@ namespace LanScreenShare.Desktop
             var audioMuteButton = this.FindControl<Button>("AudioMuteButton");
             if (audioMuteButton != null)
             {
-                audioMuteButton.Click += (s, e) =>
+                audioMuteButton.Click += (s, e) => ToggleMute();
+            }
+
+            var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
+            if (volumeSlider != null)
+            {
+                volumeSlider.PropertyChanged += (s, e) =>
                 {
-                    if (_audioPlayerService != null)
+                    if (e.Property.Name == nameof(Slider.Value))
                     {
-                        _audioPlayerService.IsMuted = !_audioPlayerService.IsMuted;
-                        var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
-                        if (muteIcon != null)
-                        {
-                            muteIcon.Data = (this.FindResource(_audioPlayerService.IsMuted ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
-                        }
+                        SetAudioVolume((float)Math.Clamp(volumeSlider.Value / 100.0, 0.0, 1.0));
                     }
                 };
             }
@@ -716,6 +717,67 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void ToggleMute()
+        {
+            if (_audioPlayerService != null)
+            {
+                _audioPlayerService.IsMuted = !_audioPlayerService.IsMuted;
+                if (!_audioPlayerService.IsMuted && _audioPlayerService.Volume <= 0.01f)
+                {
+                    _audioPlayerService.Volume = 0.5f;
+                }
+                UpdateAudioUI();
+            }
+        }
+
+        private void SetAudioVolume(float vol)
+        {
+            if (_audioPlayerService != null)
+            {
+                _audioPlayerService.Volume = vol;
+                if (vol <= 0.01f)
+                {
+                    _audioPlayerService.IsMuted = true;
+                }
+                else if (_audioPlayerService.IsMuted)
+                {
+                    _audioPlayerService.IsMuted = false;
+                }
+                UpdateAudioUI();
+            }
+        }
+
+        private void UpdateAudioUI()
+        {
+            if (_audioPlayerService == null) return;
+
+            bool isMuted = _audioPlayerService.IsMuted || _audioPlayerService.Volume <= 0.01f;
+            int percent = (int)Math.Round(_audioPlayerService.Volume * 100);
+
+            var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
+            if (muteIcon != null)
+            {
+                muteIcon.Data = (this.FindResource(isMuted ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
+            }
+
+            var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
+            if (volumeSlider != null && Math.Abs(volumeSlider.Value - percent) > 1)
+            {
+                volumeSlider.Value = percent;
+            }
+
+            var volumeText = this.FindControl<TextBlock>("AudioVolumeText");
+            if (volumeText != null)
+            {
+                volumeText.Text = $"{percent}%";
+            }
+
+            if (_popoutWindow != null)
+            {
+                _popoutWindow.SetVolume(_audioPlayerService.Volume, _audioPlayerService.IsMuted);
+            }
+        }
+
         private void OpenPopoutWindow()
         {
             if (_isPopoutActive) return;
@@ -737,7 +799,7 @@ namespace LanScreenShare.Desktop
             _popoutWindow.SetRemoteControlAllowed(_currentDeviceAllowsRemoteControl);
             _popoutWindow.SetRemoteControlState(_remoteControlEnabled);
             _popoutWindow.SetGameModeState(_isGameMode);
-            _popoutWindow.SetMuteState(_audioPlayerService?.IsMuted ?? false);
+            _popoutWindow.SetVolume(_audioPlayerService?.Volume ?? 1.0f, _audioPlayerService?.IsMuted ?? false);
             _popoutWindow.SetStretchMode(_currentStretchMode);
 
             if (screenImage?.Source != null)
@@ -795,16 +857,12 @@ namespace LanScreenShare.Desktop
 
             _popoutWindow.MuteToggled += () =>
             {
-                if (_audioPlayerService != null)
-                {
-                    _audioPlayerService.IsMuted = !_audioPlayerService.IsMuted;
-                    var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
-                    if (muteIcon != null)
-                    {
-                        muteIcon.Data = (this.FindResource(_audioPlayerService.IsMuted ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
-                    }
-                    _popoutWindow?.SetMuteState(_audioPlayerService.IsMuted);
-                }
+                ToggleMute();
+            };
+
+            _popoutWindow.VolumeChanged += (vol) =>
+            {
+                SetAudioVolume(vol);
             };
 
             _popoutWindow.StretchModeChanged += (stretch) =>
@@ -1893,16 +1951,12 @@ namespace LanScreenShare.Desktop
                     disconnectBtn.IsVisible = true;
                 }
 
-                var muteBtn = this.FindControl<Button>("AudioMuteButton");
-                if (muteBtn != null)
+                var audioPanel = this.FindControl<Border>("AudioControlPanel");
+                if (audioPanel != null)
                 {
-                    muteBtn.IsVisible = true;
-                    var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
-                    if (muteIcon != null)
-                    {
-                        muteIcon.Data = (this.FindResource((_audioPlayerService?.IsMuted ?? false) ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
-                    }
+                    audioPanel.IsVisible = true;
                 }
+                UpdateAudioUI();
 
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
                 if (remoteControlBtn != null)
@@ -2037,10 +2091,14 @@ namespace LanScreenShare.Desktop
                     disconnectBtn.IsVisible = _streamClient.IsConnected;
                 }
 
-                var muteBtn = this.FindControl<Button>("AudioMuteButton");
-                if (muteBtn != null)
+                var audioPanel = this.FindControl<Border>("AudioControlPanel");
+                if (audioPanel != null)
                 {
-                    muteBtn.IsVisible = _streamClient.IsConnected;
+                    audioPanel.IsVisible = _streamClient.IsConnected;
+                }
+                if (_streamClient.IsConnected)
+                {
+                    UpdateAudioUI();
                 }
 
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
@@ -2121,10 +2179,10 @@ namespace LanScreenShare.Desktop
                 disconnectBtn.IsVisible = false;
             }
 
-            var muteBtn = this.FindControl<Button>("AudioMuteButton");
-            if (muteBtn != null)
+            var audioPanel = this.FindControl<Border>("AudioControlPanel");
+            if (audioPanel != null)
             {
-                muteBtn.IsVisible = false;
+                audioPanel.IsVisible = false;
             }
 
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");

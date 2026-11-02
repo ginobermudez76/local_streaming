@@ -19,6 +19,7 @@ namespace LanScreenShare.Desktop
         public event Action<bool>? RemoteControlToggled;
         public event Action? GameModeToggled;
         public event Action? MuteToggled;
+        public event Action<float>? VolumeChanged;
         public event Action<Stretch>? StretchModeChanged;
         public event Action<RemoteInputMessage>? RemoteInputSent;
 
@@ -119,6 +120,20 @@ namespace LanScreenShare.Desktop
             if (muteBtn != null)
             {
                 muteBtn.Click += (s, e) => MuteToggled?.Invoke();
+            }
+
+            var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
+            if (volumeSlider != null)
+            {
+                volumeSlider.PropertyChanged += (s, e) =>
+                {
+                    if (e.Property.Name == nameof(Slider.Value))
+                    {
+                        float vol = (float)Math.Clamp(volumeSlider.Value / 100.0, 0.0, 1.0);
+                        VolumeChanged?.Invoke(vol);
+                        UpdateVolumeText(volumeSlider.Value);
+                    }
+                };
             }
 
             var stretchBtn = this.FindControl<Button>("StretchModeButton");
@@ -276,12 +291,28 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        public void SetMuteState(bool isMuted)
+        public void SetVolume(float volume, bool isMuted)
         {
+            var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
+            if (volumeSlider != null)
+            {
+                volumeSlider.Value = Math.Round(volume * 100);
+            }
+            UpdateVolumeText(volume * 100);
+
             var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
             if (muteIcon != null)
             {
-                muteIcon.Data = (this.FindResource(isMuted ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
+                muteIcon.Data = (this.FindResource(isMuted || volume <= 0.01f ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
+            }
+        }
+
+        private void UpdateVolumeText(double percent)
+        {
+            var volumeText = this.FindControl<TextBlock>("AudioVolumeText");
+            if (volumeText != null)
+            {
+                volumeText.Text = $"{(int)Math.Round(percent)}%";
             }
         }
 

@@ -298,15 +298,36 @@
                             </StackPanel>
                         </ToggleButton>
 
-                        <Button x:Name="AudioMuteButton"
+                        <!-- Audio Control (Mute & Volume Slider) -->
+                        <Border x:Name="AudioControlPanel"
                                 IsVisible="False"
                                 Background="#27272A"
-                                Foreground="White"
-                                Padding="8,6"
                                 CornerRadius="4"
-                                ToolTip.Tip="Silenciar / Activar audio">
-                            <PathIcon x:Name="AudioMuteIcon" Data="{StaticResource IconVolumeUp}" Width="14" Height="14" Foreground="White"/>
-                        </Button>
+                                Padding="4,2">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <Button x:Name="AudioMuteButton"
+                                        Background="Transparent"
+                                        Foreground="White"
+                                        Padding="4"
+                                        BorderThickness="0"
+                                        ToolTip.Tip="Silenciar / Activar audio">
+                                    <PathIcon x:Name="AudioMuteIcon" Data="{StaticResource IconVolumeUp}" Width="14" Height="14" Foreground="White"/>
+                                </Button>
+                                <Slider x:Name="AudioVolumeSlider"
+                                        Minimum="0"
+                                        Maximum="100"
+                                        Value="100"
+                                        Width="70"
+                                        VerticalAlignment="Center"
+                                        ToolTip.Tip="Volumen de transmisión"/>
+                                <TextBlock x:Name="AudioVolumeText"
+                                           Text="100%"
+                                           FontSize="11"
+                                           Foreground="#A1A1AA"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,4,0"/>
+                            </StackPanel>
+                        </Border>
 
                         <Button x:Name="StretchModeButton"
                                 IsVisible="False"
