@@ -414,7 +414,15 @@ namespace LanScreenShare.Desktop
             var screenImage = this.FindControl<Image>("ScreenImage");
             if (screenImage != null)
             {
-                screenImage.DoubleTapped += (s, e) => ToggleFullscreen();
+                screenImage.DoubleTapped += (s, e) =>
+                {
+                    // Si el control remoto o el modo juego están activos, no alternar pantalla completa
+                    // para permitir abrir carpetas, archivos y hacer clics rápidos en juegos del anfitrión
+                    if (_remoteControlEnabled || _isGameMode)
+                        return;
+
+                    ToggleFullscreen();
+                };
                 screenImage.PointerMoved += ScreenImage_PointerMoved;
                 screenImage.PointerPressed += ScreenImage_PointerPressed;
                 screenImage.PointerReleased += ScreenImage_PointerReleased;
