@@ -29,6 +29,7 @@ namespace LanScreenShare.Network.Streaming
 
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
+        public Func<string, Task<bool>>? ClientApprovalCallback { get; set; }
 
         public bool IsRunning => _listener != null && _cts != null && !_cts.IsCancellationRequested;
         public int ConnectedClientsCount => _clients.Count;
@@ -57,6 +58,27 @@ namespace LanScreenShare.Network.Streaming
                         client.NoDelay = true; // Deshabilitar Nagle para menor latencia
 
                         var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
+
+                        if (ClientApprovalCallback != null)
+                        {
+                            bool approved = false;
+                            try
+                            {
+                                approved = await ClientApprovalCallback(clientId);
+                            }
+                            catch
+                            {
+                                approved = false;
+                            }
+
+                            if (!approved)
+                            {
+                                Console.WriteLine($"[StreamServer] Conexión rechazada por el anfitrión para: {clientId}");
+                                try { client.Close(); } catch { }
+                                continue;
+                            }
+                        }
+
                         var stream = client.GetStream();
 
                         // Cola acotada de 1 frame: si el cliente no puede descargar a tiempo, se descarta el frame viejo

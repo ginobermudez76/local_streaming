@@ -22,6 +22,7 @@ namespace LanScreenShare.Network.Streaming
         public event EventHandler<RemoteInputMessage>? InputReceived;
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
+        public Func<string, Task<bool>>? ClientApprovalCallback { get; set; }
 
         public bool IsRunning => _listener != null && _cts != null && !_cts.IsCancellationRequested;
 
@@ -49,6 +50,26 @@ namespace LanScreenShare.Network.Streaming
                         client.NoDelay = true;
 
                         var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
+
+                        if (ClientApprovalCallback != null)
+                        {
+                            bool approved = false;
+                            try
+                            {
+                                approved = await ClientApprovalCallback(clientId);
+                            }
+                            catch
+                            {
+                                approved = false;
+                            }
+
+                            if (!approved)
+                            {
+                                Console.WriteLine($"[ControlServer] Control remoto denegado por el anfitrión para: {clientId}");
+                                try { client.Close(); } catch { }
+                                continue;
+                            }
+                        }
                         var stream = client.GetStream();
 
                         _clients[clientId] = stream;

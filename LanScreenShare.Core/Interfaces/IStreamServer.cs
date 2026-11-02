@@ -9,6 +9,7 @@ namespace LanScreenShare.Core.Interfaces
     {
         event EventHandler<string>? ClientConnected;
         event EventHandler<string>? ClientDisconnected;
+        Func<string, Task<bool>>? ClientApprovalCallback { get; set; }
         bool IsRunning { get; }
         int ConnectedClientsCount { get; }
         Task StartAsync(int port = 5001, CancellationToken cancellationToken = default);

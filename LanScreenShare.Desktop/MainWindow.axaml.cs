@@ -51,6 +51,23 @@ namespace LanScreenShare.Desktop
         private bool _isHosting;
         private string? _currentConnectedDeviceName;
 
+        // Pantalla completa
+        private bool _isFullscreen;
+        private WindowState _previousWindowState = WindowState.Normal;
+
+        // Búsqueda de dispositivos
+        private DispatcherTimer? _searchTimer;
+
+        // Control de acceso y aprobación de conexiones
+        private TaskCompletionSource<bool>? _streamApprovalTcs;
+        private TaskCompletionSource<bool>? _controlApprovalTcs;
+
+        private bool RequireStreamApproval =>
+            (this.FindControl<ComboBox>("StreamAccessModeComboBox")?.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
+
+        private string RemoteControlMode =>
+            (this.FindControl<ComboBox>("ControlAccessModeComboBox")?.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+
         // Decodificador de video por hardware (H.264)
         private readonly IVideoDecoderService? _h264Decoder;
         private WriteableBitmap? _viewerWriteableBitmap;
@@ -212,10 +229,57 @@ namespace LanScreenShare.Desktop
 
             this.KeyDown += MainWindow_KeyDown;
 
+            // Controles de Pantalla Completa
+            var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
+            if (fullscreenBtn != null)
+            {
+                fullscreenBtn.Click += (s, e) => ToggleFullscreen();
+            }
+
+            var exitFloatBtn = this.FindControl<Button>("ExitFullscreenFloatButton");
+            if (exitFloatBtn != null)
+            {
+                exitFloatBtn.Click += (s, e) => SetFullscreen(false);
+            }
+
+            // Aprobación de conexión de espectadores (Streaming)
+            _streamServer.ClientApprovalCallback = async (clientId) =>
+            {
+                if (!RequireStreamApproval)
+                    return true;
+
+                return await RequestStreamApprovalAsync(clientId);
+            };
+
+            var approveStreamBtn = this.FindControl<Button>("ApproveStreamButton");
+            if (approveStreamBtn != null) approveStreamBtn.Click += (s, e) => _streamApprovalTcs?.TrySetResult(true);
+
+            var rejectStreamBtn = this.FindControl<Button>("RejectStreamButton");
+            if (rejectStreamBtn != null) rejectStreamBtn.Click += (s, e) => _streamApprovalTcs?.TrySetResult(false);
+
+            // Aprobación de control remoto
+            _controlServer.ClientApprovalCallback = async (clientId) =>
+            {
+                if (!_allowRemoteControl || RemoteControlMode == "disabled")
+                    return false;
+
+                if (RemoteControlMode == "auto")
+                    return true;
+
+                return await RequestControlApprovalAsync(clientId);
+            };
+
+            var approveControlBtn = this.FindControl<Button>("ApproveControlButton");
+            if (approveControlBtn != null) approveControlBtn.Click += (s, e) => _controlApprovalTcs?.TrySetResult(true);
+
+            var rejectControlBtn = this.FindControl<Button>("RejectControlButton");
+            if (rejectControlBtn != null) rejectControlBtn.Click += (s, e) => _controlApprovalTcs?.TrySetResult(false);
+
             // Eventos de entrada sobre ScreenImage para control remoto
             var screenImage = this.FindControl<Image>("ScreenImage");
             if (screenImage != null)
             {
+                screenImage.DoubleTapped += (s, e) => ToggleFullscreen();
                 screenImage.PointerMoved += ScreenImage_PointerMoved;
                 screenImage.PointerPressed += ScreenImage_PointerPressed;
                 screenImage.PointerReleased += ScreenImage_PointerReleased;
@@ -345,6 +409,118 @@ namespace LanScreenShare.Desktop
                 e.Handled = true;
                 return;
             }
+
+            if (e.Key == Key.F11)
+            {
+                ToggleFullscreen();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Escape && _isFullscreen)
+            {
+                SetFullscreen(false);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        private void ToggleFullscreen()
+        {
+            SetFullscreen(!_isFullscreen);
+        }
+
+        private void SetFullscreen(bool fullscreen)
+        {
+            _isFullscreen = fullscreen;
+            var sidebar = this.FindControl<Border>("SidebarBorder");
+            var rootGrid = this.FindControl<Grid>("RootGrid");
+            var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
+            var floatExitBtn = this.FindControl<Button>("ExitFullscreenFloatButton");
+
+            if (_isFullscreen)
+            {
+                _previousWindowState = this.WindowState;
+                this.WindowState = WindowState.FullScreen;
+
+                if (sidebar != null) sidebar.IsVisible = false;
+                if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("0,*");
+                if (fullscreenBtn != null) fullscreenBtn.Content = "🗗 Salir";
+                if (floatExitBtn != null) floatExitBtn.IsVisible = true;
+            }
+            else
+            {
+                this.WindowState = _previousWindowState == WindowState.FullScreen ? WindowState.Normal : _previousWindowState;
+
+                if (sidebar != null) sidebar.IsVisible = true;
+                if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("310,*");
+                if (fullscreenBtn != null) fullscreenBtn.Content = "⛶ Pantalla Completa";
+                if (floatExitBtn != null) floatExitBtn.IsVisible = false;
+            }
+        }
+
+        private async Task<bool> RequestStreamApprovalAsync(string clientId)
+        {
+            return await Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                _streamApprovalTcs?.TrySetResult(false);
+                _streamApprovalTcs = new TaskCompletionSource<bool>();
+
+                var banner = this.FindControl<Border>("StreamApprovalBanner");
+                var subtitle = this.FindControl<TextBlock>("StreamApprovalSubtitle");
+                if (subtitle != null) subtitle.Text = $"El dispositivo '{clientId}' solicita ver tu pantalla.";
+                if (banner != null) banner.IsVisible = true;
+
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    _streamApprovalTcs?.TrySetResult(false);
+                };
+                timer.Start();
+
+                try
+                {
+                    return await _streamApprovalTcs.Task;
+                }
+                finally
+                {
+                    timer.Stop();
+                    if (banner != null) banner.IsVisible = false;
+                }
+            });
+        }
+
+        private async Task<bool> RequestControlApprovalAsync(string clientId)
+        {
+            return await Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                _controlApprovalTcs?.TrySetResult(false);
+                _controlApprovalTcs = new TaskCompletionSource<bool>();
+
+                var banner = this.FindControl<Border>("ControlApprovalBanner");
+                var subtitle = this.FindControl<TextBlock>("ControlApprovalSubtitle");
+                if (subtitle != null) subtitle.Text = $"El dispositivo '{clientId}' solicita controlar tu mouse y teclado.";
+                if (banner != null) banner.IsVisible = true;
+
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    _controlApprovalTcs?.TrySetResult(false);
+                };
+                timer.Start();
+
+                try
+                {
+                    return await _controlApprovalTcs.Task;
+                }
+                finally
+                {
+                    timer.Stop();
+                    if (banner != null) banner.IsVisible = false;
+                }
+            });
         }
 
         private void ToggleGameMode()
@@ -611,6 +787,20 @@ namespace LanScreenShare.Desktop
 
         private void ScreenImage_KeyDown(object? sender, KeyEventArgs e)
         {
+            if (e.Key == Key.F11)
+            {
+                ToggleFullscreen();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Escape && _isFullscreen)
+            {
+                SetFullscreen(false);
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.L &&
                 e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
                 e.KeyModifiers.HasFlag(KeyModifiers.Alt))
@@ -991,8 +1181,31 @@ namespace LanScreenShare.Desktop
 
         #region Discovery & Client Viewing Logic
 
+        private void StopDeviceSearch()
+        {
+            _searchTimer?.Stop();
+            _searchTimer = null;
+            _discoveryService.StopListening();
+
+            var searchBtn = this.FindControl<Button>("SearchButton");
+            if (searchBtn != null)
+            {
+                searchBtn.Content = "Buscar dispositivos";
+                searchBtn.IsEnabled = true;
+            }
+
+            var localInfo = this.FindControl<TextBlock>("LocalInfoText");
+            if (localInfo != null)
+            {
+                localInfo.Text = Devices.Count > 0
+                    ? $"Detectados {Devices.Count} dispositivo(s)"
+                    : "Listo para buscar";
+            }
+        }
+
         private void SearchButton_Click(object? sender, RoutedEventArgs e)
         {
+            _searchTimer?.Stop();
             _discoveryService.StartListening();
 
             if (sender is Button searchBtn)
@@ -1006,6 +1219,14 @@ namespace LanScreenShare.Desktop
             {
                 localInfo.Text = "Escuchando anuncios en puerto UDP 5000...";
             }
+
+            // Auto-detener búsqueda después de 10 segundos para no quedar en bucle
+            _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+            _searchTimer.Tick += (s, args) =>
+            {
+                StopDeviceSearch();
+            };
+            _searchTimer.Start();
         }
 
         private void DiscoveryService_OnDeviceDiscovered(object? sender, DeviceInfo device)
@@ -1035,6 +1256,7 @@ namespace LanScreenShare.Desktop
 
         private async Task ConnectToDeviceAsync(DeviceInfo device)
         {
+            StopDeviceSearch();
             _currentConnectedDeviceName = device.Name;
             UpdateStatus($"Conectando a {device.Name} ({device.IPAddress}:5001)...", "#F59E0B");
             ResetMetrics();
@@ -1063,6 +1285,12 @@ namespace LanScreenShare.Desktop
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[ControlClient] Control remoto no disponible: {ex.Message}");
+                }
+
+                var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
+                if (fullscreenBtn != null)
+                {
+                    fullscreenBtn.IsVisible = true;
                 }
 
                 var disconnectBtn = this.FindControl<Button>("DisconnectButton");
@@ -1226,6 +1454,9 @@ namespace LanScreenShare.Desktop
 
         private async void DisconnectButton_Click(object? sender, RoutedEventArgs e)
         {
+            SetFullscreen(false);
+            StopDeviceSearch();
+
             await _streamClient.DisconnectAsync();
             await _audioClient.DisconnectAsync();
             await _controlClient.DisconnectAsync();
@@ -1251,6 +1482,12 @@ namespace LanScreenShare.Desktop
             if (placeholder != null)
             {
                 placeholder.IsVisible = true;
+            }
+
+            var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
+            if (fullscreenBtn != null)
+            {
+                fullscreenBtn.IsVisible = false;
             }
 
             var disconnectBtn = this.FindControl<Button>("DisconnectButton");
@@ -1337,6 +1574,8 @@ namespace LanScreenShare.Desktop
 
         private void MainWindow_Closing(object? sender, WindowClosingEventArgs e)
         {
+            SetFullscreen(false);
+            StopDeviceSearch();
             _metricsTimer.Stop();
 
             _h264Decoder?.Dispose();
