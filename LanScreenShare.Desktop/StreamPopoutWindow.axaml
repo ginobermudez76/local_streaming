@@ -95,10 +95,40 @@
                                     Minimum="0"
                                     Maximum="100"
                                     Value="100"
-                                    Width="70"
+                                    Width="65"
                                     VerticalAlignment="Center"
                                     ToolTip.Tip="Volumen de transmisión"/>
                             <TextBlock x:Name="AudioVolumeText"
+                                       Text="100%"
+                                       FontSize="11"
+                                       Foreground="#A1A1AA"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,4,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Control de Micrófono (Silenciar y Control de Volumen) -->
+                    <Border x:Name="MicControlPanel"
+                            Background="#27272A"
+                            CornerRadius="4"
+                            Padding="4,2">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <Button x:Name="MicMuteButton"
+                                    Background="Transparent"
+                                    Foreground="White"
+                                    Padding="4"
+                                    BorderThickness="0"
+                                    ToolTip.Tip="Silenciar / Activar micrófono del anfitrión">
+                                <PathIcon x:Name="MicMuteIcon" Data="{StaticResource IconMic}" Width="14" Height="14" Foreground="#10B981"/>
+                            </Button>
+                            <Slider x:Name="MicVolumeSlider"
+                                    Minimum="0"
+                                    Maximum="100"
+                                    Value="100"
+                                    Width="65"
+                                    VerticalAlignment="Center"
+                                    ToolTip.Tip="Volumen de micrófono del anfitrión"/>
+                            <TextBlock x:Name="MicVolumeText"
                                        Text="100%"
                                        FontSize="11"
                                        Foreground="#A1A1AA"

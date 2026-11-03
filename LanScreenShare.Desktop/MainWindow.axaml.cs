@@ -36,6 +36,8 @@ namespace LanScreenShare.Desktop
         // Servicios de streaming de audio
         private readonly IAudioCaptureService? _audioCaptureService;
         private readonly IAudioPlayerService? _audioPlayerService;
+        private readonly IAudioCaptureService? _micCaptureService;
+        private readonly IAudioPlayerService? _micAudioPlayerService;
         private readonly TcpAudioServer _audioServer;
         private readonly TcpAudioClient _audioClient;
 
@@ -165,6 +167,8 @@ namespace LanScreenShare.Desktop
             {
                 _audioCaptureService = new WasapiAudioCaptureService();
                 _audioPlayerService = new WasapiAudioPlayerService();
+                _micCaptureService = new WasapiMicrophoneCaptureService();
+                _micAudioPlayerService = new WasapiAudioPlayerService();
                 _inputSimulatorService = new WindowsInputSimulatorService();
 
                 _audioCaptureService.AudioCaptured += async (s, chunk) =>
@@ -175,9 +179,24 @@ namespace LanScreenShare.Desktop
                     }
                 };
 
+                _micCaptureService.AudioCaptured += async (s, chunk) =>
+                {
+                    if (_isHosting && _audioServer.IsRunning)
+                    {
+                        await _audioServer.BroadcastAudioAsync(chunk);
+                    }
+                };
+
                 _audioClient.AudioReceived += (s, chunk) =>
                 {
-                    _audioPlayerService.PlayChunk(chunk);
+                    if (chunk.Source == AudioSourceType.Microphone)
+                    {
+                        _micAudioPlayerService?.PlayChunk(chunk);
+                    }
+                    else
+                    {
+                        _audioPlayerService?.PlayChunk(chunk);
+                    }
                 };
             }
 
@@ -278,6 +297,42 @@ namespace LanScreenShare.Desktop
                 _audioPlayerService.Volume = _appSettings.AudioVolume;
                 _audioPlayerService.IsMuted = _appSettings.AudioMuted;
                 UpdateAudioUI();
+            }
+
+            var micMuteButton = this.FindControl<Button>("MicMuteButton");
+            if (micMuteButton != null)
+            {
+                micMuteButton.Click += (s, e) => ToggleMicMute();
+            }
+
+            var micVolumeSlider = this.FindControl<Slider>("MicVolumeSlider");
+            if (micVolumeSlider != null)
+            {
+                micVolumeSlider.Value = Math.Clamp((int)Math.Round(_appSettings.MicVolume * 100), 0, 100);
+                micVolumeSlider.PropertyChanged += (s, e) =>
+                {
+                    if (e.Property.Name == nameof(Slider.Value))
+                    {
+                        SetMicVolume((float)Math.Clamp(micVolumeSlider.Value / 100.0, 0.0, 1.0));
+                    }
+                };
+            }
+
+            if (_micAudioPlayerService != null)
+            {
+                _micAudioPlayerService.Volume = _appSettings.MicVolume;
+                _micAudioPlayerService.IsMuted = _appSettings.MicMuted;
+                UpdateMicUI();
+            }
+
+            var micShareCb = this.FindControl<CheckBox>("MicShareCheckBox");
+            if (micShareCb != null)
+            {
+                micShareCb.IsChecked = _appSettings.ShareMicrophone;
+                micShareCb.IsCheckedChanged += (s, e) =>
+                {
+                    SaveCurrentSettings();
+                };
             }
 
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
@@ -917,6 +972,65 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void ToggleMicMute()
+        {
+            if (_micAudioPlayerService != null)
+            {
+                _micAudioPlayerService.IsMuted = !_micAudioPlayerService.IsMuted;
+                if (!_micAudioPlayerService.IsMuted && _micAudioPlayerService.Volume <= 0.01f)
+                {
+                    _micAudioPlayerService.Volume = 0.5f;
+                }
+                UpdateMicUI();
+                SaveCurrentSettings();
+            }
+        }
+
+        private void SetMicVolume(float vol)
+        {
+            if (_micAudioPlayerService != null)
+            {
+                _micAudioPlayerService.Volume = vol;
+                if (vol <= 0.01f)
+                {
+                    _micAudioPlayerService.IsMuted = true;
+                }
+                else if (_micAudioPlayerService.IsMuted)
+                {
+                    _micAudioPlayerService.IsMuted = false;
+                }
+                UpdateMicUI();
+                SaveCurrentSettings();
+            }
+        }
+
+        private void UpdateMicUI()
+        {
+            if (_micAudioPlayerService == null) return;
+
+            bool isMuted = _micAudioPlayerService.IsMuted || _micAudioPlayerService.Volume <= 0.01f;
+            int percent = (int)Math.Round(_micAudioPlayerService.Volume * 100);
+
+            var muteIcon = this.FindControl<PathIcon>("MicMuteIcon");
+            if (muteIcon != null)
+            {
+                muteIcon.Data = (this.FindResource(isMuted ? "IconMicOff" : "IconMic") as StreamGeometry)!;
+                muteIcon.Foreground = new SolidColorBrush(isMuted ? Color.Parse("#EF4444") : Color.Parse("#10B981"));
+            }
+
+            var volumeSlider = this.FindControl<Slider>("MicVolumeSlider");
+            if (volumeSlider != null && Math.Abs(volumeSlider.Value - percent) > 1)
+            {
+                volumeSlider.Value = percent;
+            }
+
+            var volumeText = this.FindControl<TextBlock>("MicVolumeText");
+            if (volumeText != null)
+            {
+                volumeText.Text = $"{percent}%";
+            }
+        }
+
         private void OpenPopoutWindow()
         {
             if (_isPopoutActive) return;
@@ -939,6 +1053,7 @@ namespace LanScreenShare.Desktop
             _popoutWindow.SetRemoteControlState(_remoteControlEnabled);
             _popoutWindow.SetGameModeState(_isGameMode);
             _popoutWindow.SetVolume(_audioPlayerService?.Volume ?? 1.0f, _audioPlayerService?.IsMuted ?? false);
+            _popoutWindow.SetMicVolume(_micAudioPlayerService?.Volume ?? 1.0f, _micAudioPlayerService?.IsMuted ?? false);
             _popoutWindow.SetStretchMode(_currentStretchMode);
 
             if (screenImage?.Source != null)
@@ -1977,6 +2092,7 @@ namespace LanScreenShare.Desktop
                 }
 
                 _appSettings.ShareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
+                _appSettings.ShareMicrophone = this.FindControl<CheckBox>("MicShareCheckBox")?.IsChecked ?? false;
                 _appSettings.AllowRemoteControl = this.FindControl<CheckBox>("AllowRemoteControlCheckBox")?.IsChecked ?? true;
 
                 var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
@@ -1993,6 +2109,8 @@ namespace LanScreenShare.Desktop
 
                 _appSettings.AudioVolume = _audioPlayerService?.Volume ?? 1.0f;
                 _appSettings.AudioMuted = _audioPlayerService?.IsMuted ?? false;
+                _appSettings.MicVolume = _micAudioPlayerService?.Volume ?? 1.0f;
+                _appSettings.MicMuted = _micAudioPlayerService?.IsMuted ?? false;
                 _appSettings.StretchMode = _currentStretchMode == Stretch.Fill ? "Fill" : "Uniform";
                 _appSettings.CaptureSourceId = _currentSource.Id;
                 _appSettings.CaptureSourceName = _currentSource.Name;
@@ -2107,12 +2225,20 @@ namespace LanScreenShare.Desktop
 
                     // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
                     bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
-                    if (shareAudio)
+                    bool shareMic = this.FindControl<CheckBox>("MicShareCheckBox")?.IsChecked ?? false;
+                    if (shareAudio || shareMic)
                     {
                         try
                         {
                             await _audioServer.StartAsync(5002);
-                            _audioCaptureService?.StartCapture();
+                            if (shareAudio)
+                            {
+                                _audioCaptureService?.StartCapture();
+                            }
+                            if (shareMic)
+                            {
+                                _micCaptureService?.StartCapture();
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -2153,6 +2279,7 @@ namespace LanScreenShare.Desktop
                 _streamServer.Stop();
 
                 _audioCaptureService?.StopCapture();
+                _micCaptureService?.StopCapture();
                 _audioServer.Stop();
 
                 _controlServer.Stop();
@@ -2361,6 +2488,13 @@ namespace LanScreenShare.Desktop
                 }
                 UpdateAudioUI();
 
+                var micPanel = this.FindControl<Border>("MicControlPanel");
+                if (micPanel != null)
+                {
+                    micPanel.IsVisible = true;
+                }
+                UpdateMicUI();
+
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
                 if (remoteControlBtn != null)
                 {
@@ -2506,6 +2640,16 @@ namespace LanScreenShare.Desktop
                     UpdateAudioUI();
                 }
 
+                var micPanel = this.FindControl<Border>("MicControlPanel");
+                if (micPanel != null)
+                {
+                    micPanel.IsVisible = _streamClient.IsConnected;
+                }
+                if (_streamClient.IsConnected)
+                {
+                    UpdateMicUI();
+                }
+
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
                 if (remoteControlBtn != null)
                 {
@@ -2588,6 +2732,12 @@ namespace LanScreenShare.Desktop
             if (audioPanel != null)
             {
                 audioPanel.IsVisible = false;
+            }
+
+            var micPanel = this.FindControl<Border>("MicControlPanel");
+            if (micPanel != null)
+            {
+                micPanel.IsVisible = false;
             }
 
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
@@ -2682,7 +2832,9 @@ namespace LanScreenShare.Desktop
             _streamClient.Dispose();
 
             _audioCaptureService?.Dispose();
+            _micCaptureService?.Dispose();
             _audioPlayerService?.Dispose();
+            _micAudioPlayerService?.Dispose();
             _audioServer.Dispose();
             _audioClient.Dispose();
 

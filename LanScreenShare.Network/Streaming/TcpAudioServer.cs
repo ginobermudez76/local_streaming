@@ -110,7 +110,7 @@ namespace LanScreenShare.Network.Streaming
                 writer.Write((short)chunk.Channels);
                 writer.Write((short)chunk.BitsPerSample);
                 writer.Write(chunk.AudioFormat);
-                writer.Write((short)0); // Reservado
+                writer.Write((short)chunk.Source); // 0 = Desktop, 1 = Microphone
                 writer.Write(chunk.Timestamp);
                 writer.Write(chunk.Data);
                 packet = ms.ToArray();

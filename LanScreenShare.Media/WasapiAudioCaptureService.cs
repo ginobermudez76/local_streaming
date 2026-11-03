@@ -43,6 +43,7 @@ namespace LanScreenShare.Media
                         Channels = waveFormat.Channels,
                         BitsPerSample = waveFormat.BitsPerSample,
                         AudioFormat = formatEncoding,
+                        Source = AudioSourceType.Desktop,
                         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
 

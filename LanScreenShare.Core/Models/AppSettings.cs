@@ -11,11 +11,14 @@ namespace LanScreenShare.Core.Models
         public string CaptureSourceId { get; set; } = "screen:0";
         public string CaptureSourceName { get; set; } = "Pantalla 1";
         public bool ShareAudio { get; set; } = true;
+        public bool ShareMicrophone { get; set; } = false;
         public bool AllowRemoteControl { get; set; } = true;
         public string StreamAccessMode { get; set; } = "auto";
         public string ControlAccessMode { get; set; } = "auto";
         public float AudioVolume { get; set; } = 1.0f;
         public bool AudioMuted { get; set; } = false;
+        public float MicVolume { get; set; } = 1.0f;
+        public bool MicMuted { get; set; } = false;
         public string StretchMode { get; set; } = "Uniform";
     }
 }

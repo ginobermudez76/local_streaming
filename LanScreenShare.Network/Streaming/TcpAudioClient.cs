@@ -54,6 +54,7 @@ namespace LanScreenShare.Network.Streaming
                         short channels;
                         short bitsPerSample;
                         short audioFormat;
+                        short sourceTypeVal;
                         long timestamp;
 
                         using (var ms = new MemoryStream(headerBuffer))
@@ -65,7 +66,7 @@ namespace LanScreenShare.Network.Streaming
                             channels = reader.ReadInt16();
                             bitsPerSample = reader.ReadInt16();
                             audioFormat = reader.ReadInt16();
-                            reader.ReadInt16(); // Reserved
+                            sourceTypeVal = reader.ReadInt16(); // 0 = Desktop, 1 = Microphone
                             timestamp = reader.ReadInt64();
                         }
 
@@ -86,6 +87,7 @@ namespace LanScreenShare.Network.Streaming
                             Channels = channels,
                             BitsPerSample = bitsPerSample,
                             AudioFormat = audioFormat,
+                            Source = (AudioSourceType)sourceTypeVal,
                             Timestamp = timestamp
                         };
 

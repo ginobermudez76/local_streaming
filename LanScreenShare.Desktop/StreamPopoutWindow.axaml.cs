@@ -20,6 +20,8 @@ namespace LanScreenShare.Desktop
         public event Action? GameModeToggled;
         public event Action? MuteToggled;
         public event Action<float>? VolumeChanged;
+        public event Action? MicMuteToggled;
+        public event Action<float>? MicVolumeChanged;
         public event Action<Stretch>? StretchModeChanged;
         public event Action<RemoteInputMessage>? RemoteInputSent;
 
@@ -132,6 +134,26 @@ namespace LanScreenShare.Desktop
                         float vol = (float)Math.Clamp(volumeSlider.Value / 100.0, 0.0, 1.0);
                         VolumeChanged?.Invoke(vol);
                         UpdateVolumeText(volumeSlider.Value);
+                    }
+                };
+            }
+
+            var micMuteBtn = this.FindControl<Button>("MicMuteButton");
+            if (micMuteBtn != null)
+            {
+                micMuteBtn.Click += (s, e) => MicMuteToggled?.Invoke();
+            }
+
+            var micVolumeSlider = this.FindControl<Slider>("MicVolumeSlider");
+            if (micVolumeSlider != null)
+            {
+                micVolumeSlider.PropertyChanged += (s, e) =>
+                {
+                    if (e.Property.Name == nameof(Slider.Value))
+                    {
+                        float vol = (float)Math.Clamp(micVolumeSlider.Value / 100.0, 0.0, 1.0);
+                        MicVolumeChanged?.Invoke(vol);
+                        UpdateMicVolumeText(micVolumeSlider.Value);
                     }
                 };
             }
@@ -310,6 +332,32 @@ namespace LanScreenShare.Desktop
         private void UpdateVolumeText(double percent)
         {
             var volumeText = this.FindControl<TextBlock>("AudioVolumeText");
+            if (volumeText != null)
+            {
+                volumeText.Text = $"{(int)Math.Round(percent)}%";
+            }
+        }
+
+        public void SetMicVolume(float volume, bool isMuted)
+        {
+            var volumeSlider = this.FindControl<Slider>("MicVolumeSlider");
+            if (volumeSlider != null)
+            {
+                volumeSlider.Value = Math.Round(volume * 100);
+            }
+            UpdateMicVolumeText(volume * 100);
+
+            var muteIcon = this.FindControl<PathIcon>("MicMuteIcon");
+            if (muteIcon != null)
+            {
+                muteIcon.Data = (this.FindResource(isMuted || volume <= 0.01f ? "IconMicOff" : "IconMic") as StreamGeometry)!;
+                muteIcon.Foreground = new SolidColorBrush(isMuted || volume <= 0.01f ? Avalonia.Media.Color.Parse("#EF4444") : Avalonia.Media.Color.Parse("#10B981"));
+            }
+        }
+
+        private void UpdateMicVolumeText(double percent)
+        {
+            var volumeText = this.FindControl<TextBlock>("MicVolumeText");
             if (volumeText != null)
             {
                 volumeText.Text = $"{(int)Math.Round(percent)}%";
