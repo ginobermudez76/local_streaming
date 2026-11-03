@@ -140,7 +140,7 @@
                         <!-- Quality Slider -->
                         <StackPanel Spacing="4">
                             <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Grid.Column="0" Text="Calidad JPEG" FontSize="11" Foreground="#A1A1AA"/>
+                                <TextBlock Grid.Column="0" x:Name="QualityTitleLabel" Text="Calidad JPEG" FontSize="11" Foreground="#A1A1AA"/>
                                 <TextBlock Grid.Column="1" x:Name="QualityValueLabel" Text="75%" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
                             </Grid>
                             <Slider x:Name="QualitySlider"

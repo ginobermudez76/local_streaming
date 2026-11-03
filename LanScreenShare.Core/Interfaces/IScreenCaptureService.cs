@@ -9,12 +9,13 @@ namespace LanScreenShare.Core.Interfaces
         bool IsCapturing { get; }
         int TargetFps { get; set; }
         int Quality { get; set; }
+        int BitrateMbps { get; set; }
         double ResolutionScale { get; set; }
         int TargetWidth { get; set; }
         int TargetHeight { get; set; }
         string Codec { get; set; }
-        void StartCapture(int targetFps = 30, int quality = 70, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0);
+        void StartCapture(int targetFps = 30, int quality = 70, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8);
         void StopCapture();
-        void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0);
+        void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8);
     }
 }

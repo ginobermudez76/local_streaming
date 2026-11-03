@@ -43,6 +43,17 @@ namespace LanScreenShare.Media
             set => _quality = Math.Clamp(value, 10, 100);
         }
 
+        private volatile int _bitrateMbps = 8;
+        public int BitrateMbps
+        {
+            get => _bitrateMbps;
+            set
+            {
+                _bitrateMbps = Math.Clamp(value, 1, 50);
+                _h264Encoder?.UpdateBitrate(_bitrateMbps * 1_000_000);
+            }
+        }
+
         public double ResolutionScale
         {
             get => _scalePercent / 100.0;
@@ -72,23 +83,25 @@ namespace LanScreenShare.Media
             _hwnd = hwnd;
         }
 
-        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0)
+        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
         {
             TargetFps = targetFps;
             Quality = quality;
+            BitrateMbps = bitrateMbps;
             ResolutionScale = resolutionScale;
             Codec = codec;
             TargetWidth = targetWidth;
             TargetHeight = targetHeight;
         }
 
-        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0)
+        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
         {
             if (IsCapturing)
                 return;
 
             _targetFps = Math.Clamp(targetFps, 1, 120);
             _quality = Math.Clamp(quality, 10, 100);
+            _bitrateMbps = Math.Clamp(bitrateMbps, 1, 50);
             ResolutionScale = resolutionScale;
             Codec = codec;
             TargetWidth = targetWidth;
@@ -273,7 +286,7 @@ namespace LanScreenShare.Media
                     {
                         try
                         {
-                            _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps);
+                            _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps, _bitrateMbps * 1_000_000);
                             byte[] bgraBytes = new byte[finalWidth * finalHeight * 4];
                             Marshal.Copy(bitmapToEncode.GetPixels(), bgraBytes, 0, bgraBytes.Length);
                             encodedBytes = _h264Encoder.EncodeFrame(bgraBytes, finalWidth, finalHeight);

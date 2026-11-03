@@ -32,6 +32,44 @@ namespace LanScreenShare.Media
             MediaFactory.MFStartup().CheckError();
         }
 
+        public void UpdateBitrate(int bitrate)
+        {
+            if (_bitrate == bitrate) return;
+            lock (_lock)
+            {
+                _bitrate = bitrate;
+                if (_encoder != null && _width > 0 && _height > 0)
+                {
+                    try
+                    {
+                        InitializeEncoder(_width, _height);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[H264Encoder] Error actualizando bitrate: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        public void UpdateFps(int targetFps)
+        {
+            int fps = Math.Clamp(targetFps, 15, 120);
+            if (_fps == fps) return;
+            lock (_lock)
+            {
+                _fps = fps;
+                if (_encoder != null && _width > 0 && _height > 0)
+                {
+                    try
+                    {
+                        InitializeEncoder(_width, _height);
+                    }
+                    catch { }
+                }
+            }
+        }
+
         private void InitializeEncoder(int width, int height)
         {
             _encoder?.Dispose();

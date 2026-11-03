@@ -545,6 +545,8 @@ namespace LanScreenShare.Desktop
                 }
                 codecCombo.SelectionChanged += (s, e) =>
                 {
+                    string selCodec = GetSelectedCodec();
+                    UpdateQualitySliderForCodec(selCodec);
                     OnSettingChanged();
                     SaveCurrentSettings();
                 };
@@ -571,9 +573,10 @@ namespace LanScreenShare.Desktop
             var qualitySlider = this.FindControl<Slider>("QualitySlider");
             if (qualitySlider != null)
             {
-                qualitySlider.Value = Math.Clamp(_appSettings.Quality, (int)qualitySlider.Minimum, (int)qualitySlider.Maximum);
+                UpdateQualitySliderForCodec(GetSelectedCodec());
                 qualitySlider.PropertyChanged += (s, e) =>
                 {
+                    if (_isUpdatingQualitySlider) return;
                     if (e.Property.Name == nameof(Slider.Value))
                     {
                         OnSettingChanged();
@@ -1766,7 +1769,7 @@ namespace LanScreenShare.Desktop
                     if (_isHosting && _screenCaptureService is DxgiScreenCaptureService)
                     {
                         UpdateStatus($"DXGI no disponible en esta pantalla ({ex.Message}), cambiando a GDI...", "#F59E0B");
-                        SwitchCaptureSource(_currentSource, "gdi", GetSelectedFps(), 75, 1.0, GetSelectedCodec());
+                        SwitchCaptureSource(_currentSource, "gdi", GetSelectedFps(), _appSettings.Quality, 1.0, GetSelectedCodec(), 0, 0, _appSettings.BitrateMbps);
                     }
                 });
             };
@@ -1796,12 +1799,14 @@ namespace LanScreenShare.Desktop
             if (_isHosting)
             {
                 int fps = GetSelectedFps();
-                int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
-                GetSelectedResolution(out int targetW, out int targetH, out double scale);
                 string engine = GetSelectedEngine();
                 string codec = GetSelectedCodec();
+                int sliderVal = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? (codec == "h264" ? 8 : 75));
+                int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
+                int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
+                GetSelectedResolution(out int targetW, out int targetH, out double scale);
 
-                SwitchCaptureSource(source, engine, fps, quality, scale, codec, targetW, targetH);
+                SwitchCaptureSource(source, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
                 UpdateStatus($"Transmitiendo: {source.Name}", "#22C55E");
             }
         }
@@ -1839,7 +1844,46 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void SwitchCaptureSource(CaptureSource source, string engine, int fps, int quality, double scale, string codec, int targetW = 0, int targetH = 0)
+                private bool _isUpdatingQualitySlider = false;
+
+        private void UpdateQualitySliderForCodec(string codec)
+        {
+            var slider = this.FindControl<Slider>("QualitySlider");
+            var title = this.FindControl<TextBlock>("QualityTitleLabel");
+            var valueLabel = this.FindControl<TextBlock>("QualityValueLabel");
+            if (slider == null || title == null || valueLabel == null) return;
+
+            _isUpdatingQualitySlider = true;
+            try
+            {
+                if (codec == "h264")
+                {
+                    title.Text = "Tasa de Bits (Bitrate H.264)";
+                    slider.Minimum = 2;
+                    slider.Maximum = 25;
+                    slider.SmallChange = 1;
+                    slider.LargeChange = 5;
+                    slider.Value = Math.Clamp(_appSettings.BitrateMbps, 2, 25);
+                    valueLabel.Text = $"{(int)slider.Value} Mbps";
+                }
+                else
+                {
+                    title.Text = "Calidad de Imagen (JPEG)";
+                    slider.Minimum = 20;
+                    slider.Maximum = 95;
+                    slider.SmallChange = 5;
+                    slider.LargeChange = 10;
+                    slider.Value = Math.Clamp(_appSettings.Quality, 20, 95);
+                    valueLabel.Text = $"{(int)slider.Value}%";
+                }
+            }
+            finally
+            {
+                _isUpdatingQualitySlider = false;
+            }
+        }
+
+        private void SwitchCaptureSource(CaptureSource source, string engine, int fps, int quality, double scale, string codec, int targetW = 0, int targetH = 0, int bitrateMbps = 8)
         {
             _screenCaptureService.StopCapture();
             _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
@@ -1847,7 +1891,7 @@ namespace LanScreenShare.Desktop
 
             _screenCaptureService = CreateCaptureService(source, engine);
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
-            _screenCaptureService.StartCapture(fps, quality, scale, codec, targetW, targetH);
+            _screenCaptureService.StartCapture(fps, quality, scale, codec, targetW, targetH, bitrateMbps);
         }
 
         private void OnEngineChanged()
@@ -1855,12 +1899,14 @@ namespace LanScreenShare.Desktop
             if (_isHosting)
             {
                 int fps = GetSelectedFps();
-                int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
-                GetSelectedResolution(out int targetW, out int targetH, out double scale);
                 string engine = GetSelectedEngine();
                 string codec = GetSelectedCodec();
+                int sliderVal = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? (codec == "h264" ? 8 : 75));
+                int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
+                int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
+                GetSelectedResolution(out int targetW, out int targetH, out double scale);
 
-                SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH);
+                SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
                 string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
                 UpdateStatus($"Cambiado a motor {engineName} ({codec.ToUpper()}) en caliente", "#22C55E");
             }
@@ -1868,9 +1914,9 @@ namespace LanScreenShare.Desktop
         private void OnSettingChanged()
         {
             int fps = GetSelectedFps();
-            int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
-            GetSelectedResolution(out int targetW, out int targetH, out double scale);
             string codec = GetSelectedCodec();
+            int sliderVal = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? (codec == "h264" ? 8 : 75));
+            GetSelectedResolution(out int targetW, out int targetH, out double scale);
 
             var fpsLabel = this.FindControl<TextBlock>("FpsValueLabel");
             if (fpsLabel != null)
@@ -1881,8 +1927,11 @@ namespace LanScreenShare.Desktop
             var qualityLabel = this.FindControl<TextBlock>("QualityValueLabel");
             if (qualityLabel != null)
             {
-                qualityLabel.Text = $"{quality}%";
+                qualityLabel.Text = codec == "h264" ? $"{sliderVal} Mbps" : $"{sliderVal}%";
             }
+
+            int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
+            int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
 
             var scaleLabel = this.FindControl<TextBlock>("ScaleValueLabel");
             if (scaleLabel != null)
@@ -1897,7 +1946,7 @@ namespace LanScreenShare.Desktop
                 }
             }
 
-            _screenCaptureService.UpdateSettings(fps, quality, scale, codec, targetW, targetH);
+            _screenCaptureService.UpdateSettings(fps, quality, scale, codec, targetW, targetH, bitrateMbps);
         }
 
         private void SaveCurrentSettings()
@@ -1910,7 +1959,16 @@ namespace LanScreenShare.Desktop
                 _appSettings.Engine = GetSelectedEngine();
                 _appSettings.Codec = GetSelectedCodec();
                 _appSettings.Fps = GetSelectedFps();
-                _appSettings.Quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
+                string curCodec = GetSelectedCodec();
+                int currentSliderVal = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? (curCodec == "h264" ? 8 : 75));
+                if (curCodec == "h264")
+                {
+                    _appSettings.BitrateMbps = currentSliderVal;
+                }
+                else
+                {
+                    _appSettings.Quality = currentSliderVal;
+                }
 
                 var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
                 if (scaleCombo?.SelectedItem is ComboBoxItem scaleItem && scaleItem.Tag is string tag)
@@ -2035,14 +2093,16 @@ namespace LanScreenShare.Desktop
                 try
                 {
                     int fps = GetSelectedFps();
-                    int quality = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? 75);
-                    GetSelectedResolution(out int targetW, out int targetH, out double scale);
                     string engine = GetSelectedEngine();
                     string codec = GetSelectedCodec();
+                    int sliderVal = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? (codec == "h264" ? 8 : 75));
+                    int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
+                    int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
+                    GetSelectedResolution(out int targetW, out int targetH, out double scale);
 
                     // 1. Iniciar servidor de video (Puerto 5001)
                     await _streamServer.StartAsync(5001);
-                    SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH);
+                    SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
                     _inputSimulatorService?.SetTargetSource(_currentSource);
 
                     // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado

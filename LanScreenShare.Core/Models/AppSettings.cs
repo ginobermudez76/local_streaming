@@ -6,6 +6,7 @@ namespace LanScreenShare.Core.Models
         public string Codec { get; set; } = "jpeg";
         public int Fps { get; set; } = 30;
         public int Quality { get; set; } = 75;
+        public int BitrateMbps { get; set; } = 8;
         public string ResolutionTag { get; set; } = "";
         public string CaptureSourceId { get; set; } = "screen:0";
         public string CaptureSourceName { get; set; } = "Pantalla 1";
