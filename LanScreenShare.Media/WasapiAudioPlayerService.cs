@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
@@ -25,33 +26,13 @@ namespace LanScreenShare.Media
         public bool IsMuted
         {
             get => _isMuted;
-            set
-            {
-                _isMuted = value;
-                lock (_lock)
-                {
-                    if (_wasapiOut != null)
-                    {
-                        _wasapiOut.Volume = _isMuted ? 0f : _volume;
-                    }
-                }
-            }
+            set => _isMuted = value;
         }
 
         public float Volume
         {
             get => _volume;
-            set
-            {
-                _volume = Math.Clamp(value, 0f, 1f);
-                lock (_lock)
-                {
-                    if (_wasapiOut != null && !_isMuted)
-                    {
-                        _wasapiOut.Volume = _volume;
-                    }
-                }
-            }
+            set => _volume = Math.Clamp(value, 0f, 1f);
         }
 
         public void PlayChunk(CapturedAudioChunk chunk)
@@ -70,7 +51,38 @@ namespace LanScreenShare.Media
 
                 if (_waveProvider != null)
                 {
+                    float currentVol = _isMuted ? 0f : _volume;
+                    ApplyVolume(chunk.Data, chunk.AudioFormat, currentVol);
                     _waveProvider.AddSamples(chunk.Data, 0, chunk.Data.Length);
+                }
+            }
+        }
+
+        private static void ApplyVolume(byte[] data, int audioFormat, float volume)
+        {
+            if (volume <= 0.001f)
+            {
+                Array.Clear(data, 0, data.Length);
+                return;
+            }
+
+            if (Math.Abs(volume - 1.0f) < 0.001f)
+                return;
+
+            if (audioFormat == 3) // IEEE Float 32-bit
+            {
+                var floatSpan = MemoryMarshal.Cast<byte, float>(data.AsSpan());
+                for (int i = 0; i < floatSpan.Length; i++)
+                {
+                    floatSpan[i] *= volume;
+                }
+            }
+            else // PCM 16-bit
+            {
+                var shortSpan = MemoryMarshal.Cast<byte, short>(data.AsSpan());
+                for (int i = 0; i < shortSpan.Length; i++)
+                {
+                    shortSpan[i] = (short)Math.Clamp((int)Math.Round(shortSpan[i] * volume), short.MinValue, short.MaxValue);
                 }
             }
         }
@@ -99,7 +111,6 @@ namespace LanScreenShare.Media
             {
                 _wasapiOut = new WasapiOut(AudioClientShareMode.Shared, 25);
                 _wasapiOut.Init(_waveProvider);
-                _wasapiOut.Volume = _isMuted ? 0f : _volume;
                 _wasapiOut.Play();
                 Console.WriteLine($"[WASAPI Out] Reproductor de audio iniciado ({chunk.SampleRate}Hz, {chunk.Channels}ch, {chunk.BitsPerSample}bits)");
             }
