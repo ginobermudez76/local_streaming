@@ -124,5 +124,6 @@ flowchart TD
 ---
 
 ## 📝 Registro de Actualizaciones del Plan
-* **2026-11-04:** Creación inicial del plan en la rama `feature/ui-and-architecture-refinement` tras el análisis y contraste técnico con la IA externa.
+* **2026-11-04 (Paso 2):** Incorporación del Inventario Funcional Verificable y matriz de limitaciones conocidas (Reconexión automática ausente, control multicliente concurrente sin exclusividad, límites de DXGI ante pantalla completa exclusiva / minimización de ventanas, y compresión de audio PCM).
+* **2026-11-04 (Paso 1):** Creación inicial del plan en la rama `feature/ui-and-architecture-refinement` tras el análisis y contraste técnico con la IA externa.
 
