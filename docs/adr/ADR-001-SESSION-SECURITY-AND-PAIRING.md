@@ -1,6 +1,6 @@
 # ADR-001: Arquitectura de Seguridad de Sesión, Autenticación Mutua (mTLS) y Emparejamiento en LanScreenShare
 
-* **Estado:** Propuesto (Revisión 2 — Protocolo Completo y Especificación Rigurosa)
+* **Estado:** Propuesto (Revisión 3 — Aprobación Técnica Condicionada Resuelta)
 * **Fecha:** 2026-11-04
 * **Rama:** `feature/ui-and-architecture-refinement`
 * **Módulos afectados:** `LanScreenShare.Core`, `LanScreenShare.Network`, `LanScreenShare.Desktop`
@@ -12,7 +12,7 @@
 
 LanScreenShare opera mediante una topología de red local multi-puerto sobre TCP/UDP:
 * **Puerto 5000 (UDP):** Descubrimiento y anuncio de presencia en la subred.
-* **Puerto 5001 (TCP):** Transmisión de vídeo (fotogramas H.264 / JPEG con encabezado binario de 32 bytes).
+* **Puerto 5001 (TCP):** Transmisión de vídeo (fotogramas H.264 / JPEG con encabezado binario de 32 bytes) y señalización de sesión.
 * **Puerto 5002 (TCP):** Transmisión de audio (muestras PCM sin comprimir).
 * **Puerto 5003 (TCP):** Control remoto bidireccional (eventos de ratón y teclado inyectados en Windows mediante `SendInput`).
 
@@ -31,11 +31,11 @@ LanScreenShare opera mediante una topología de red local multi-puerto sobre TCP
 | Vector de Amenaza | Descripción | Mitigación en este ADR |
 | :--- | :--- | :--- |
 | **T1: Suplantación de identidad (Spoofing)** | Un equipo de la LAN finge ser un visor legítimo o suplanta su dirección IP mediante ARP spoofing. | Certificados X.509 por dispositivo con mTLS 1.3 y emparejamiento con *Certificate Pinning* de huella canónica SHA-256. |
-| **T2: Interceptación y espionaje (Eavesdropping)** | Un tercero en la misma red Wi-Fi/cableada captura paquetes de vídeo o audio. | Cifrado obligatorio TLS 1.3 con conjuntos de cifrado modernos (`TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`). |
+| **T2: Interceptación y espionaje (Eavesdropping)** | Un tercero en la misma red Wi-Fi/cableada captura paquetes de vídeo o audio. | Cifrado obligatorio TLS 1.3 con suites modernas (`TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`). |
 | **T3: Conexión de control no autorizada** | Un atacante se conecta directamente al puerto 5003 sin pasar por el flujo de vídeo para inyectar entradas. | El puerto 5003 no admite datos sin presentar un `ChannelAttachmentToken` atómico de un solo uso derivado de una sesión mTLS autorizada. |
 | **T4: Ataque de repetición (Replay)** | Reenvío de paquetes de control capturados para ejecutar comandos no deseados. | Números de secuencia monotónicos `ulong` por sesión y protección anti-replay inherente de TLS 1.3. |
 | **T5: Confusión de sesión multicliente** | Eventos de múltiples visores entremezclados en el control del anfitrión. | Principio de *Single Active Controller* (exclusividad estricta garantizada por bloqueo atómico). |
-| **T6: Man-in-the-Middle (MitM) en primer contacto** | Sustitución de identidad durante el descubrimiento o emparejamiento inicial. | Protocolo SAS de 6 dígitos derivado criptográficamente del **TLS Exporter Master Secret** y comparado fuera de banda. |
+| **T6: Man-in-the-Middle (MitM) en primer contacto** | Sustitución de identidad durante el descubrimiento o emparejamiento inicial. | Protocolo SAS de 6 dígitos derivado criptográficamente del Channel Binding / Certificados DER y comparado fuera de banda. |
 
 ### 2.2 Amenazas Fuera de Alcance (Out of Scope)
 * **Endpoints comprometidos:** Si el visor emparejado contiene malware o un troyano con acceso a su clave privada, este ADR no puede distinguir comandos legítimos del usuario de comandos inyectados por el malware en ese visor.
@@ -56,7 +56,7 @@ LanScreenShare opera mediante una topología de red local multi-puerto sobre TCP
 
 ---
 
-## 4. Identidad Criptográfica y Ciclo de Vida
+## 4. Identidad Criptográfica, Ciclo de Vida y Recuperación Segura
 
 ### 4.1 Abstracción de Almacenamiento de Claves
 Para no acoplar `LanScreenShare.Core` a Windows ni a DPAPI, se define una abstracción:
@@ -66,229 +66,160 @@ namespace LanScreenShare.Core.Security
     public interface IIdentityKeyStorage
     {
         Task<X509Certificate2> GetOrCreateIdentityCertificateAsync();
-        Task DeleteIdentityAsync();
+        Task ResetIdentityAsync();
     }
 }
 ```
 * **Implementación Windows (`WindowsDpapiIdentityKeyStorage`):**
   * Almacena el certificado en `%LocalAppData%\LanScreenShare\security\identity.pfx`.
   * La clave privada se protege mediante **DPAPI** de Windows con `DataProtectionScope.CurrentUser`.
-* **Ciclo de vida y contingencias:**
-  * **Generación:** Al primer arranque, se genera un par de claves asimétricas **ECDSA (curva secp256r1 / NIST P-256)** con certificado autofirmado X.509v3, vigencia de 2 años, y extensiones `ClientAuth` + `ServerAuth`.
-  * **Pérdida de perfil o fallo de descifrado DPAPI:** Si el perfil de Windows se corrompe o cambia de usuario provocando `CryptographicException` al leer el PFX, la aplicación:
-    1. Archiva el PFX defectuoso con nombre `identity.pfx.corrupted_{timestamp}`.
-    2. Genera una identidad nueva limpia.
-    3. Notifica al usuario en la UI que sus emparejamientos previos han quedado invalidados y requerirá un nuevo emparejamiento.
-  * **Eliminación y Revocación de Dispositivos:**
-    * El anfitrión dispone de un almacén `trusted_devices.json` (cifrado con DPAPI).
-    * El usuario puede revocar y borrar cualquier visor con un clic. Al eliminarlo, cualquier sesión activa asociada a su huella se termina inmediatamente en `SessionAuthority`.
+* **Generación:** Al primer arranque, se genera un par de claves asimétricas **ECDSA (curva secp256r1 / NIST P-256)** con certificado autofirmado X.509v3, vigencia de 2 años, y extensiones EKU `ClientAuth` (`1.3.6.1.5.5.7.3.2`) + `ServerAuth` (`1.3.6.1.5.5.7.3.1`).
+* **Política de Falla Segura ante Corrupción (Sin Regeneración Silenciosa):**
+  * Si el perfil de Windows se corrompe o cambia de usuario provocando `CryptographicException` al leer el PFX:
+    * **La aplicación NO regenera silenciosamente la identidad.**
+    * Se bloquea el inicio del servicio y se notifica en UI:
+      > *"Fallo de Integridad Criptográfica: La clave privada del dispositivo no pudo descifrarse con el perfil actual de Windows.*
+      > *[Reintentar] [Restablecer Identidad (Se invalidarán todos los emparejamientos previos)]"*
+    * Solo mediante la confirmación explícita del usuario se genera una clave nueva y se purgan los registros antiguos.
 
 ---
 
-## 5. Protocolo de Emparejamiento SAS (Prevención Rigurosa de MitM)
+## 5. El Emparejamiento Inicial frente a mTLS: Las Dos Fases de Conexión
 
-Un simple HMAC-SHA256 sobre certificados autofirmados no evita un ataque MitM si el atacante intercepta la conexión y emite sus propios certificados hacia cada extremo. Para garantizar resistencia absoluta contra MitM:
+Para resolver la aparente contradicción entre la validación estricta de mTLS y la necesidad de conectar un dispositivo aún no emparejado:
 
-### 5.1 Especificación Matemática del SAS
-El código SAS se deriva obligatoriamente del **TLS Exporter Master Secret (RFC 8446, Sección 7.5)** de la conexión TLS 1.3 activa, garantizando que el código dependa intrínsecamente del secreto de sesión negociado:
+### 5.1 Fase A: Modo de Emparejamiento Provisional (`ProvisionalPairing`)
+1. **Intención de Emparejamiento:** El visor inicia la conexión al puerto 5001 marcando el prefijo de intención de emparejamiento.
+2. **Comportamiento en `RemoteCertificateValidationCallback`:**
+   * En este modo provisional, el anfitrión valida que el certificado sea sintácticamente correcto, tenga fechas válidas y el EKU adecuado, pero **NO exige que la huella esté en `IPairedDeviceStore`**.
+3. **Restricción Absoluta de Capacidades:**
+   * La sesión se crea con estado `SessionState.ProvisionalPairing`.
+   * **Cero streaming de vídeo, cero audio, cero control remoto.**
+   * Los únicos mensajes procesados son `PAIRING_INIT`, `PAIRING_CHALLENGE`, `PAIRING_SAS_VERIFY`, `PAIRING_CONFIRM`, `PAIRING_ABORT`.
+   * **Timeout Estricto:** Máximo 45 segundos; si expira, el socket se destruye.
+   * **Concurrencia:** Máximo 1 intento de emparejamiento provisional simultáneo para prevenir DoS.
 
-1. **Extracción del Secreto de Canal:**
-   $$\text{ExporterSecret} = \text{SslStream.GetTlsExporter}(\text{label} = \text{"EXPORTER-LanScreenShare-SAS"}, \text{context} = \emptyset, \text{length} = 32)$$
-2. **Generación de Nonces de 128 bits:**
-   * El anfitrión genera criptográficamente $N_{\text{Host}} \in \{0,1\}^{128}$.
-   * El visor genera criptográficamente $N_{\text{Viewer}} \in \{0,1\}^{128}$.
+### 5.2 Fase B: Modo de Sesión Normal (Dispositivos Emparejados)
+* En conexiones ordinarias, `RemoteCertificateValidationCallback` aplica **Certificate Pinning estricto**:
+  * Si la huella SHA-256 del certificado del visor no existe en `IPairedDeviceStore` o está en la lista de revocados, el callback retorna `false` y el handshake TLS se interrumpe inmediatamente a nivel de transporte.
+
+---
+
+## 6. Especificación Completa del Protocolo SAS (Short Authentication String)
+
+### 6.1 Disponibilidad de API en .NET 9
+En .NET 9, la propuesta de API `SslStream.GetTlsExporter` (`dotnet/runtime #112529`) está en proceso de estandarización. Por consiguiente, para garantizar compatibilidad nativa sin APIs no publicadas, la vinculación criptográfica del SAS utiliza **`SslStream.TransportContext.GetChannelBinding(ChannelBindingKind.Endpoint)`** (RFC 5929 `tls-server-end-point`), complementado con el hash directo de los certificados mutuos:
+
+### 6.2 Construcción Matemática del SAS
+1. **Obtención del Channel Binding:**
+   $$\text{CBT} = \text{sslStream.TransportContext.GetChannelBinding(ChannelBindingKind.Endpoint)}$$
+2. **Generación de Nonces Criptográficos:**
+   * El anfitrión genera $N_{\text{Host}} \in \{0,1\}^{128}$ usando `RandomNumberGenerator.GetBytes(16)`.
+   * El visor genera $N_{\text{Viewer}} \in \{0,1\}^{128}$ usando `RandomNumberGenerator.GetBytes(16)`.
 3. **Transcripción Canónica:**
-   $$\text{Transcript} = \text{ProtocolVersion (uint32)} \parallel \text{DER}(C_{\text{Host}}) \parallel \text{DER}(C_{\text{Viewer}}) \parallel N_{\text{Host}} \parallel N_{\text{Viewer}}$$
+   $$\text{Transcript} = \text{ProtocolVersion (uint32)} \parallel \text{DER}(C_{\text{Host}}) \parallel \text{DER}(C_{\text{Viewer}}) \parallel N_{\text{Host}} \parallel N_{\text{Viewer}} \parallel \text{CBT}$$
 4. **Cálculo del SAS:**
-   $$\text{SAS\_Hash} = \text{HMAC-SHA256}(\text{Key} = \text{ExporterSecret}, \text{Message} = \text{Transcript})$$
-   $$\text{SAS\_Code} = \text{Int32}(\text{SAS\_Hash}[0..3]) \pmod{1\,000\,000} \quad \text{(Formato: 6 dígitos, ej. 482-915)}$$
+   $$\text{SAS\_Hash} = \text{HMAC-SHA256}(\text{Key} = \text{CBT}, \text{Message} = \text{Transcript})$$
+   $$\text{SAS\_Code} = \text{Int32}(\text{SAS\_Hash}[0..3]) \pmod{1\,000\,000} \quad \text{(Formato visual: 6 dígitos: } XXX\text{-}XXX\text{)}$$
 
-### 5.2 Flujo de Validación Humana
+### 6.3 Comparación Humana Obligatoria
+* El código de 6 dígitos se muestra simultáneamente en ambas pantallas.
+* Si un intermediario MitM intercepta la conexión, habrá dos conexiones TLS distintas con certificados y tokens CBT diferentes, por lo que los códigos diferirán de forma garantizada.
+* La huella solo se escribe en `IPairedDeviceStore` cuando el anfitrión pulsa `[Confirmar Código Coincidente]`.
+
+---
+
+## 7. Validación Rigurosa de Certificados
+
+La función `ValidateRemoteCertificate` valida en cada conexión:
+1. `SslStream.SslProtocol == SslProtocols.Tls13`.
+2. Vigencia: `NotBefore <= DateTime.UtcNow <= NotAfter`.
+3. Extensiones EKU: debe contener `ClientAuth` (`1.3.6.1.5.5.7.3.2`) en el visor o `ServerAuth` (`1.3.6.1.5.5.7.3.1`) en el anfitrión.
+4. Longitud de clave: Mínimo ECDSA P-256 o RSA 2048 bits.
+5. Huella SHA-256: contrastada contra `IPairedDeviceStore`.
+
+---
+
+## 8. Consumo Atómico y Seguro de `ChannelAttachmentToken`
+
+Para evitar que una solicitud maliciosa o malformada invalide un token legítimo:
+
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant V as Visor (Cliente)
-    participant H as Anfitrión (Servidor 5001)
-
-    Note over V,H: Handshake TLS 1.3 mTLS completado (Certificados no confiables aún)
-    V->>H: PAIRING_INIT (Nonce_Viewer)
-    H->>V: PAIRING_CHALLENGE (Nonce_Host)
-    Note over V: Calcula SAS_Code_Viewer usando TLS Exporter Secret
-    Note over H: Calcula SAS_Code_Host usando TLS Exporter Secret
-    H-->>H: Muestra en pantalla: "Código de Verificación: [482-915]"
-    V-->>V: Muestra en pantalla: "Código de Verificación: [482-915]"
-    Note over V,H: Ambos usuarios confirman verbalmente o visualmente que el código coincide
-    H->>H: Anfitrión presiona [Confirmar Emparejamiento]
-    H->>V: PAIRING_CONFIRMED (Huella guardada en trusted_devices)
-    Note over V,H: Dispositivo queda formalmente en estado EMPAREJADO
-```
-* **Protección MitM:** Si un atacante intercepta la conexión, tendrá dos sesiones TLS separadas con secretos de exportador distintos ($\text{ExporterSecret}_1 \neq \text{ExporterSecret}_2$), por lo que los códigos SAS calculados en cada pantalla serán completamente diferentes, alertando a los usuarios de inmediato.
-* **Timeout:** Si el emparejamiento no se confirma en 60 segundos, se cancela y se cierra el socket.
-
----
-
-## 6. Validación Estricta de Certificados en mTLS 1.3
-
-La política en `RemoteCertificateValidationCallback` se ejecuta sin excepciones:
-1. **Comprobación de Versión:** Verificar que `SslStream.SslProtocol == SslProtocols.Tls13`.
-2. **Cálculo de Huella Canónica:**
-   $$\text{Fingerprint} = \text{SHA256}(\text{Certificate.RawData})$$
-3. **Comprobación en `IPairedDeviceStore`:**
-   * Si el dispositivo está en la lista de revocados o ausente en el almacén de emparejados (y no está en curso un flujo explícito de emparejamiento SAS):
-     * El callback retorna `false`.
-     * El handshake TLS falla a nivel de capa de transporte y el socket se desconecta de inmediato.
-
----
-
-## 7. Tokens de Asociación de Canal (`ChannelAttachmentToken`)
-
-Para asociar los puertos 5002 (audio) y 5003 (control) a una sesión sin depender del conocimiento del `SessionId`:
-
-### 7.1 Estructura del Token
-```csharp
-public sealed record ChannelAttachmentToken(
-    string TokenId,             // 128 bits criptográficos en Base64Url
-    string SessionId,           // Vinculado unívocamente a la sesión
-    string PeerFingerprint,     // Vinculado a la huella del visor mTLS autenticado
-    ChannelType AllowedChannel, // Audio (5002) o RemoteControl (5003)
-    DateTime ExpiresAt          // 15 segundos exactos desde emisión
-);
+flowchart TD
+    A["Cliente envía CHANNEL_ATTACH (TokenId, SessionId, Channel)"] --> B{"¿Sesión existe y está activa?"}
+    B -- No --> C["Retornar 404 (SessionNotFound) y cerrar socket"]
+    B -- Sí --> D{"¿Token existe en memoria?"}
+    D -- No --> E["Retornar 404 (TokenNotFound) y cerrar socket"]
+    D -- Sí --> F{"¿Token coincide con SessionId y PeerFingerprint?"}
+    F -- No --> G["Retornar 401 (Unauthorized) y cerrar socket"]
+    F -- Sí --> H{"¿Token coincide con AllowedChannel?"}
+    H -- No --> I["Retornar 400 (ChannelMismatch). NO CONSUMIR TOKEN."]
+    H -- Sí --> J{"¿Token expiró (DateTime.UtcNow > ExpiresAt)?"}
+    J -- Sí --> K["Consumir token y retornar 410 (TokenExpired)."]
+    J -- No --> L["Consumo atómico: _tokens.TryRemove(TokenId). Registrar canal en sesión. Retornar 200."]
 ```
 
-### 7.2 Consumo Atómico y Reglas de Invalidez
-* **Consumo atómico:** En `SessionAuthority`, los tokens se resuelven con:
-  ```csharp
-  if (_attachmentTokens.TryRemove(tokenId, out var token))
-  {
-      // Validar caducidad, huella y tipo de canal
-  }
-  ```
-  Si dos conexiones TCP intentan usar el mismo token a la vez, solo una puede retirarlo de memoria. La segunda fallará y se cerrará su socket inmediatamente.
-* **Incompatibilidad de canal:** Un token expedido para `Audio` es rechazado de inmediato si se presenta en el puerto 5003.
-* **Invalidación en Cascada:** Al terminar o revocar la sesión primaria 5001, todos los tokens pendientes de esa sesión son eliminados atómicamente de memoria.
+* **Preservación ante error de canal:** Si un token expedido para Audio se presenta por error en el puerto 5003, **no se destruye**. Se rechaza la solicitud pero el token permanece disponible para su canal legítimo hasta que expire.
+* **Invalidación en cascada:** Al cerrar la sesión primaria 5001, todos los tokens asociados a su `SessionId` se purgan inmediatamente.
 
 ---
 
-## 8. Exclusividad y Revocación Segura de Control Remoto
+## 9. `InjectedInputTracker`: Coherencia, Serialización y Resultados Parciales
 
-### 8.1 Garantía de Atomicidad de Controlador Único (*Single Active Controller*)
-La asignación de control en `SessionAuthority` es estrictamente atómica para evitar condiciones de carrera:
-
-```csharp
-public bool TryAcquireControl(string sessionId, out string? failureReason)
-{
-    lock (_controlLock)
-    {
-        if (_activeControllerSessionId != null && _activeControllerSessionId != sessionId)
-        {
-            failureReason = "ControllerConflict"; // 409
-            return false;
-        }
-
-        if (!_sessions.TryGetValue(sessionId, out var session) || session.ControlState != RemoteControlState.Granted)
-        {
-            failureReason = "Unauthorized"; // 401
-            return false;
-        }
-
-        _activeControllerSessionId = sessionId;
-        failureReason = null;
-        return true;
-    }
-}
-```
-
-### 8.2 Rastreador de Entradas Inyectadas (`InjectedInputTracker`) y Liberación Segura
-> [!CAUTION]
-> Queda estrictamente prohibida la emisión indiscriminada de `KEYUP` para modificadores de sistema (Ctrl, Alt, Shift). Solo deben liberarse las teclas y botones que LanScreenShare haya inyectado efectivamente.
-
-1. **Registro Exacto:**
-   * `InjectedInputTracker` mantiene concurrentemente las teclas virtuales (`ushort`) y botones de ratón que el software ha presionado con `KeyDown`/`MouseDown` y que aún no han recibido su respectivo `KeyUp`/`MouseUp`.
-2. **Liberación Idempotente y Segura:**
-   Ante revocación en UI, desconexión del socket 5003 o excepción en `SendInput`:
-   ```csharp
-   public void ReleaseAllInjectedInputs()
-   {
-       lock (_trackerLock)
-       {
-           foreach (var vk in _activeVirtualKeys)
-           {
-               SendVirtualKeyUp(vk);
-           }
-           _activeVirtualKeys.Clear();
-
-           foreach (var btn in _activeMouseButtons)
-           {
-               SendMouseButtonUp(btn);
-           }
-           _activeMouseButtons.Clear();
-       }
-   }
-   ```
-   Si el usuario físico en el anfitrión está presionando la tecla Shift en su teclado local, el tracker no interferirá porque esa tecla no fue inyectada por LanScreenShare.
+1. **Gestión de Resultados Parciales de `SendInput`:**
+   * En Windows, `SendInput` devuelve la cantidad de eventos efectivamente inyectados:
+     ```csharp
+     uint inserted = SendInput((uint)events.Length, events, Marshal.SizeOf<INPUT>());
+     ```
+   * Solo los primeros `inserted` eventos se incorporan al conjunto de teclas/botones activos en el tracker.
+2. **Serialización Estricta:**
+   * Las operaciones de inyección y el estado del tracker están protegidos por un `lock (_inputLock)` para prevenir condiciones de carrera entre hilos de lectura y cancelación.
+3. **Liberación Idempotente Exclusiva:**
+   * Ante desconexión o revocación, el tracker emite `KEYUP` / `MOUSEBUTTONUP` **únicamente sobre las teclas registradas que LanScreenShare insertó**.
+   * Se prohíbe terminantemente la emisión ciega de modificadores universales. El teclado físico del anfitrión no es interferido.
 
 ---
 
-## 9. Números de Secuencia en el Canal de Control
+## 10. Protocolo LSI2 y Compatibilidad
 
-Dentro del canal TLS del puerto 5003, los eventos de control incorporan un encabezado binario de 28 bytes:
-* `Magic` (4 bytes): `0x4C534932` ("LSI2").
-* `SequenceNumber` (8 bytes, `ulong`): Comienza en `1` al negociar el canal.
-* `Timestamp` (8 bytes, `ulong`): Timestamp monotónico (`Stopwatch.GetTimestamp()`).
-* `Payload` (8 bytes): Tipo de evento, X/Y normalizado, botón/tecla.
-
-### Reglas de Secuencia
-1. **Ámbito:** Por canal de control dentro de la sesión activa.
-2. **Validación:** Cada mensaje recibido debe cumplir:
-   $$\text{Seq}_{\text{nuevo}} = \text{Seq}_{\text{esperado}}$$
-   Si $\text{Seq}_{\text{nuevo}} \le \text{Seq}_{\text{anterior}}$, el mensaje se descarta como duplicado o reordenado.
-   Si $\text{Seq}_{\text{nuevo}} > \text{Seq}_{\text{esperado}}$, se registra un salto de paquete (posible pérdida o manipulación) y se fuerza un reseteo de estado de entradas.
-3. **Desbordamiento:** El tipo `ulong` (64 bits) monotónico es virtualmente imposible de desbordar (a 1.000 eventos/segundo tardaría más de 584 millones de años).
+* **Formato del Encabezado LSI2 (28 bytes):**
+  * `Magic` (4 bytes): `0x4C534932` ("LSI2").
+  * `SequenceNumber` (8 bytes, `ulong` monotónico).
+  * `Timestamp` (8 bytes, `ulong` monotónico via `Stopwatch.GetTimestamp()`).
+  * `Payload` (8 bytes): EventType (1), Button (1), WheelDelta (2), KeyCode (4).
+* **Rechazo de Versiones Anteriores (Sin Fallback):**
+  * Si un cliente intenta conectarse con el magic anterior `LSI1` (20 bytes), el anfitrión responde con error de protocolo `400 BadProtocolVersion` y desconecta el socket.
 
 ---
 
-## 10. Protocolo Binario y Protección contra Agotamiento de Recursos (DoS)
+## 11. Límites de Recursos y Protección Anti-DoS
 
-### 10.1 Códigos de Estado Propios de la Aplicación
-LanScreenShare utiliza un protocolo binario propio sobre TCP; no utiliza HTTP. Los códigos de error numéricos son valores `ushort` de 2 bytes transportados en el encabezado de respuesta:
-* `200` (`Success`): Operación completada.
-* `401` (`Unauthorized`): Certificado o sesión no autorizada.
-* `404` (`SessionNotFound`): Sesión inexistente o expirada.
-* `409` (`ControllerConflict`): Ya existe un controlador activo.
-* `410` (`TokenExpired`): El `ChannelAttachmentToken` ha caducado.
-* `429` (`RateLimitExceeded`): Límite de frecuencia superado.
-* `500` (`InternalError`): Error interno del anfitrión.
-
-### 10.2 Límites Estrictos de Recursos
-* **Tamaño Máximo de Mensaje:**
-  * Señalización JSON: **64 KB** (mensajes que superen 64 KB provocan cierre inmediato del socket).
-  * Paquete de Control: **28 bytes** (longitud fija).
-* **Timeouts de Conexión:**
-  * Handshake mTLS y `SESSION_INIT`: **10 segundos máximo**; si no se completa, el socket se destruye.
-  * Timeout de aprobación interactiva en anfitrión: **25 segundos**.
-  * Timeout de `ChannelAttachmentToken`: **15 segundos**.
-* **Protección contra Inundación (*Rate Limiting*):**
-  * Descubrimiento UDP 5000: Máximo 1 anuncio por segundo por anfitrión; el visor ignora paquetes que lleguen a más de 5 por segundo por IP.
-  * Solicitudes de sesión TCP: Máximo 3 intentos de conexión por minuto por IP no emparejada. Tras 3 fallos, la IP se bloquea temporalmente por 5 minutos.
-
----
-
-## 11. Riesgos Residuales y Cuestiones Abiertas
-
-1. **Acceso Desatendido por PIN (Diferido):** Queda formalmente excluido de esta fase. Cualquier futura implementación exigirá un protocolo PAKE estándar (ej. SPAKE2+ o SRP-6a) y no se abordará hasta que mTLS esté 100% operativo.
-2. **Sistemas Multiplataforma Futuros:** `IIdentityKeyStorage` abstrae el almacenamiento; en Linux se implementará con `SecretService` / `libsecret` o `Keyring`, y en macOS con `Keychain`.
-3. **Descubrimiento UDP 5000:** Permanece como un canal de visibilidad local no confiable. Ningún dato recibido por UDP se considera válido hasta ser corroborado dentro del túnel mTLS 1.3 en el puerto 5001.
-
----
-
-## 12. Plan de Verificación y Casos de Prueba
-
-| Categoría | Caso de Prueba | Comportamiento Esperado |
+| Recurso | Límite Estricto | Acción ante Exceso |
 | :--- | :--- | :--- |
-| **mTLS** | Cliente con certificado no emparejado intenta conectar a 5001. | Falla `RemoteCertificateValidationCallback`, socket cerrado inmediatamente. |
-| **Canal Huérfano** | Cliente intenta conectar a 5002 o 5003 sin enviar `CHANNEL_ATTACH`. | Socket cerrado a los 5 segundos por timeout sin procesar datos. |
-| **Token Atómico** | Dos conexiones presentan el mismo `ChannelAttachmentToken` en 5003 en paralelo. | Una se asocia; la segunda falla con `TokenExpired` (410) y su socket se cierra. |
-| **Token Incompatible** | Cliente presenta un token de audio en el puerto 5003. | Rechazado con `Unauthorized` (401), socket cerrado. |
-| **MitM en SAS** | Interceptor altera el intercambio TLS durante el emparejamiento. | Los códigos de 6 dígitos difieren en cada pantalla; los usuarios cancelan el proceso. |
-| **Concurrencia** | Segundo visor solicita control mientras el primero está activo. | Rechazado atómicamente con `ControllerConflict` (409); el primer visor conserva el control. |
-| **Desconexión Forzada** | Desconexión abrupta de cable de red mientras se inyectaba una tecla. | `InjectedInputTracker` libera únicamente la tecla inyectada pendiente sin tocar el estado del teclado local del anfitrión. |
+| **Señalización JSON (5001)** | Máximo **16 KB** | Cierre inmediato del socket. |
+| **Paquete de Control (5003)** | Exactamente **28 bytes** | Descarte y desconexión si el magic no coincide. |
+| **Timeout de Handshake mTLS** | **10 segundos** | Destrucción del socket. |
+| **Timeout de Emparejamiento Provisional** | **45 segundos** | Cancelación y cierre de socket. |
+| **Timeout de Token de Asociación** | **15 segundos** | Rechazo con código `410`. |
+| **Límite de Anuncios UDP 5000** | Máx. 1 paquete / seg por host | Visor ignora ráfagas > 5 paquetes / seg por IP. |
+| **Rendimiento TLS 1.3** | *Pendiente de benchmark empírico* | Se medirá formalmente en la Fase de Rendimiento. |
+
+---
+
+## 12. Decisiones Cerradas, Abiertas y Riesgos Residuales
+
+### Decisiones Cerradas
+* mTLS 1.3 con `SslStream` sin protocolos criptográficos caseros.
+* Emparejamiento SAS de 6 dígitos ligado a `ChannelBinding` y nonces mutuos.
+* Separación formal entre *Emparejamiento Provisional* y *Sesión Normal*.
+* Token de canal con validación de tipo previa al consumo.
+* `InjectedInputTracker` con gestión de resultados parciales de `SendInput`.
+* Rechazo estricto de clientes LSI1.
+
+### Decisiones Abiertas (Futuras)
+* Implementación de Acceso Desatendido por PIN (PAKE).
+* Almacén de claves nativo para Linux (`libsecret`) y macOS (`Keychain`).
+
+### Riesgos Residuales
+* La seguridad del control remoto descansa en la verificación visual humana del código SAS durante el primer contacto.
+* Si el anfitrión pierde su clave privada DPAPI, se requerirá un restablecimiento manual que exigirá re-emparejar a los visores.
