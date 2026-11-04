@@ -71,21 +71,39 @@ flowchart TD
 
 ---
 
-### 🛡️ Fase 2: Seguridad y Autorización del Control Remoto (Puerto 5003)
-> [!WARNING]
-> La recepción de paquetes `SendInput` en una red compartida sin autenticación supone un vector de riesgo que debe acotarse. La aprobación interactiva en UI debe estar respaldada por identidad de sesión criptográfica.
+### 🛡️ Fase 1 (P0): Seguridad de Sesión y Control Remoto (mTLS 1.3 y Autoridad de Sesión)
+> [!CRITICAL]
+> **Prioridad Máxima (P0):** La seguridad del sistema no depende de tokens estáticos caseros, sino de estándares criptográficos consolidados (TLS 1.3 con autenticación mutua mTLS). Los tres canales TCP (5001, 5002, 5003) se vinculan a una única autoridad de sesión central en el anfitrión.
 
-1. **Clarificación del selector de modo de control:**
-   * Reemplazar los textos ambiguos por:
-     * `Solo Visualización (Control desactivado)`
-     * `Solicitar Aprobación al Anfitrión (Recomendado, con diálogo interactivo)`
-     * `Acceso Directo con PIN Temporal`
-2. **Autenticación e Identidad de Sesión:**
-   * Generar un token de sesión/nonce criptográfico en el handshake de aprobación.
-   * Vincular los paquetes del puerto 5003 al token concedido; rechazar cualquier paquete que no provenga de la sesión aprobada.
-   * Prevenir inyección previa a la aprobación: el socket de control no procesa ningún mensaje de entrada hasta que la promesa `ClientApprovalCallback` retorne afirmativamente.
-3. **Botón de revocación inmediata (*Panic Button*):**
-   * Cuando un cliente tenga el control remoto activo, mostrar un botón prominente en el anfitrión: `Revocar Control Remoto`, que cierre el socket inmediatamente y limpie cualquier pulsación retenida en `SendInput`.
+```
+Session (Anfitrión - Autoridad Central)
+ ├── SessionId (Guid / Nonce criptográfico)
+ ├── ClientPublicKeyFingerprint (Huella SHA-256 de certificado del visor)
+ ├── CreatedAt / ExpiresAt
+ ├── State (Connecting, Active, Revoked, Closed)
+ ├── VideoAuthorized (true/false)
+ ├── AudioAuthorized (true/false)
+ ├── RemoteControlAuthorized (DISABLED, PENDING_APPROVAL, GRANTED, REVOKED)
+ └── ActiveControlClient (Exclusivo: máximo 1 controlador simultáneo)
+```
+
+1. **Establecimiento de Confianza y Emparejamiento:**
+   * **Primera conexión:** Generación de clave pública/privada efímera o persistente por dispositivo. Intercambio y verificación de huella digital (*fingerprint*) o código de emparejamiento seguro en la UI.
+   * **Conexiones posteriores:** El anfitrión recuerda los dispositivos emparejados reconocidos por su huella criptográfica (sin cuentas ni servidores externos).
+   * **Política de autorización diferenciada:** 
+     * *Ver pantalla / Escuchar audio:* Conexión directa para dispositivos ya emparejados.
+     * *Control remoto:* **Siempre exige autorización interactiva en cada sesión**, a menos que el anfitrión configure explícitamente acceso desatendido.
+2. **Transporte Seguro con mTLS 1.3:**
+   * Envolver los streams TCP de los puertos 5001, 5002 y 5003 en `SslStream` con TLS 1.3 y validación mutua de certificados (`RemoteCertificateValidationCallback` contrastado con la lista de huellas autorizadas).
+   * Canal 5001 actúa como canal primario de sesión (`SESSION_INIT`, `SESSION_ACCEPT`); los puertos 5002 y 5003 se asocian (`CHANNEL_ATTACH`) validando la misma huella de certificado y `SessionId`.
+3. **Exclusividad Estricta de Control Remoto:**
+   * Un único controlador activo a la vez (`Single Active Controller`). Toda segunda solicitud concurrente es rechazada o puesta en cola.
+   * Paquetes de control en puerto 5003 protegidos por números de secuencia monotónicos por sesión para prevenir duplicación o *replay*.
+4. **Revocación Efectiva Inmediata (Killswitch):**
+   * El botón de pánico en el anfitrión no solo cambia el estado booleano:
+     1. Desconecta y cierra el socket de control 5003.
+     2. Drena inmediatamente la cola de eventos pendientes.
+     3. **Libera todas las teclas y botones de ratón retenidos** en `SendInput` (emisión de `KEYEVENTF_KEYUP` y `MOUSEEVENTF_*UP` para evitar que queden pulsados en el SO).
 
 ---
 
