@@ -1,6 +1,6 @@
 # ADR-001: Arquitectura de Seguridad de Sesión, Autenticación Mutua (mTLS) y Emparejamiento en LanScreenShare
 
-* **Estado:** Propuesto (Revisión 4 — Corrección Focalizada: Protocolo SAS de Comparación de Identidades)
+* **Estado:** Propuesto (Revisión Final 5 — Especificación Completa y Aprobación Condicionada Resuelta)
 * **Fecha:** 2026-11-04
 * **Rama:** `feature/ui-and-architecture-refinement`
 * **Módulos afectados:** `LanScreenShare.Core`, `LanScreenShare.Network`, `LanScreenShare.Desktop`
@@ -35,7 +35,7 @@ LanScreenShare opera mediante una topología de red local multi-puerto sobre TCP
 | **T3: Conexión de control no autorizada** | Un atacante se conecta directamente al puerto 5003 sin pasar por el flujo de vídeo para inyectar entradas. | El puerto 5003 no admite datos sin presentar un `ChannelAttachmentToken` atómico de un solo uso derivado de una sesión mTLS autorizada. |
 | **T4: Ataque de repetición (Replay)** | Reenvío de paquetes de control capturados para ejecutar comandos no deseados. | Números de secuencia monotónicos `ulong` por sesión y protección anti-replay inherente de TLS 1.3. |
 | **T5: Confusión de sesión multicliente** | Eventos de múltiples visores entremezclados en el control del anfitrión. | Principio de *Single Active Controller* (exclusividad estricta garantizada por bloqueo atómico). |
-| **T6: Man-in-the-Middle (MitM) en primer contacto** | Sustitución de identidad durante el descubrimiento o emparejamiento inicial. | Protocolo SAS (Short Authentication String) de 6 dígitos derivado de la comparación canónica de identidades y nonces verificados en mTLS. |
+| **T6: Intermediarios activos (MitM) en primer contacto** | Sustitución de identidad durante el descubrimiento o emparejamiento inicial. | Detección probabilística de intermediarios activos mediante comparación humana fuera de banda de un código SAS de 6 dígitos derivado de la transcripción canónica. |
 
 ### 2.2 Amenazas Fuera de Alcance (Out of Scope)
 * **Endpoints comprometidos:** Si el visor emparejado contiene malware o un troyano con acceso a su clave privada, este ADR no puede distinguir comandos legítimos del usuario de comandos inyectados por el malware en ese visor.
@@ -90,16 +90,18 @@ Para resolver la aparente contradicción entre la validación estricta de mTLS y
 
 ### 5.1 Fase A: Modo de Emparejamiento Provisional (`ProvisionalPairing`)
 1. **Intención de Emparejamiento:** El visor inicia la conexión al puerto 5001 marcando el prefijo de intención de emparejamiento.
-2. **Comportamiento en `RemoteCertificateValidationCallback`:**
-   * En este modo provisional, el anfitrión valida que el certificado sea sintácticamente correcto, tenga fechas válidas y el EKU adecuado, pero **NO exige que la huella esté en `IPairedDeviceStore`**.
+2. **mTLS Mutuo Obligatorio:**
+   * Ambos extremos (anfitrión y visor) deben presentar sus respectivos certificados X.509 y completar el intercambio TLS 1.3 `CertificateVerify` que demuestra criptográficamente la posesión de las claves privadas.
+   * `RemoteCertificateValidationCallback` valida vigencia de fechas, extensiones EKU y longitud de clave del certificado presentado, pero **no exige que la huella esté en `IPairedDeviceStore`**.
 3. **Restricción Absoluta de Capacidades:**
    * La sesión se crea con estado `SessionState.ProvisionalPairing`.
    * **Cero streaming de vídeo, cero audio, cero control remoto.**
    * Los únicos mensajes procesados son `PAIRING_INIT`, `PAIRING_CHALLENGE`, `PAIRING_CONFIRM`, `PAIRING_ABORT`.
-4. **Protección contra DoS en Emparejamiento:**
-   * **Cola de solicitudes pendientes:** Se admiten hasta 3 solicitudes de emparejamiento simultáneas en cola de espera.
+4. **Protección contra DoS y Ataques de Fuerza Bruta en Emparejamiento:**
+   * **Cola de solicitudes pendientes:** Se admiten hasta 3 solicitudes de emparejamiento provisional simultáneas en cola de espera.
    * **Timeout de Inactividad:** 30 segundos por solicitud; si el cliente no responde, el socket se libera.
-   * **Cancelación en UI:** El anfitrión dispone de un botón `[Cancelar]` en la tarjeta de emparejamiento para descartar inmediatamente la solicitud.
+   * **Rate Limiting Acumulativo y Enfriamiento (Backoff):** Máximo 3 intentos de emparejamiento fallidos consecutivos en un periodo de 15 minutos por subred / dispositivo. Tras el tercer fallo, la dirección entra en un periodo de bloqueo temporal de 10 minutos.
+   * **Cancelación en UI:** El anfitrión dispone de un botón `[Cancelar Solicitud]` en la tarjeta de emparejamiento para descartar inmediatamente la solicitud.
 
 ### 5.2 Fase B: Modo de Sesión Normal (Dispositivos Emparejados)
 * En conexiones ordinarias, `RemoteCertificateValidationCallback` aplica **Certificate Pinning estricto**:
@@ -107,32 +109,48 @@ Para resolver la aparente contradicción entre la validación estricta de mTLS y
 
 ---
 
-## 6. Protocolo SAS de Comparación de Identidades (Opción B Seleccionada)
+## 6. Especificación Formal del Protocolo SAS de Comparación de Identidades
 
-### 6.1 Evaluación Comparativa y Selección de Alternativa
-1. **Opción A (TLS Exporter RFC 9266):**
-   * *Diagnóstico:* `SslStream.GetTlsExporter` no existe en .NET 9 BCL. Implementarlo exigiría P/Invoke nativo a Windows SChannel (`QueryContextAttributes` con `SECPKG_ATTR_KEYING_MATERIAL`), rompiendo la portabilidad y añadiendo una superficie de fallo nativa considerable.
-2. **Opción B (Protocolo de Comparación de Identidades Criptográficas - SELECCIONADA):**
-   * *Diagnóstico:* Utiliza 100% APIs gestionadas estándar de .NET 9 (`SHA256` y `X509Certificate2.RawData`).
-   * *Fundamento de Seguridad:* Durante el handshake mTLS 1.3, el protocolo TLS ya exige la prueba criptográfica de posesión de las claves privadas de ambos extremos mediante el mensaje `CertificateVerify`. El protocolo SAS añade la **vinculación fuera de banda para autenticar humanamente que las identidades intercambiadas son las de los dos equipos legítimos**.
+### 6.1 Fundamento y Matización de Garantías Criptográficas
+* **Naturaleza del Mecanismo:** Se trata de un **protocolo de comparación de identidades criptográficas con verificación humana fuera de banda**.
+* **Diferenciación con ZRTP (RFC 6189):** La analogía con ZRTP se limita estrictamente a la finalidad de presentar un código corto para validación verbal entre usuarios. Técnicamente son distintos: ZRTP deriva su SAS de un secreto compartido Diffie-Hellman mediante hash commitment; LanScreenShare utiliza una transcripción canónica de identidades públicas X.509 y nonces generados en una sesión mTLS 1.3.
+* **Nivel de Garantía (Probabilístico, no absoluto):**
+  Un código SAS de 6 dígitos decimales posee un espacio de búsqueda de $1\,000\,000$ posibilidades ($\approx 20$ bits de entropía efectiva). La probabilidad de que un intermediario activo logre colisionar aleatoriamente el código en un intento independiente es:
+  $$P(\text{acierto}) \approx \frac{1}{1\,000\,000} = 10^{-6}$$
+  No constituye una garantía matemática absoluta. La seguridad del sistema radica en la combinación de esta improbabilidad con los **límites acumulativos de intentos fallidos (máximo 3 intentos antes de bloqueo temporal de 10 minutos)** y la inspección humana diligente.
 
-### 6.2 Construcción Matemática del SAS
-1. **Generación de Nonces Criptográficos:**
-   * El anfitrión genera $N_{\text{Host}} \in \{0,1\}^{128}$ usando `RandomNumberGenerator.GetBytes(16)`.
-   * El visor genera $N_{\text{Viewer}} \in \{0,1\}^{128}$ usando `RandomNumberGenerator.GetBytes(16)`.
-2. **Transcripción Canónica:**
-   $$\text{Transcript} = \text{ProtocolVersion (uint32)} \parallel \text{DER}(C_{\text{Host}}) \parallel \text{DER}(C_{\text{Viewer}}) \parallel N_{\text{Host}} \parallel N_{\text{Viewer}}$$
-3. **Derivación del Código de Comparación:**
-   $$\text{Hash} = \text{SHA256}(\text{Transcript})$$
-   $$\text{SAS\_Code} = \text{Int32}(\text{Hash}[0..3]) \pmod{1\,000\,000} \quad \text{(Formato visual: 6 dígitos: } XXX\text{-}XXX\text{)}$$
+### 6.2 Especificación Canónica de la Transcripción
+Para evitar cualquier ambigüedad de serialización o problemas de interoperabilidad, todos los campos de longitud variable están delimitados con prefijos de longitud explícitos en formato Big-Endian:
 
-### 6.3 Demostración de Resistencia Anti-MitM
-* Si un atacante activo intenta interceptar la conexión provisional, debe terminar dos handshakes TLS 1.3 independientes:
-  * Conexión 1 (Atacante ↔ Anfitrión): El atacante presenta $C_{\text{Atacante\_Viewer}}$. El anfitrión calcula $\text{Transcript}_H$ usando $\text{DER}(C_{\text{Atacante\_Viewer}})$.
-  * Conexión 2 (Visor ↔ Atacante): El atacante presenta $C_{\text{Atacante\_Host}}$. El visor calcula $\text{Transcript}_V$ usando $\text{DER}(C_{\text{Atacante\_Host}})$.
-* Dado que el atacante no puede falsificar la clave privada de ninguno de los dos extremos legítimos, $C_{\text{Atacante}} \neq C_{\text{Legítimo}}$.
-* Por tanto, $\text{Transcript}_H \neq \text{Transcript}_V \implies \text{SAS\_Code}_H \neq \text{SAS\_Code}_V$.
-* Los códigos de 6 dígitos en pantalla **diferirán de forma garantizada**, permitiendo a los usuarios detectar la interceptación y abortar el emparejamiento.
+$$\text{CanonicalTranscript} = \text{DomainTag} \parallel \text{ProtocolVersion} \parallel \text{HostRole} \parallel \text{HostCertLen} \parallel \text{DER}(C_{\text{Host}}) \parallel \text{ViewerRole} \parallel \text{ViewerCertLen} \parallel \text{DER}(C_{\text{Viewer}}) \parallel N_{\text{Host}} \parallel N_{\text{Viewer}}$$
+
+#### Detalle de Campos y Codificación
+1. **DomainTag:** Cadena UTF-8 fija de 24 bytes: `"LanScreenShare-Pairing-v1"`.
+2. **ProtocolVersion:** Entero de 4 bytes en Big-Endian: `uint32(1)`.
+3. **HostRole:** Byte literal: `0x01` (`'H'`).
+4. **HostCertLen:** Entero de 4 bytes en Big-Endian con la longitud en bytes del certificado del anfitrión.
+5. **DER($C_{\text{Host}}$):** Bytes crudos en codificación DER del certificado X.509 del anfitrión.
+6. **ViewerRole:** Byte literal: `0x02` (`'V'`).
+7. **ViewerCertLen:** Entero de 4 bytes en Big-Endian con la longitud en bytes del certificado del visor.
+8. **DER($C_{\text{Viewer}}$):** Bytes crudos en codificación DER del certificado X.509 del visor.
+9. **$N_{\text{Host}}$:** Nonce criptográfico de 16 bytes fijos generado por el anfitrión vía `RandomNumberGenerator`.
+10. **$N_{\text{Viewer}}$:** Nonce criptográfico de 16 bytes fijos generado por el visor vía `RandomNumberGenerator`.
+
+### 6.3 Derivación Determinista del SAS de 6 Dígitos
+1. **Hash Canónico:**
+   $$\text{Hash} = \text{SHA256}(\text{CanonicalTranscript})$$
+2. **Extracción y Formato:**
+   * Se toman los primeros 4 bytes de $\text{Hash}$ como entero de 32 bits sin signo en Big-Endian, enmascarando el bit de signo:
+     ```csharp
+     uint rawVal = BinaryPrimitives.ReadUInt32BigEndian(hash.AsSpan(0, 4)) & 0x7FFFFFFF;
+     uint sasCode = rawVal % 1_000_000;
+     string sasFormatted = $"{sasCode / 1000:D3}-{sasCode % 1000:D3}"; // Formato: XXX-XXX
+     ```
+
+### 6.4 Comparación Fuera de Banda Obligatoria
+* Los usuarios deben comparar el código de 6 dígitos visualmente o verbalmente a través de un **canal fuera de banda e independiente del canal provisional** (ej. presencia física en la sala, llamada telefónica o mensaje seguro externo).
+* **Queda estrictamente prohibida la transmisión o validación automática del código SAS a través del propio canal TCP de la aplicación**.
+* El anfitrión solo registra la huella en `IPairedDeviceStore` tras pulsar manualmente el botón `[Confirmar Código Coincidente]`.
 
 ---
 
@@ -217,8 +235,8 @@ flowchart TD
 
 ### Decisiones Cerradas
 * mTLS 1.3 con `SslStream` sin protocolos criptográficos caseros.
-* Emparejamiento SAS de 6 dígitos mediante comparación canónica de identidades y nonces (Opción B).
-* Separación formal entre *Emparejamiento Provisional* y *Sesión Normal*.
+* Emparejamiento SAS de 6 dígitos mediante comparación canónica delimitada por longitudes con `SHA256`.
+* Separación formal entre *Emparejamiento Provisional* (sin capacidades de datos) y *Sesión Normal* (mTLS Pinning).
 * Token de canal con validación de tipo previa al consumo.
 * `InjectedInputTracker` con gestión de resultados parciales de `SendInput`.
 * Rechazo estricto de clientes LSI1.
@@ -226,7 +244,8 @@ flowchart TD
 ### Decisiones Abiertas (Futuras)
 * Implementación de Acceso Desatendido por PIN (PAKE).
 * Almacén de claves nativo para Linux (`libsecret`) y macOS (`Keychain`).
+* Pruebas de interoperabilidad con vectores de prueba comunes para la serialización de la transcripción en futuras plataformas.
 
 ### Riesgos Residuales
-* La seguridad del control remoto descansa en la verificación visual humana del código SAS durante el primer contacto.
-* Si el anfitrión pierde su clave privada DPAPI, se requerirá un restablecimiento manual que exigirá re-emparejar a los visores.
+* **Límite de resolución humana:** Un código de 6 dígitos ofrece protección probabilística ($10^{-6}$ por intento); su seguridad descansa en la verificación atenta del usuario y en el bloqueo temporal por rate limiting tras 3 fallos consecutivos.
+* **Pérdida de clave DPAPI:** Si el anfitrión corrompe su perfil de Windows, requerirá restablecer manualmente su identidad, exigiendo un nuevo emparejamiento con sus visores.
