@@ -80,10 +80,10 @@ namespace LanScreenShare.Desktop
         private bool _isPopoutActive;
         private Stretch _currentStretchMode = Stretch.Uniform;
 
-        // Búsqueda de dispositivos
+        // BÃºsqueda de dispositivos
         private DispatcherTimer? _searchTimer;
 
-        // Control de acceso y aprobación de conexiones
+        // Control de acceso y aprobaciÃ³n de conexiones
         private volatile bool _requireStreamApproval = false;
         private volatile string _remoteControlMode = "auto";
         private TaskCompletionSource<bool>? _streamApprovalTcs;
@@ -94,7 +94,7 @@ namespace LanScreenShare.Desktop
         private WriteableBitmap? _viewerWriteableBitmap;
         private readonly object _bitmapLock = new();
 
-        // Estadísticas de flujo en tiempo real
+        // EstadÃ­sticas de flujo en tiempo real
         private long _metricFramesCount;
         private long _metricBytesCount;
         private int _lastFrameWidth;
@@ -155,7 +155,7 @@ namespace LanScreenShare.Desktop
             _discoveryService = new DiscoveryService();
             _discoveryService.OnDeviceDiscovered += DiscoveryService_OnDeviceDiscovered;
 
-            // Iniciar con la fuente y motor guardados en configuración
+            // Iniciar con la fuente y motor guardados en configuraciÃ³n
             _screenCaptureService = CreateCaptureService(_currentSource, _appSettings.Engine);
 
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
@@ -167,7 +167,7 @@ namespace LanScreenShare.Desktop
                 _inputSimulatorService = inputSimulator;
             }
 
-            // Inicialización de subsistema de Seguridad, Autoridad de Sesiones y mTLS
+            // InicializaciÃ³n de subsistema de Seguridad, Autoridad de Sesiones y mTLS
             _identityKeyStorage = new WindowsDpapiIdentityKeyStorage();
             _pairedDeviceStore = new JsonPairedDeviceStore();
             _sessionAuthority = new SessionAuthority(_pairedDeviceStore);
@@ -183,7 +183,8 @@ namespace LanScreenShare.Desktop
                 Console.WriteLine($"[Security] Error inicializando identidad mTLS: {ex.Message}");
             }
 
-            _streamServer = new TcpStreamServer(_sessionAuthority, _sslServerOptions);
+            _streamServer = new TcpStreamServer(_sessionAuthority, _sslServerOptions, _pairedDeviceStore);
+            _streamServer.PairingApprovalCallback = (fingerprint, deviceName, sasFormatted) => RequestPairingApprovalAsync(deviceName, fingerprint, sasFormatted);
             _streamServer.ClientConnected += StreamServer_ClientConnected;
             _streamServer.ClientDisconnected += StreamServer_ClientDisconnected;
 
@@ -191,11 +192,11 @@ namespace LanScreenShare.Desktop
             _streamClient.FrameReceived += StreamClient_FrameReceived;
             _streamClient.StatusChanged += StreamClient_StatusChanged;
 
-            // Inicialización de subsistema de Audio
+            // InicializaciÃ³n de subsistema de Audio
             _audioServer = new TcpAudioServer(_sessionAuthority, _sslServerOptions);
             _audioClient = new TcpAudioClient();
 
-            // Inicialización de subsistema de Control Remoto
+            // InicializaciÃ³n de subsistema de Control Remoto
             _controlServer = new TcpControlServer(_sessionAuthority, _inputSimulatorService, _sslServerOptions);
             _controlClient = new TcpControlClient();
 
@@ -379,17 +380,17 @@ namespace LanScreenShare.Desktop
                             {
                                 await _audioServer.StartAsync(5002);
                                 _micCaptureService?.StartCapture();
-                                Console.WriteLine("[Host] Captura de micrófono iniciada dinámicamente.");
+                                Console.WriteLine("[Host] Captura de micrÃ³fono iniciada dinÃ¡micamente.");
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[Host] Error activando micrófono: {ex.Message}");
+                                Console.WriteLine($"[Host] Error activando micrÃ³fono: {ex.Message}");
                             }
                         }
                         else
                         {
                             _micCaptureService?.StopCapture();
-                            Console.WriteLine("[Host] Captura de micrófono detenida dinámicamente.");
+                            Console.WriteLine("[Host] Captura de micrÃ³fono detenida dinÃ¡micamente.");
                         }
                     }
                 };
@@ -525,7 +526,7 @@ namespace LanScreenShare.Desktop
                 exitFloatBtn.Click += (s, e) => SetFullscreen(false);
             }
 
-            // Modos de acceso y aprobación de conexiones
+            // Modos de acceso y aprobaciÃ³n de conexiones
             var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
             if (streamAccessCombo != null)
             {
@@ -541,7 +542,7 @@ namespace LanScreenShare.Desktop
                 streamAccessCombo.SelectionChanged += (s, e) =>
                 {
                     _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
-                    Console.WriteLine($"[AccessHost] Aprobación de stream requerida: {_requireStreamApproval}");
+                    Console.WriteLine($"[AccessHost] AprobaciÃ³n de stream requerida: {_requireStreamApproval}");
                     SaveCurrentSettings();
                 };
             }
@@ -566,7 +567,7 @@ namespace LanScreenShare.Desktop
                 };
             }
 
-            // Aprobación de conexión de espectadores (Streaming)
+            // AprobaciÃ³n de conexiÃ³n de espectadores (Streaming)
             _streamServer.ClientApprovalCallback = async (clientId) =>
             {
                 if (!_requireStreamApproval)
@@ -581,7 +582,7 @@ namespace LanScreenShare.Desktop
             var rejectStreamBtn = this.FindControl<Button>("RejectStreamButton");
             if (rejectStreamBtn != null) rejectStreamBtn.Click += (s, e) => _streamApprovalTcs?.TrySetResult(false);
 
-            // Aprobación de control remoto
+            // AprobaciÃ³n de control remoto
             _controlServer.ClientApprovalCallback = async (clientId) =>
             {
                 if (!_allowRemoteControl)
@@ -605,8 +606,8 @@ namespace LanScreenShare.Desktop
             {
                 screenImage.DoubleTapped += (s, e) =>
                 {
-                    // Si el control remoto o el modo juego están activos, no alternar pantalla completa
-                    // para permitir abrir carpetas, archivos y hacer clics rápidos en juegos del anfitrión
+                    // Si el control remoto o el modo juego estÃ¡n activos, no alternar pantalla completa
+                    // para permitir abrir carpetas, archivos y hacer clics rÃ¡pidos en juegos del anfitriÃ³n
                     if (_remoteControlEnabled || _isGameMode)
                         return;
 
@@ -620,7 +621,7 @@ namespace LanScreenShare.Desktop
                 screenImage.KeyUp += ScreenImage_KeyUp;
             }
 
-            // Selector de fuente de transmisión (Pantalla completa / Ventana de app)
+            // Selector de fuente de transmisiÃ³n (Pantalla completa / Ventana de app)
             var selectSourceBtn = this.FindControl<Button>("SelectSourceButton");
             if (selectSourceBtn != null)
             {
@@ -628,7 +629,7 @@ namespace LanScreenShare.Desktop
             }
             UpdateSourceUI();
 
-            // Controles de ajuste de transmisión
+            // Controles de ajuste de transmisiÃ³n
             var engineCombo = this.FindControl<ComboBox>("EngineComboBox");
             if (engineCombo != null)
             {
@@ -731,7 +732,7 @@ namespace LanScreenShare.Desktop
                                 await _audioServer.StartAsync(5002);
                                 int targetPid = GetTargetAudioProcessId();
                                 _audioCaptureService?.StartCapture(targetPid);
-                                Console.WriteLine($"[Host] Captura de audio iniciada dinámicamente (PID {targetPid}).");
+                                Console.WriteLine($"[Host] Captura de audio iniciada dinÃ¡micamente (PID {targetPid}).");
                             }
                             catch (Exception ex)
                             {
@@ -741,13 +742,13 @@ namespace LanScreenShare.Desktop
                         else
                         {
                             _audioCaptureService?.StopCapture();
-                            Console.WriteLine("[Host] Captura de audio detenida dinámicamente.");
+                            Console.WriteLine("[Host] Captura de audio detenida dinÃ¡micamente.");
                         }
                     }
                 };
             }
 
-            // Temporizador de métricas (1 segundo)
+            // Temporizador de mÃ©tricas (1 segundo)
             _metricsTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(1)
@@ -772,10 +773,10 @@ namespace LanScreenShare.Desktop
                 else
                 {
                     adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#451A03"));
-                    adminStatusText.Text = "Modo Estándar: Ejecuta como Administrador para controlar launchers y juegos";
+                    adminStatusText.Text = "Modo EstÃ¡ndar: Ejecuta como Administrador para controlar launchers y juegos";
                     adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
                     if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
-                    ToolTip.SetTip(adminStatusBorder, "Windows restringe el control remoto sobre ventanas elevadas como launchers o juegos. Abre la aplicación con 'Ejecutar como Administrador' para habilitarlo.");
+                    ToolTip.SetTip(adminStatusBorder, "Windows restringe el control remoto sobre ventanas elevadas como launchers o juegos. Abre la aplicaciÃ³n con 'Ejecutar como Administrador' para habilitarlo.");
                 }
             }
 
@@ -887,13 +888,13 @@ namespace LanScreenShare.Desktop
 
                 if (pos.Y <= headerHeight)
                 {
-                    // Mantener visible mientras el cursor esté interactuando con la barra
+                    // Mantener visible mientras el cursor estÃ© interactuando con la barra
                     _headerAutoHideTimer.Stop();
                     _headerAutoHideTimer.Start();
                 }
                 else if (pos.Y > headerHeight + 25)
                 {
-                    // Si el cursor baja a la zona de transmisión, ocultar la barra
+                    // Si el cursor baja a la zona de transmisiÃ³n, ocultar la barra
                     headerBar.IsVisible = false;
                     _headerAutoHideTimer.Stop();
                 }
@@ -931,7 +932,7 @@ namespace LanScreenShare.Desktop
                 if (fullscreenText != null) fullscreenText.Text = "Salir";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = false;
 
-                // El viewport de transmisión ocupa el 100% de la pantalla sin franjas ni barras
+                // El viewport de transmisiÃ³n ocupa el 100% de la pantalla sin franjas ni barras
                 if (mainAreaGrid != null) mainAreaGrid.RowDefinitions = new RowDefinitions("*");
                 if (viewportGrid != null)
                 {
@@ -1252,36 +1253,9 @@ namespace LanScreenShare.Desktop
 
         private bool OnProvisionalPairingRequested(string fingerprint, X509Certificate2 clientCert)
         {
-            if (_identityCertificate == null) return false;
-
-            byte[] hostNonce = new byte[16];
-            byte[] viewerNonce = new byte[16];
-            RandomNumberGenerator.Fill(hostNonce);
-            RandomNumberGenerator.Fill(viewerNonce);
-
-            var (sasCode, sasFormatted) = CanonicalSasCalculator.ComputeSas(
-                CanonicalSasCalculator.CurrentProtocolVersion,
-                _identityCertificate.RawData,
-                clientCert.RawData,
-                hostNonce,
-                viewerNonce);
-
-            string deviceName = clientCert.GetNameInfo(X509NameType.SimpleName, false) ?? "Dispositivo Remoto";
-
-            bool approved = RequestPairingApprovalAsync(deviceName, fingerprint, sasFormatted).GetAwaiter().GetResult();
-            if (approved)
-            {
-                _pairedDeviceStore.AddPairedDeviceAsync(new PairedDevice(
-                    Guid.NewGuid().ToString("D"),
-                    deviceName,
-                    fingerprint,
-                    DateTime.UtcNow,
-                    DateTime.UtcNow,
-                    false)).GetAwaiter().GetResult();
-                return true;
-            }
-
-            return false;
+            // Permitir el establecimiento del canal TLS seguro.
+            // La autorización interactiva y verificación SAS se ejecuta en el canal de aplicación en TcpStreamServer.
+            return true;
         }
 
         private bool OnClientProvisionalPairing(string fingerprint, X509Certificate2 hostCert)
@@ -1303,10 +1277,10 @@ namespace LanScreenShare.Desktop
                 var sasText = this.FindControl<TextBlock>("StreamApprovalSasCode");
 
                 if (title != null) title.Text = $"Emparejamiento: {deviceName}";
-                if (subtitle != null) subtitle.Text = "Compara este código fuera de banda antes de aprobar:";
+                if (subtitle != null) subtitle.Text = "Compara este cÃ³digo fuera de banda antes de aprobar:";
                 if (sasText != null)
                 {
-                    sasText.Text = $"Código SAS: {sasFormatted}";
+                    sasText.Text = $"CÃ³digo SAS: {sasFormatted}";
                     sasText.IsVisible = true;
                 }
                 if (banner != null) banner.IsVisible = true;
@@ -1401,20 +1375,20 @@ namespace LanScreenShare.Desktop
             if (string.IsNullOrEmpty(_currentConnectedDeviceIp))
                 return false;
 
-            UpdateStatus("Solicitando acceso de control remoto al anfitrión...", "#F59E0B");
+            UpdateStatus("Solicitando acceso de control remoto al anfitriÃ³n...", "#F59E0B");
 
             try
             {
                 var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
                 await _controlClient.ConnectAsync(_currentConnectedDeviceIp, 5003, _sslClientOptions, handshake?.SessionId, handshake?.ControlToken);
                 Console.WriteLine($"[ControlViewer] Conectado a canal de control remoto en {_currentConnectedDeviceIp}:5003");
-                UpdateStatus($"Conectado a {_currentConnectedDeviceName} • Control remoto activo", "#22C55E");
+                UpdateStatus($"Conectado a {_currentConnectedDeviceName} â€¢ Control remoto activo", "#22C55E");
                 return true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[ControlClient] Control remoto denegado o no disponible: {ex.Message}");
-                UpdateStatus("Control remoto rechazado o no disponible en el anfitrión", "#EF4444");
+                UpdateStatus("Control remoto rechazado o no disponible en el anfitriÃ³n", "#EF4444");
                 return false;
             }
         }
@@ -1489,7 +1463,7 @@ namespace LanScreenShare.Desktop
                         bannerIcon.Data = (this.FindResource("Icon3dRotation") as StreamGeometry)!;
                         bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
                     }
-                    bannerText.Text = "Modo Juego 3D Activo — Presiona Ctrl + Alt + L para liberar el mouse";
+                    bannerText.Text = "Modo Juego 3D Activo â€” Presiona Ctrl + Alt + L para liberar el mouse";
                     bannerText.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
                 }
             }
@@ -1509,7 +1483,7 @@ namespace LanScreenShare.Desktop
                         bannerIcon.Data = (this.FindResource("IconLockOpen") as StreamGeometry)!;
                         bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
                     }
-                    bannerText.Text = "Mouse Liberado — Presiona Ctrl + Alt + L para recapturar";
+                    bannerText.Text = "Mouse Liberado â€” Presiona Ctrl + Alt + L para recapturar";
                     bannerText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
 
                     _gameModeBannerTimer?.Stop();
@@ -1914,14 +1888,14 @@ namespace LanScreenShare.Desktop
 
             var items = new List<ComboBoxItem>();
 
-            // 1. Resolución nativa como primera opción
+            // 1. ResoluciÃ³n nativa como primera opciÃ³n
             items.Add(new ComboBoxItem
             {
-                Content = $"{nativeW}×{nativeH} (Nativa)",
+                Content = $"{nativeW}Ã—{nativeH} (Nativa)",
                 Tag = $"{nativeW}x{nativeH}"
             });
 
-            // 2. Si es configuración multi-pantalla extendida (aspecto muy ancho > 2.2)
+            // 2. Si es configuraciÃ³n multi-pantalla extendida (aspecto muy ancho > 2.2)
             if (nativeAspect > 2.2)
             {
                 var ratios = new (double s, string label)[]
@@ -1938,7 +1912,7 @@ namespace LanScreenShare.Desktop
                     {
                         items.Add(new ComboBoxItem
                         {
-                            Content = $"{scaledW}×{scaledH} ({rLabel})",
+                            Content = $"{scaledW}Ã—{scaledH} ({rLabel})",
                             Tag = $"{scaledW}x{scaledH}"
                         });
                     }
@@ -1946,7 +1920,7 @@ namespace LanScreenShare.Desktop
             }
             else
             {
-                // Filtrar resoluciones menores compatibles con la relación de aspecto
+                // Filtrar resoluciones menores compatibles con la relaciÃ³n de aspecto
                 foreach (var (w, h, label) in commonResolutions)
                 {
                     if (w >= nativeW && h >= nativeH)
@@ -1960,7 +1934,7 @@ namespace LanScreenShare.Desktop
                     {
                         items.Add(new ComboBoxItem
                         {
-                            Content = $"{w}×{h} ({label})",
+                            Content = $"{w}Ã—{h} ({label})",
                             Tag = $"{w}x{h}"
                         });
                     }
@@ -2237,7 +2211,7 @@ namespace LanScreenShare.Desktop
             {
                 if (targetW > 0 && targetH > 0)
                 {
-                    scaleLabel.Text = $"{targetW}×{targetH}";
+                    scaleLabel.Text = $"{targetW}Ã—{targetH}";
                 }
                 else
                 {
@@ -2303,7 +2277,7 @@ namespace LanScreenShare.Desktop
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Settings] Error al guardar configuración actual: {ex.Message}");
+                Console.WriteLine($"[Settings] Error al guardar configuraciÃ³n actual: {ex.Message}");
             }
         }
 
@@ -2328,27 +2302,27 @@ namespace LanScreenShare.Desktop
                     string fpsInfo = _isHosting
                         ? $"Host: {frames} FPS"
                         : (_lastHostFps > 0
-                            ? $"Host: {_lastHostFps} FPS ({_lastHostFrameTimeMs} ms) • Red: {frames} FPS"
+                            ? $"Host: {_lastHostFps} FPS ({_lastHostFrameTimeMs} ms) â€¢ Red: {frames} FPS"
                             : $"{frames} FPS");
 
-                    string res = _lastFrameWidth > 0 ? $" • {_lastFrameWidth}x{_lastFrameHeight}" : "";
+                    string res = _lastFrameWidth > 0 ? $" â€¢ {_lastFrameWidth}x{_lastFrameHeight}" : "";
                     string engineTag = _isHosting
-                        ? (_screenCaptureService is DxgiScreenCaptureService ? " • DXGI GPU" : " • GDI CPU")
+                        ? (_screenCaptureService is DxgiScreenCaptureService ? " â€¢ DXGI GPU" : " â€¢ GDI CPU")
                         : "";
 
                     string codecTag = _isHosting
-                        ? $" • {_screenCaptureService.Codec.ToUpper()}"
+                        ? $" â€¢ {_screenCaptureService.Codec.ToUpper()}"
                         : "";
 
                     string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient.IsConnected && _audioClient.IsConnected)
-                        ? " • Audio"
+                        ? " â€¢ Audio"
                         : "";
 
                     string controlTag = _controlClient.IsConnected && _remoteControlEnabled
-                        ? " • Control Activo"
+                        ? " â€¢ Control Activo"
                         : "";
 
-                    statsText.Text = $"{fpsInfo} • {transferRate}{res}{engineTag}{codecTag}{audioTag}{controlTag}";
+                    statsText.Text = $"{fpsInfo} â€¢ {transferRate}{res}{engineTag}{codecTag}{audioTag}{controlTag}";
 
                     if (_isPopoutActive && _popoutWindow != null)
                     {
@@ -2407,7 +2381,7 @@ namespace LanScreenShare.Desktop
                     SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
                     _inputSimulatorService?.SetTargetSource(_currentSource);
 
-                    // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
+                    // 2. Iniciar servidor y captura de audio (Puerto 5002) si estÃ¡ habilitado
                     bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
                     bool shareMic = this.FindControl<CheckBox>("MicShareCheckBox")?.IsChecked ?? false;
                     if (shareAudio || shareMic)
@@ -2431,7 +2405,7 @@ namespace LanScreenShare.Desktop
                         }
                     }
 
-                    // 3. Iniciar servidor de control remoto (Puerto 5003) si está habilitado
+                    // 3. Iniciar servidor de control remoto (Puerto 5003) si estÃ¡ habilitado
                     if (_allowRemoteControl)
                     {
                         await _controlServer.StartAsync(5003);
@@ -2444,7 +2418,7 @@ namespace LanScreenShare.Desktop
 
                     if (hostBtn != null)
                     {
-                        hostBtn.Content = "Detener Transmisión";
+                        hostBtn.Content = "Detener TransmisiÃ³n";
                         hostBtn.Background = new SolidColorBrush(Color.Parse("#DC2626"));
                     }
 
@@ -2454,7 +2428,7 @@ namespace LanScreenShare.Desktop
                 }
                 catch (Exception ex)
                 {
-                    UpdateStatus($"Error al iniciar transmisión: {ex.Message}", "#EF4444");
+                    UpdateStatus($"Error al iniciar transmisiÃ³n: {ex.Message}", "#EF4444");
                 }
             }
             else
@@ -2480,7 +2454,7 @@ namespace LanScreenShare.Desktop
                     hostBtn.Background = new SolidColorBrush(Color.Parse("#3B82F6"));
                 }
 
-                UpdateStatus("Transmisión detenida", "#71717A");
+                UpdateStatus("TransmisiÃ³n detenida", "#71717A");
             }
         }
 
@@ -2561,7 +2535,7 @@ namespace LanScreenShare.Desktop
                 localInfo.Text = "Escuchando anuncios en puerto UDP 5000...";
             }
 
-            // Auto-detener búsqueda después de 10 segundos para no quedar en bucle
+            // Auto-detener bÃºsqueda despuÃ©s de 10 segundos para no quedar en bucle
             _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
             _searchTimer.Tick += (s, args) =>
             {
@@ -2641,8 +2615,8 @@ namespace LanScreenShare.Desktop
                     Console.WriteLine($"[AudioClient] Audio no disponible en el host: {ex.Message}");
                 }
 
-                // El control remoto NO se conecta automáticamente aquí para no solicitar permisos antes de tiempo.
-                // Se conecta únicamente a demanda cuando el visor hace clic en 'Control' o 'Modo 3D'.
+                // El control remoto NO se conecta automÃ¡ticamente aquÃ­ para no solicitar permisos antes de tiempo.
+                // Se conecta Ãºnicamente a demanda cuando el visor hace clic en 'Control' o 'Modo 3D'.
 
                 var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
                 if (fullscreenBtn != null)
@@ -2688,7 +2662,7 @@ namespace LanScreenShare.Desktop
                     remoteControlBtn.IsVisible = _currentDeviceAllowsRemoteControl;
                     remoteControlBtn.IsChecked = false;
                     remoteControlBtn.IsEnabled = true;
-                    ToolTip.SetTip(remoteControlBtn, "Habilitar interacción con mouse y teclado");
+                    ToolTip.SetTip(remoteControlBtn, "Habilitar interacciÃ³n con mouse y teclado");
                 }
 
                 var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
@@ -2701,7 +2675,9 @@ namespace LanScreenShare.Desktop
             }
             catch (Exception ex)
             {
-                UpdateStatus($"No se pudo conectar a {device.Name}: {ex.Message}", "#EF4444");
+                string detail = ex.InnerException != null ? $"{ex.Message} ({ex.InnerException.Message})" : ex.Message;
+                UpdateStatus($"No se pudo conectar a {device.Name}: {detail}", "#EF4444");
+                Console.WriteLine($"[ConnectError] No se pudo conectar a {device.Name}: {ex}");
             }
         }
 

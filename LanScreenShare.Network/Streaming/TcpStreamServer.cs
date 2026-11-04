@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Channels;
@@ -22,6 +23,7 @@ namespace LanScreenShare.Network.Streaming
 
         private readonly ISessionAuthority? _sessionAuthority;
         private readonly SslServerAuthenticationOptions? _sslServerOptions;
+        private readonly IPairedDeviceStore? _pairedDeviceStore;
 
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
@@ -39,16 +41,19 @@ namespace LanScreenShare.Network.Streaming
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
         public Func<string, Task<bool>>? ClientApprovalCallback { get; set; }
+        public Func<string, string, string, Task<bool>>? PairingApprovalCallback { get; set; }
 
         public bool IsRunning => _listener != null && _cts != null && !_cts.IsCancellationRequested;
         public int ConnectedClientsCount => _clients.Count;
 
         public TcpStreamServer(
             ISessionAuthority? sessionAuthority = null,
-            SslServerAuthenticationOptions? sslServerOptions = null)
+            SslServerAuthenticationOptions? sslServerOptions = null,
+            IPairedDeviceStore? pairedDeviceStore = null)
         {
             _sessionAuthority = sessionAuthority;
             _sslServerOptions = sslServerOptions;
+            _pairedDeviceStore = pairedDeviceStore;
         }
 
         public Task StartAsync(int port = 5001, CancellationToken cancellationToken = default)
@@ -83,11 +88,11 @@ namespace LanScreenShare.Network.Streaming
                                 Stream stream = client.GetStream();
                                 string? assignedSessionId = null;
 
-                                // 1. Negociación mTLS 1.3 si está habilitada
+                                // 1. Negociación mTLS 1.3 / 1.2 si está habilitada
                                 if (_sslServerOptions != null)
                                 {
                                     var sslStream = new SslStream(stream, false);
-                                    using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                                    using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
                                     using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
 
                                     await sslStream.AuthenticateAsServerAsync(_sslServerOptions, linkedCts.Token);
@@ -101,12 +106,59 @@ namespace LanScreenShare.Network.Streaming
 
                                     using var peerCert = new X509Certificate2(sslStream.RemoteCertificate);
                                     string peerFingerprint = TlsConfigurationHelper.ComputeFingerprint(peerCert);
+                                    string peerDeviceName = peerCert.GetNameInfo(X509NameType.SimpleName, false) ?? "RemotePeer";
+
+                                    if (_pairedDeviceStore != null)
+                                    {
+                                        bool isPaired = await _pairedDeviceStore.IsDevicePairedAsync(peerFingerprint);
+                                        if (!isPaired && PairingApprovalCallback != null)
+                                        {
+                                            byte[] hostNonce = new byte[16];
+                                            byte[] viewerNonce = new byte[16];
+                                            RandomNumberGenerator.Fill(hostNonce);
+                                            RandomNumberGenerator.Fill(viewerNonce);
+
+                                            byte[] hostCertBytes = _sslServerOptions.ServerCertificate is X509Certificate2 hostCertObj
+                                                ? hostCertObj.RawData
+                                                : Array.Empty<byte>();
+
+                                            var (sasCode, sasFormatted) = CanonicalSasCalculator.ComputeSas(
+                                                CanonicalSasCalculator.CurrentProtocolVersion,
+                                                hostCertBytes,
+                                                peerCert.RawData,
+                                                hostNonce,
+                                                viewerNonce);
+
+                                            bool approved = await PairingApprovalCallback(peerFingerprint, peerDeviceName, sasFormatted);
+                                            if (!approved)
+                                            {
+                                                Console.WriteLine($"[StreamServer] Emparejamiento rechazado por el anfitrión para {clientId} ({peerFingerprint})");
+                                                var errHandshake = new SessionHandshakeMessage
+                                                {
+                                                    Type = "ERROR",
+                                                    ErrorMessage = "Emparejamiento rechazado por el anfitrión."
+                                                };
+                                                await SessionHandshakeMessage.WriteAsync(sslStream, errHandshake, linkedCts.Token);
+                                                client.Close();
+                                                return;
+                                            }
+
+                                            // Registrar dispositivo emparejado de confianza
+                                            await _pairedDeviceStore.AddPairedDeviceAsync(new PairedDevice(
+                                                Guid.NewGuid().ToString("D"),
+                                                peerDeviceName,
+                                                peerFingerprint,
+                                                DateTime.UtcNow,
+                                                DateTime.UtcNow,
+                                                false));
+                                        }
+                                    }
 
                                     if (_sessionAuthority != null)
                                     {
                                         var (success, session, failureReason) = await _sessionAuthority.TryCreateSessionAsync(
                                             peerFingerprint,
-                                            peerCert.GetNameInfo(X509NameType.SimpleName, false) ?? "RemotePeer");
+                                            peerDeviceName);
 
                                         if (!success || session == null)
                                         {

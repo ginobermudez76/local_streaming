@@ -54,7 +54,7 @@ namespace LanScreenShare.Network.Streaming
             if (sslOptions != null)
             {
                 var sslStream = new SslStream(stream, false);
-                using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
 
                 await sslStream.AuthenticateAsClientAsync(sslOptions, linkedCts.Token);

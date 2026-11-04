@@ -185,5 +185,56 @@ public class LoopbackMtlsIntegrationTests
         await serverTask;
         listener.Stop();
     }
+
+    [TestMethod]
+    public async Task ProvisionalPairing_WhenNotPrePaired_TriggersCallback()
+    {
+        using var hostCert = CreateEcdsaCertificate("TestHost", TlsConfigurationHelper.ServerAuthOid);
+        using var viewerCert = CreateEcdsaCertificate("TestViewer", TlsConfigurationHelper.ClientAuthOid);
+
+        var deviceStore = new InMemoryPairedDeviceStore(); // Vacio: no emparejado previamente
+
+        bool serverCallbackInvoked = false;
+        bool clientCallbackInvoked = false;
+
+        var serverOptions = TlsConfigurationHelper.CreateServerOptions(hostCert, deviceStore, (fingerprint, cert) =>
+        {
+            serverCallbackInvoked = true;
+            return true; // Simular aprobación
+        });
+
+        var clientOptions = TlsConfigurationHelper.CreateClientOptions(viewerCert, "LanScreenShareHost", deviceStore, (fingerprint, cert) =>
+        {
+            clientCallbackInvoked = true;
+            return true;
+        });
+
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var token = cts.Token;
+
+        var serverTask = Task.Run(async () =>
+        {
+            using var serverTcp = await listener.AcceptTcpClientAsync(token);
+            using var serverSsl = new SslStream(serverTcp.GetStream(), false);
+            await serverSsl.AuthenticateAsServerAsync(serverOptions, token);
+            Assert.IsNotNull(serverSsl.RemoteCertificate);
+        });
+
+        using var clientTcp = new TcpClient();
+        await clientTcp.ConnectAsync(IPAddress.Loopback, port, token);
+        using var clientSsl = new SslStream(clientTcp.GetStream(), false);
+        await clientSsl.AuthenticateAsClientAsync(clientOptions, token);
+
+        await serverTask;
+        listener.Stop();
+
+        Assert.IsTrue(serverCallbackInvoked);
+        Assert.IsTrue(clientCallbackInvoked);
+    }
 }
+
 

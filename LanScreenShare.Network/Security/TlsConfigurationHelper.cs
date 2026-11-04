@@ -38,7 +38,7 @@ public static class TlsConfigurationHelper
         {
             ServerCertificate = hostCertificate,
             ClientCertificateRequired = true,
-            EnabledSslProtocols = SslProtocols.Tls13,
+            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
             CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
             RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) =>
             {
@@ -67,8 +67,12 @@ public static class TlsConfigurationHelper
         {
             ClientCertificates = new X509CertificateCollection { viewerCertificate },
             TargetHost = targetHost,
-            EnabledSslProtocols = SslProtocols.Tls13,
+            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
             CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+            LocalCertificateSelectionCallback = (sender, targetHost, localCertificates, remoteCertificate, acceptableIssuers) =>
+            {
+                return viewerCertificate;
+            },
             RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) =>
             {
                 if (certificate == null) return false;
@@ -145,6 +149,18 @@ public static class TlsConfigurationHelper
                     }
                 }
             }
+            else if (ext.Oid?.Value == "2.5.29.37")
+            {
+                var decodedEku = new X509EnhancedKeyUsageExtension(ext, ext.Critical);
+                foreach (var oid in decodedEku.EnhancedKeyUsages)
+                {
+                    if (oid.Value == expectedEkuOid)
+                    {
+                        hasEku = true;
+                        break;
+                    }
+                }
+            }
         }
 
         if (!hasEku)
@@ -158,10 +174,15 @@ public static class TlsConfigurationHelper
 
         if (deviceStore != null)
         {
-            bool isPaired = deviceStore.IsDevicePairedAsync(fingerprint).GetAwaiter().GetResult();
             bool isRevoked = deviceStore.IsDeviceRevokedAsync(fingerprint).GetAwaiter().GetResult();
+            if (isRevoked)
+            {
+                Console.WriteLine($"[mTLS] Certificado rechazado: dispositivo revocado ({fingerprint}).");
+                return false;
+            }
 
-            if (isPaired && !isRevoked)
+            bool isPaired = deviceStore.IsDevicePairedAsync(fingerprint).GetAwaiter().GetResult();
+            if (isPaired)
             {
                 return true;
             }
