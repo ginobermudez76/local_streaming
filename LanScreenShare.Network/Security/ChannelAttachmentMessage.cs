@@ -102,3 +102,4 @@ public static class ChannelAttachmentMessage
         return true;
     }
 }
+

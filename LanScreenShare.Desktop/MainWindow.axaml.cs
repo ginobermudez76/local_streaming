@@ -18,6 +18,11 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using LanScreenShare.Core.Security;
+using LanScreenShare.Network.Security;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
 using LanScreenShare.Media;
@@ -30,8 +35,16 @@ namespace LanScreenShare.Desktop
     {
         private readonly DiscoveryService _discoveryService;
         private IScreenCaptureService _screenCaptureService;
-        private readonly IStreamServer _streamServer;
-        private readonly IStreamClient _streamClient;
+        private readonly TcpStreamServer _streamServer;
+        private readonly TcpStreamClient _streamClient;
+
+        // Seguridad, autoridad de sesiones e identidad mTLS
+        private readonly IIdentityKeyStorage _identityKeyStorage;
+        private readonly IPairedDeviceStore _pairedDeviceStore;
+        private readonly ISessionAuthority _sessionAuthority;
+        private X509Certificate2? _identityCertificate;
+        private SslServerAuthenticationOptions? _sslServerOptions;
+        private SslClientAuthenticationOptions? _sslClientOptions;
 
         // Servicios de streaming de audio
         private readonly IAudioCaptureService? _audioCaptureService;
@@ -147,7 +160,30 @@ namespace LanScreenShare.Desktop
 
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
 
-            _streamServer = new TcpStreamServer();
+            IInputSimulatorService? inputSimulator = null;
+            if (OperatingSystem.IsWindows())
+            {
+                inputSimulator = new WindowsInputSimulatorService();
+                _inputSimulatorService = inputSimulator;
+            }
+
+            // Inicialización de subsistema de Seguridad, Autoridad de Sesiones y mTLS
+            _identityKeyStorage = new WindowsDpapiIdentityKeyStorage();
+            _pairedDeviceStore = new JsonPairedDeviceStore();
+            _sessionAuthority = new SessionAuthority(_pairedDeviceStore);
+
+            try
+            {
+                _identityCertificate = _identityKeyStorage.GetOrCreateIdentityCertificateAsync().GetAwaiter().GetResult();
+                _sslServerOptions = TlsConfigurationHelper.CreateServerOptions(_identityCertificate, _pairedDeviceStore, OnProvisionalPairingRequested);
+                _sslClientOptions = TlsConfigurationHelper.CreateClientOptions(_identityCertificate, "LanScreenShareHost", _pairedDeviceStore, OnClientProvisionalPairing);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Security] Error inicializando identidad mTLS: {ex.Message}");
+            }
+
+            _streamServer = new TcpStreamServer(_sessionAuthority, _sslServerOptions);
             _streamServer.ClientConnected += StreamServer_ClientConnected;
             _streamServer.ClientDisconnected += StreamServer_ClientDisconnected;
 
@@ -156,11 +192,11 @@ namespace LanScreenShare.Desktop
             _streamClient.StatusChanged += StreamClient_StatusChanged;
 
             // Inicialización de subsistema de Audio
-            _audioServer = new TcpAudioServer();
+            _audioServer = new TcpAudioServer(_sessionAuthority, _sslServerOptions);
             _audioClient = new TcpAudioClient();
 
             // Inicialización de subsistema de Control Remoto
-            _controlServer = new TcpControlServer();
+            _controlServer = new TcpControlServer(_sessionAuthority, _inputSimulatorService, _sslServerOptions);
             _controlClient = new TcpControlClient();
 
             if (OperatingSystem.IsWindows())
@@ -169,7 +205,7 @@ namespace LanScreenShare.Desktop
                 _audioPlayerService = new WasapiAudioPlayerService();
                 _micCaptureService = new WasapiMicrophoneCaptureService();
                 _micAudioPlayerService = new WasapiAudioPlayerService();
-                _inputSimulatorService = new WindowsInputSimulatorService();
+                // Input simulator ya inicializado previamente para TcpControlServer
 
                 _audioCaptureService.AudioCaptured += async (s, chunk) =>
                 {
@@ -1214,6 +1250,87 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private bool OnProvisionalPairingRequested(string fingerprint, X509Certificate2 clientCert)
+        {
+            if (_identityCertificate == null) return false;
+
+            byte[] hostNonce = new byte[16];
+            byte[] viewerNonce = new byte[16];
+            RandomNumberGenerator.Fill(hostNonce);
+            RandomNumberGenerator.Fill(viewerNonce);
+
+            var (sasCode, sasFormatted) = CanonicalSasCalculator.ComputeSas(
+                CanonicalSasCalculator.CurrentProtocolVersion,
+                _identityCertificate.RawData,
+                clientCert.RawData,
+                hostNonce,
+                viewerNonce);
+
+            string deviceName = clientCert.GetNameInfo(X509NameType.SimpleName, false) ?? "Dispositivo Remoto";
+
+            bool approved = RequestPairingApprovalAsync(deviceName, fingerprint, sasFormatted).GetAwaiter().GetResult();
+            if (approved)
+            {
+                _pairedDeviceStore.AddPairedDeviceAsync(new PairedDevice(
+                    Guid.NewGuid().ToString("D"),
+                    deviceName,
+                    fingerprint,
+                    DateTime.UtcNow,
+                    DateTime.UtcNow,
+                    false)).GetAwaiter().GetResult();
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool OnClientProvisionalPairing(string fingerprint, X509Certificate2 hostCert)
+        {
+            return true;
+        }
+
+        private async Task<bool> RequestPairingApprovalAsync(string deviceName, string fingerprint, string sasFormatted)
+        {
+            _streamApprovalTcs?.TrySetResult(false);
+            var tcs = new TaskCompletionSource<bool>();
+            _streamApprovalTcs = tcs;
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var banner = this.FindControl<Border>("StreamApprovalBanner");
+                var title = this.FindControl<TextBlock>("StreamApprovalTitle");
+                var subtitle = this.FindControl<TextBlock>("StreamApprovalSubtitle");
+                var sasText = this.FindControl<TextBlock>("StreamApprovalSasCode");
+
+                if (title != null) title.Text = $"Emparejamiento: {deviceName}";
+                if (subtitle != null) subtitle.Text = "Compara este código fuera de banda antes de aprobar:";
+                if (sasText != null)
+                {
+                    sasText.Text = $"Código SAS: {sasFormatted}";
+                    sasText.IsVisible = true;
+                }
+                if (banner != null) banner.IsVisible = true;
+            });
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var reg = cts.Token.Register(() => tcs.TrySetResult(false));
+
+            try
+            {
+                return await tcs.Task;
+            }
+            finally
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    var banner = this.FindControl<Border>("StreamApprovalBanner");
+                    var sasText = this.FindControl<TextBlock>("StreamApprovalSasCode");
+                    if (sasText != null) sasText.IsVisible = false;
+                    if (banner != null) banner.IsVisible = false;
+                });
+            }
+        }
+
         private async Task<bool> RequestStreamApprovalAsync(string clientId)
         {
             _streamApprovalTcs?.TrySetResult(false);
@@ -1288,7 +1405,8 @@ namespace LanScreenShare.Desktop
 
             try
             {
-                await _controlClient.ConnectAsync(_currentConnectedDeviceIp, 5003);
+                var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
+                await _controlClient.ConnectAsync(_currentConnectedDeviceIp, 5003, _sslClientOptions, handshake?.SessionId, handshake?.ControlToken);
                 Console.WriteLine($"[ControlViewer] Conectado a canal de control remoto en {_currentConnectedDeviceIp}:5003");
                 UpdateStatus($"Conectado a {_currentConnectedDeviceName} • Control remoto activo", "#22C55E");
                 return true;
@@ -2509,12 +2627,14 @@ namespace LanScreenShare.Desktop
             try
             {
                 // 1. Conectar flujo de video
-                await _streamClient.ConnectAsync(device.IPAddress, 5001);
+                await _streamClient.ConnectAsync(device.IPAddress, 5001, _sslClientOptions);
+
+                var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
 
                 // 2. Conectar flujo de audio en paralelo
                 try
                 {
-                    await _audioClient.ConnectAsync(device.IPAddress, 5002);
+                    await _audioClient.ConnectAsync(device.IPAddress, 5002, _sslClientOptions, handshake?.SessionId, handshake?.AudioToken);
                 }
                 catch (Exception ex)
                 {

@@ -105,3 +105,4 @@ public class Lsi2ControlPacketTests
         Assert.IsTrue(error!.Contains("InvalidMagic"));
     }
 }
+

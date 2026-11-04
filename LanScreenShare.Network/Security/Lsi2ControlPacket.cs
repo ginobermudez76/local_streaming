@@ -160,3 +160,4 @@ public sealed class Lsi2ControlPacket
         return true;
     }
 }
+

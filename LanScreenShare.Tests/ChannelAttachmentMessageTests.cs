@@ -88,3 +88,4 @@ public class ChannelAttachmentMessageTests
         Assert.IsTrue(error!.Contains("Invalid attachment magic"));
     }
 }
+
