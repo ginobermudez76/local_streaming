@@ -1,6 +1,6 @@
 # ADR-001: Arquitectura de Seguridad de Sesión, Autenticación Mutua (mTLS) y Emparejamiento en LanScreenShare
 
-* **Estado:** Propuesto (Revisión 3 — Aprobación Técnica Condicionada Resuelta)
+* **Estado:** Propuesto (Revisión 4 — Corrección Focalizada: Protocolo SAS de Comparación de Identidades)
 * **Fecha:** 2026-11-04
 * **Rama:** `feature/ui-and-architecture-refinement`
 * **Módulos afectados:** `LanScreenShare.Core`, `LanScreenShare.Network`, `LanScreenShare.Desktop`
@@ -35,7 +35,7 @@ LanScreenShare opera mediante una topología de red local multi-puerto sobre TCP
 | **T3: Conexión de control no autorizada** | Un atacante se conecta directamente al puerto 5003 sin pasar por el flujo de vídeo para inyectar entradas. | El puerto 5003 no admite datos sin presentar un `ChannelAttachmentToken` atómico de un solo uso derivado de una sesión mTLS autorizada. |
 | **T4: Ataque de repetición (Replay)** | Reenvío de paquetes de control capturados para ejecutar comandos no deseados. | Números de secuencia monotónicos `ulong` por sesión y protección anti-replay inherente de TLS 1.3. |
 | **T5: Confusión de sesión multicliente** | Eventos de múltiples visores entremezclados en el control del anfitrión. | Principio de *Single Active Controller* (exclusividad estricta garantizada por bloqueo atómico). |
-| **T6: Man-in-the-Middle (MitM) en primer contacto** | Sustitución de identidad durante el descubrimiento o emparejamiento inicial. | Protocolo SAS de 6 dígitos derivado criptográficamente del Channel Binding / Certificados DER y comparado fuera de banda. |
+| **T6: Man-in-the-Middle (MitM) en primer contacto** | Sustitución de identidad durante el descubrimiento o emparejamiento inicial. | Protocolo SAS (Short Authentication String) de 6 dígitos derivado de la comparación canónica de identidades y nonces verificados en mTLS. |
 
 ### 2.2 Amenazas Fuera de Alcance (Out of Scope)
 * **Endpoints comprometidos:** Si el visor emparejado contiene malware o un troyano con acceso a su clave privada, este ADR no puede distinguir comandos legítimos del usuario de comandos inyectados por el malware en ese visor.
@@ -95,9 +95,11 @@ Para resolver la aparente contradicción entre la validación estricta de mTLS y
 3. **Restricción Absoluta de Capacidades:**
    * La sesión se crea con estado `SessionState.ProvisionalPairing`.
    * **Cero streaming de vídeo, cero audio, cero control remoto.**
-   * Los únicos mensajes procesados son `PAIRING_INIT`, `PAIRING_CHALLENGE`, `PAIRING_SAS_VERIFY`, `PAIRING_CONFIRM`, `PAIRING_ABORT`.
-   * **Timeout Estricto:** Máximo 45 segundos; si expira, el socket se destruye.
-   * **Concurrencia:** Máximo 1 intento de emparejamiento provisional simultáneo para prevenir DoS.
+   * Los únicos mensajes procesados son `PAIRING_INIT`, `PAIRING_CHALLENGE`, `PAIRING_CONFIRM`, `PAIRING_ABORT`.
+4. **Protección contra DoS en Emparejamiento:**
+   * **Cola de solicitudes pendientes:** Se admiten hasta 3 solicitudes de emparejamiento simultáneas en cola de espera.
+   * **Timeout de Inactividad:** 30 segundos por solicitud; si el cliente no responde, el socket se libera.
+   * **Cancelación en UI:** El anfitrión dispone de un botón `[Cancelar]` en la tarjeta de emparejamiento para descartar inmediatamente la solicitud.
 
 ### 5.2 Fase B: Modo de Sesión Normal (Dispositivos Emparejados)
 * En conexiones ordinarias, `RemoteCertificateValidationCallback` aplica **Certificate Pinning estricto**:
@@ -105,27 +107,32 @@ Para resolver la aparente contradicción entre la validación estricta de mTLS y
 
 ---
 
-## 6. Especificación Completa del Protocolo SAS (Short Authentication String)
+## 6. Protocolo SAS de Comparación de Identidades (Opción B Seleccionada)
 
-### 6.1 Disponibilidad de API en .NET 9
-En .NET 9, la propuesta de API `SslStream.GetTlsExporter` (`dotnet/runtime #112529`) está en proceso de estandarización. Por consiguiente, para garantizar compatibilidad nativa sin APIs no publicadas, la vinculación criptográfica del SAS utiliza **`SslStream.TransportContext.GetChannelBinding(ChannelBindingKind.Endpoint)`** (RFC 5929 `tls-server-end-point`), complementado con el hash directo de los certificados mutuos:
+### 6.1 Evaluación Comparativa y Selección de Alternativa
+1. **Opción A (TLS Exporter RFC 9266):**
+   * *Diagnóstico:* `SslStream.GetTlsExporter` no existe en .NET 9 BCL. Implementarlo exigiría P/Invoke nativo a Windows SChannel (`QueryContextAttributes` con `SECPKG_ATTR_KEYING_MATERIAL`), rompiendo la portabilidad y añadiendo una superficie de fallo nativa considerable.
+2. **Opción B (Protocolo de Comparación de Identidades Criptográficas - SELECCIONADA):**
+   * *Diagnóstico:* Utiliza 100% APIs gestionadas estándar de .NET 9 (`SHA256` y `X509Certificate2.RawData`).
+   * *Fundamento de Seguridad:* Durante el handshake mTLS 1.3, el protocolo TLS ya exige la prueba criptográfica de posesión de las claves privadas de ambos extremos mediante el mensaje `CertificateVerify`. El protocolo SAS añade la **vinculación fuera de banda para autenticar humanamente que las identidades intercambiadas son las de los dos equipos legítimos**.
 
 ### 6.2 Construcción Matemática del SAS
-1. **Obtención del Channel Binding:**
-   $$\text{CBT} = \text{sslStream.TransportContext.GetChannelBinding(ChannelBindingKind.Endpoint)}$$
-2. **Generación de Nonces Criptográficos:**
+1. **Generación de Nonces Criptográficos:**
    * El anfitrión genera $N_{\text{Host}} \in \{0,1\}^{128}$ usando `RandomNumberGenerator.GetBytes(16)`.
    * El visor genera $N_{\text{Viewer}} \in \{0,1\}^{128}$ usando `RandomNumberGenerator.GetBytes(16)`.
-3. **Transcripción Canónica:**
-   $$\text{Transcript} = \text{ProtocolVersion (uint32)} \parallel \text{DER}(C_{\text{Host}}) \parallel \text{DER}(C_{\text{Viewer}}) \parallel N_{\text{Host}} \parallel N_{\text{Viewer}} \parallel \text{CBT}$$
-4. **Cálculo del SAS:**
-   $$\text{SAS\_Hash} = \text{HMAC-SHA256}(\text{Key} = \text{CBT}, \text{Message} = \text{Transcript})$$
-   $$\text{SAS\_Code} = \text{Int32}(\text{SAS\_Hash}[0..3]) \pmod{1\,000\,000} \quad \text{(Formato visual: 6 dígitos: } XXX\text{-}XXX\text{)}$$
+2. **Transcripción Canónica:**
+   $$\text{Transcript} = \text{ProtocolVersion (uint32)} \parallel \text{DER}(C_{\text{Host}}) \parallel \text{DER}(C_{\text{Viewer}}) \parallel N_{\text{Host}} \parallel N_{\text{Viewer}}$$
+3. **Derivación del Código de Comparación:**
+   $$\text{Hash} = \text{SHA256}(\text{Transcript})$$
+   $$\text{SAS\_Code} = \text{Int32}(\text{Hash}[0..3]) \pmod{1\,000\,000} \quad \text{(Formato visual: 6 dígitos: } XXX\text{-}XXX\text{)}$$
 
-### 6.3 Comparación Humana Obligatoria
-* El código de 6 dígitos se muestra simultáneamente en ambas pantallas.
-* Si un intermediario MitM intercepta la conexión, habrá dos conexiones TLS distintas con certificados y tokens CBT diferentes, por lo que los códigos diferirán de forma garantizada.
-* La huella solo se escribe en `IPairedDeviceStore` cuando el anfitrión pulsa `[Confirmar Código Coincidente]`.
+### 6.3 Demostración de Resistencia Anti-MitM
+* Si un atacante activo intenta interceptar la conexión provisional, debe terminar dos handshakes TLS 1.3 independientes:
+  * Conexión 1 (Atacante ↔ Anfitrión): El atacante presenta $C_{\text{Atacante\_Viewer}}$. El anfitrión calcula $\text{Transcript}_H$ usando $\text{DER}(C_{\text{Atacante\_Viewer}})$.
+  * Conexión 2 (Visor ↔ Atacante): El atacante presenta $C_{\text{Atacante\_Host}}$. El visor calcula $\text{Transcript}_V$ usando $\text{DER}(C_{\text{Atacante\_Host}})$.
+* Dado que el atacante no puede falsificar la clave privada de ninguno de los dos extremos legítimos, $C_{\text{Atacante}} \neq C_{\text{Legítimo}}$.
+* Por tanto, $\text{Transcript}_H \neq \text{Transcript}_V \implies \text{SAS\_Code}_H \neq \text{SAS\_Code}_V$.
+* Los códigos de 6 dígitos en pantalla **diferirán de forma garantizada**, permitiendo a los usuarios detectar la interceptación y abortar el emparejamiento.
 
 ---
 
@@ -199,7 +206,7 @@ flowchart TD
 | **Señalización JSON (5001)** | Máximo **16 KB** | Cierre inmediato del socket. |
 | **Paquete de Control (5003)** | Exactamente **28 bytes** | Descarte y desconexión si el magic no coincide. |
 | **Timeout de Handshake mTLS** | **10 segundos** | Destrucción del socket. |
-| **Timeout de Emparejamiento Provisional** | **45 segundos** | Cancelación y cierre de socket. |
+| **Timeout de Emparejamiento Provisional** | **30 segundos** por solicitud | Cancelación y cierre de socket. |
 | **Timeout de Token de Asociación** | **15 segundos** | Rechazo con código `410`. |
 | **Límite de Anuncios UDP 5000** | Máx. 1 paquete / seg por host | Visor ignora ráfagas > 5 paquetes / seg por IP. |
 | **Rendimiento TLS 1.3** | *Pendiente de benchmark empírico* | Se medirá formalmente en la Fase de Rendimiento. |
@@ -210,7 +217,7 @@ flowchart TD
 
 ### Decisiones Cerradas
 * mTLS 1.3 con `SslStream` sin protocolos criptográficos caseros.
-* Emparejamiento SAS de 6 dígitos ligado a `ChannelBinding` y nonces mutuos.
+* Emparejamiento SAS de 6 dígitos mediante comparación canónica de identidades y nonces (Opción B).
 * Separación formal entre *Emparejamiento Provisional* y *Sesión Normal*.
 * Token de canal con validación de tipo previa al consumo.
 * `InjectedInputTracker` con gestión de resultados parciales de `SendInput`.
