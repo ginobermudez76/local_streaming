@@ -10,19 +10,27 @@
         MinWidth="800" MinHeight="500"
         Background="#18181B">
 
-    <Grid x:Name="RootGrid" ColumnDefinitions="310,*">
+    <Window.Styles>
+        <Style Selector="Expander">
+            <Setter Property="Background" Value="#27272A"/>
+            <Setter Property="BorderBrush" Value="#3F3F46"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid x:Name="RootGrid" ColumnDefinitions="325,*">
         <!-- Sidebar -->
         <Border x:Name="SidebarBorder" Grid.Column="0" Background="#1F1F23" BorderBrush="#2D2D35" BorderThickness="0,0,1,0">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" Margin="16">
+                <StackPanel Spacing="10" Margin="14">
                     <!-- App Header -->
-                <StackPanel Grid.Row="0" Margin="0,0,0,14" Spacing="4">
-                    <TextBlock Text="LanScreenShare" FontSize="20" FontWeight="Bold" Foreground="#FAFAFA"/>
-                    <TextBlock Text="Transmisión de pantalla en LAN" FontSize="12" Foreground="#A1A1AA"/>
-                </StackPanel>
+                    <StackPanel Spacing="3" Margin="2,2,2,4">
+                        <TextBlock Text="LanScreenShare" FontSize="18" FontWeight="Bold" Foreground="#FAFAFA"/>
+                        <TextBlock Text="Transmisión de pantalla en LAN" FontSize="11" Foreground="#A1A1AA"/>
+                    </StackPanel>
 
-                <!-- Actions -->
-                <StackPanel Grid.Row="1" Spacing="8" Margin="0,0,0,14">
+                    <!-- Main Host Action -->
                     <Button x:Name="HostButton"
                             Content="Transmitir mi pantalla"
                             HorizontalAlignment="Stretch"
@@ -30,260 +38,421 @@
                             Background="#3B82F6"
                             Foreground="White"
                             FontWeight="SemiBold"
+                            FontSize="13"
                             Padding="12,10"
                             CornerRadius="6"/>
 
-                    <Button x:Name="SearchButton"
-                            Content="Buscar dispositivos"
-                            HorizontalAlignment="Stretch"
-                            HorizontalContentAlignment="Center"
-                            Background="#27272A"
-                            Foreground="White"
-                            Padding="12,10"
-                            CornerRadius="6"/>
-                </StackPanel>
-
-                <!-- Settings Section -->
-                <Border Grid.Row="2"
-                        Background="#27272A"
-                        BorderBrush="#3F3F46"
-                        BorderThickness="1"
-                        CornerRadius="8"
-                        Padding="12"
-                        Margin="0,0,0,14">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Ajustes de Transmisión"
-                                   Foreground="#FAFAFA"
-                                   FontSize="12"
-                                   FontWeight="SemiBold"/>
-
-                        <!-- Source Selector -->
-                        <StackPanel Spacing="4">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Grid.Column="0" Text="Fuente a Transmitir" FontSize="11" Foreground="#A1A1AA"/>
-                                <TextBlock Grid.Column="1" x:Name="SourceTypeBadge" Text="Pantalla" FontSize="10" Foreground="#38BDF8" FontWeight="Medium"/>
+                    <!-- Expander 1: Video y Pantalla -->
+                    <Expander x:Name="VideoExpander"
+                              IsExpanded="True"
+                              HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              Background="#27272A"
+                              BorderBrush="#3F3F46"
+                              BorderThickness="1"
+                              CornerRadius="8"
+                              Padding="10">
+                        <Expander.Header>
+                            <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+                                <PathIcon Grid.Column="0" Data="{StaticResource IconVideo}" Width="14" Height="14" Foreground="#38BDF8" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="Video y Pantalla" FontSize="12" FontWeight="SemiBold" Foreground="#FAFAFA" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="2" x:Name="PresetBadgeText" Text="⚡ Equilibrado" FontSize="10" Foreground="#38BDF8" FontWeight="Medium" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             </Grid>
-                            <Button x:Name="SelectSourceButton"
+                        </Expander.Header>
+                        <StackPanel Spacing="10" Margin="0,6,0,0">
+                            <!-- Source Selector -->
+                            <StackPanel Spacing="3">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Fuente a Transmitir" FontSize="11" Foreground="#A1A1AA"/>
+                                    <TextBlock Grid.Column="1" x:Name="SourceTypeBadge" Text="Pantalla" FontSize="10" Foreground="#38BDF8" FontWeight="Medium"/>
+                                </Grid>
+                                <Button x:Name="SelectSourceButton"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Stretch"
+                                        Background="#1E1E24"
+                                        BorderBrush="#3F3F46"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="8,6"
+                                        Cursor="Hand">
+                                    <Grid ColumnDefinitions="Auto,*,Auto">
+                                        <PathIcon Grid.Column="0"
+                                                  x:Name="SourceIcon"
+                                                  Data="{StaticResource IconTv}"
+                                                  Width="14" Height="14"
+                                                  Foreground="#38BDF8"
+                                                  Margin="0,0,8,0"
+                                                  VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1"
+                                                   x:Name="SelectedSourceNameText"
+                                                   Text="Pantalla 1"
+                                                   FontSize="11"
+                                                   Foreground="#F4F4F5"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Grid.Column="2"
+                                                   Text="Cambiar ▾"
+                                                   FontSize="10"
+                                                   Foreground="#93C5FD"
+                                                   VerticalAlignment="Center"
+                                                   Margin="4,0,0,0"/>
+                                    </Grid>
+                                </Button>
+                            </StackPanel>
+
+                            <!-- Dual Resolution Display: Captura vs Transmision -->
+                            <Border Background="#18181B" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="6" Padding="8,6">
+                                <Grid ColumnDefinitions="*,*">
+                                    <!-- Captura (Fuente) -->
+                                    <StackPanel Grid.Column="0" Spacing="2">
+                                        <TextBlock Text="Captura (Fuente)" FontSize="10" Foreground="#A1A1AA"/>
+                                        <TextBlock x:Name="CaptureResolutionText" Text="1920×1080" FontSize="11" FontWeight="SemiBold" Foreground="#FAFAFA"/>
+                                    </StackPanel>
+                                    <!-- Transmisión (Salida) -->
+                                    <StackPanel Grid.Column="1" Spacing="2">
+                                        <TextBlock Text="Transmisión" FontSize="10" Foreground="#A1A1AA"/>
+                                        <TextBlock x:Name="OutputResolutionText" Text="1920×1080 (100%)" FontSize="11" FontWeight="SemiBold" Foreground="#38BDF8"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Presets Selector -->
+                            <StackPanel Spacing="3">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Perfil de Transmisión" FontSize="11" Foreground="#A1A1AA"/>
+                                    <TextBlock Grid.Column="1" Text="Rápido" FontSize="10" Foreground="#71717A"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,*,*" Margin="0,2,0,0">
+                                    <!-- Preset Calidad -->
+                                    <Button x:Name="PresetQualityButton"
+                                            Grid.Column="0"
+                                            Margin="0,0,2,0"
+                                            Padding="2,6"
+                                            HorizontalAlignment="Stretch"
+                                            HorizontalContentAlignment="Center"
+                                            Background="#1E1E24"
+                                            BorderBrush="#3F3F46"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Cursor="Hand">
+                                        <StackPanel Spacing="1" HorizontalAlignment="Center">
+                                            <TextBlock Text="🌟 Calidad" FontSize="10" FontWeight="SemiBold" Foreground="#FAFAFA" HorizontalAlignment="Center"/>
+                                            <TextBlock Text="100% · 60f" FontSize="9" Foreground="#94A3B8" HorizontalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+
+                                    <!-- Preset Equilibrado -->
+                                    <Button x:Name="PresetBalancedButton"
+                                            Grid.Column="1"
+                                            Margin="2,0,2,0"
+                                            Padding="2,6"
+                                            HorizontalAlignment="Stretch"
+                                            HorizontalContentAlignment="Center"
+                                            Background="#1E3A8A"
+                                            BorderBrush="#3B82F6"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Cursor="Hand">
+                                        <StackPanel Spacing="1" HorizontalAlignment="Center">
+                                            <TextBlock Text="⚡ Óptimo" FontSize="10" FontWeight="SemiBold" Foreground="#FAFAFA" HorizontalAlignment="Center"/>
+                                            <TextBlock Text="75% · 30f" FontSize="9" Foreground="#93C5FD" HorizontalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+
+                                    <!-- Preset Fluidez -->
+                                    <Button x:Name="PresetSpeedButton"
+                                            Grid.Column="2"
+                                            Margin="2,0,0,0"
+                                            Padding="2,6"
+                                            HorizontalAlignment="Stretch"
+                                            HorizontalContentAlignment="Center"
+                                            Background="#1E1E24"
+                                            BorderBrush="#3F3F46"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Cursor="Hand">
+                                        <StackPanel Spacing="1" HorizontalAlignment="Center">
+                                            <TextBlock Text="🍃 Fluidez" FontSize="10" FontWeight="SemiBold" Foreground="#FAFAFA" HorizontalAlignment="Center"/>
+                                            <TextBlock Text="50% · Rápido" FontSize="9" Foreground="#94A3B8" HorizontalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+
+                            <!-- Toggle for Advanced Settings -->
+                            <Button x:Name="ToggleAdvancedSettingsButton"
                                     HorizontalAlignment="Stretch"
                                     HorizontalContentAlignment="Stretch"
+                                    Background="#18181B"
+                                    BorderBrush="#3F3F46"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="8,5"
+                                    Cursor="Hand"
+                                    Margin="0,2,0,0">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <PathIcon Grid.Column="0" Data="{StaticResource IconSliders}" Width="12" Height="12" Foreground="#94A3B8" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" Text="Ajustes Avanzados" FontSize="11" Foreground="#CBD5E1" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" x:Name="ToggleAdvancedArrow" Text="▾" FontSize="11" Foreground="#94A3B8" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Button>
+
+                            <!-- Advanced Settings Panel (Collapsible) -->
+                            <StackPanel x:Name="AdvancedSettingsPanel" Spacing="8" Margin="0,2,0,0" IsVisible="False">
+                                <!-- Engine Selector -->
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="Motor de Captura" FontSize="11" Foreground="#A1A1AA"/>
+                                    <ComboBox x:Name="EngineComboBox"
+                                              HorizontalAlignment="Stretch"
+                                              FontSize="11"
+                                              SelectedIndex="0">
+                                        <ComboBoxItem Content="DirectX DXGI (GPU Acelerado)" Tag="dxgi"/>
+                                        <ComboBoxItem Content="GDI BitBlt (CPU Compatibilidad)" Tag="gdi"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <!-- Codec Selector -->
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="Códec de Video" FontSize="11" Foreground="#A1A1AA"/>
+                                    <ComboBox x:Name="CodecComboBox"
+                                              HorizontalAlignment="Stretch"
+                                              FontSize="11"
+                                              SelectedIndex="0">
+                                        <ComboBoxItem Content="JPEG (Ultra Baja Latencia / Estable)" Tag="jpeg"/>
+                                        <ComboBoxItem Content="H.264 / AVC (Media Foundation)" Tag="h264"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <!-- FPS Selector -->
+                                <StackPanel Spacing="3">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0" Text="FPS Objetivo" FontSize="11" Foreground="#A1A1AA"/>
+                                        <TextBlock Grid.Column="1" x:Name="FpsValueLabel" Text="30 FPS" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
+                                    </Grid>
+                                    <ComboBox x:Name="FpsComboBox"
+                                              HorizontalAlignment="Stretch"
+                                              FontSize="11"
+                                              SelectedIndex="1">
+                                        <ComboBoxItem Content="15 FPS (Bajo consumo)" Tag="15"/>
+                                        <ComboBoxItem Content="30 FPS (Recomendado)" Tag="30"/>
+                                        <ComboBoxItem Content="60 FPS (Ultra fluido)" Tag="60"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <!-- Quality Slider -->
+                                <StackPanel Spacing="3">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0" x:Name="QualityTitleLabel" Text="Calidad JPEG" FontSize="11" Foreground="#A1A1AA"/>
+                                        <TextBlock Grid.Column="1" x:Name="QualityValueLabel" Text="75%" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
+                                    </Grid>
+                                    <Slider x:Name="QualitySlider"
+                                            Minimum="30"
+                                            Maximum="95"
+                                            Value="75"
+                                            SmallChange="5"
+                                            LargeChange="10"/>
+                                </StackPanel>
+
+                                <!-- Resolution Scale Selector -->
+                                <StackPanel Spacing="3">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0" Text="Escala Forzada" FontSize="11" Foreground="#A1A1AA"/>
+                                        <TextBlock Grid.Column="1" x:Name="ScaleValueLabel" Text="Nativa" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
+                                    </Grid>
+                                    <ComboBox x:Name="ScaleComboBox"
+                                              HorizontalAlignment="Stretch"
+                                              FontSize="11"
+                                              SelectedIndex="0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- Expander 2: Audio y Micrófono -->
+                    <Expander x:Name="AudioExpander"
+                              IsExpanded="False"
+                              HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              Background="#27272A"
+                              BorderBrush="#3F3F46"
+                              BorderThickness="1"
+                              CornerRadius="8"
+                              Padding="10">
+                        <Expander.Header>
+                            <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Center">
+                                <PathIcon Grid.Column="0" Data="{StaticResource IconVolumeUp}" Width="14" Height="14" Foreground="#A78BFA" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="Audio y Micrófono" FontSize="12" FontWeight="SemiBold" Foreground="#FAFAFA" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Expander.Header>
+                        <StackPanel Spacing="8" Margin="0,6,0,0">
+                            <!-- Audio Share Toggle -->
+                            <CheckBox x:Name="AudioShareCheckBox"
+                                      Content="Transmitir audio del sistema (Loopback)"
+                                      IsChecked="True"
+                                      Foreground="#E4E4E7"
+                                      FontSize="11"/>
+
+                            <!-- Microphone Share Toggle -->
+                            <CheckBox x:Name="MicShareCheckBox"
+                                      Content="Transmitir micrófono del anfitrión"
+                                      IsChecked="False"
+                                      Foreground="#E4E4E7"
+                                      FontSize="11"/>
+
+                            <TextBlock Text="Audio estéreo PCM de baja latencia transmitido a los espectadores conectados."
+                                       FontSize="10"
+                                       Foreground="#71717A"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- Expander 3: Control Remoto y Seguridad -->
+                    <Expander x:Name="SecurityExpander"
+                              IsExpanded="False"
+                              HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              Background="#27272A"
+                              BorderBrush="#3F3F46"
+                              BorderThickness="1"
+                              CornerRadius="8"
+                              Padding="10">
+                        <Expander.Header>
+                            <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Center">
+                                <PathIcon Grid.Column="0" Data="{StaticResource IconShield}" Width="14" Height="14" Foreground="#10B981" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="Control y Seguridad" FontSize="12" FontWeight="SemiBold" Foreground="#FAFAFA" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Expander.Header>
+                        <StackPanel Spacing="8" Margin="0,6,0,0">
+                            <!-- Remote Control Allow Toggle -->
+                            <CheckBox x:Name="AllowRemoteControlCheckBox"
+                                      Content="Permitir control remoto (Mouse/Teclas)"
+                                      IsChecked="True"
+                                      Foreground="#E4E4E7"
+                                      FontSize="11"/>
+
+                            <!-- Stream Access Approval Mode -->
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="Acceso a la Transmisión" FontSize="11" Foreground="#A1A1AA"/>
+                                <ComboBox x:Name="StreamAccessModeComboBox"
+                                          HorizontalAlignment="Stretch"
+                                          FontSize="11"
+                                          SelectedIndex="0">
+                                    <ComboBoxItem Content="Cualquiera en LAN (Automático)" Tag="auto"/>
+                                    <ComboBoxItem Content="Solicitar aprobación de espectadores" Tag="ask"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- Remote Control Access Mode -->
+                            <StackPanel x:Name="ControlAccessModePanel" Spacing="3" IsVisible="False">
+                                <TextBlock Text="Aprobación de Control Remoto" FontSize="11" Foreground="#A1A1AA"/>
+                                <ComboBox x:Name="ControlAccessModeComboBox"
+                                          HorizontalAlignment="Stretch"
+                                          FontSize="11"
+                                          SelectedIndex="0">
+                                    <ComboBoxItem Content="Cualquiera con permiso (Automático)" Tag="auto"/>
+                                    <ComboBoxItem Content="Solicitar aprobación antes de interactuar" Tag="ask"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- Admin Privilege Warning/Badge Compact -->
+                            <Border x:Name="AdminStatusBorder"
                                     Background="#27272A"
                                     BorderBrush="#3F3F46"
                                     BorderThickness="1"
                                     CornerRadius="6"
-                                    Padding="10,8"
-                                    Cursor="Hand">
-                                <Grid ColumnDefinitions="Auto,*,Auto">
-                                    <PathIcon Grid.Column="0"
-                                              x:Name="SourceIcon"
-                                              Data="{StaticResource IconTv}"
-                                              Width="16" Height="16"
-                                              Foreground="#38BDF8"
-                                              Margin="0,0,8,0"
-                                              VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="1"
-                                               x:Name="SelectedSourceNameText"
-                                               Text="Pantalla 1"
-                                               FontSize="12"
-                                               Foreground="#F4F4F5"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"/>
-                                    <TextBlock Grid.Column="2"
-                                               Text="Cambiar ▾"
-                                               FontSize="11"
-                                               Foreground="#93C5FD"
-                                               VerticalAlignment="Center"
-                                               Margin="4,0,0,0"/>
-                                </Grid>
-                            </Button>
-                        </StackPanel>
-
-                        <!-- Engine Selector -->
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="Motor de Captura" FontSize="11" Foreground="#A1A1AA"/>
-                            <ComboBox x:Name="EngineComboBox"
-                                      HorizontalAlignment="Stretch"
-                                      FontSize="12"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="DirectX DXGI (GPU Acelerado)" Tag="dxgi"/>
-                                <ComboBoxItem Content="GDI BitBlt (CPU Compatibilidad)" Tag="gdi"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <!-- Codec Selector -->
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="Códec de Video" FontSize="11" Foreground="#A1A1AA"/>
-                            <ComboBox x:Name="CodecComboBox"
-                                      HorizontalAlignment="Stretch"
-                                      FontSize="12"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="JPEG (Ultra Baja Latencia / Estable)" Tag="jpeg"/>
-                                <ComboBoxItem Content="H.264 / AVC (Media Foundation)" Tag="h264"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <!-- FPS Selector -->
-                        <StackPanel Spacing="4">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Grid.Column="0" Text="FPS Objetivo" FontSize="11" Foreground="#A1A1AA"/>
-                                <TextBlock Grid.Column="1" x:Name="FpsValueLabel" Text="30 FPS" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
-                            </Grid>
-                            <ComboBox x:Name="FpsComboBox"
-                                      HorizontalAlignment="Stretch"
-                                      FontSize="12"
-                                      SelectedIndex="1">
-                                <ComboBoxItem Content="15 FPS (Bajo consumo)" Tag="15"/>
-                                <ComboBoxItem Content="30 FPS (Recomendado)" Tag="30"/>
-                                <ComboBoxItem Content="60 FPS (Ultra fluido)" Tag="60"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <!-- Quality Slider -->
-                        <StackPanel Spacing="4">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Grid.Column="0" x:Name="QualityTitleLabel" Text="Calidad JPEG" FontSize="11" Foreground="#A1A1AA"/>
-                                <TextBlock Grid.Column="1" x:Name="QualityValueLabel" Text="75%" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
-                            </Grid>
-                            <Slider x:Name="QualitySlider"
-                                    Minimum="30"
-                                    Maximum="95"
-                                    Value="75"
-                                    SmallChange="5"
-                                    LargeChange="10"/>
-                        </StackPanel>
-
-                        <!-- Resolution Scale Selector -->
-                        <StackPanel Spacing="4">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Grid.Column="0" Text="Resolución" FontSize="11" Foreground="#A1A1AA"/>
-                                <TextBlock Grid.Column="1" x:Name="ScaleValueLabel" Text="Nativa" FontSize="11" Foreground="#38BDF8" FontWeight="Medium"/>
-                            </Grid>
-                            <ComboBox x:Name="ScaleComboBox"
-                                      HorizontalAlignment="Stretch"
-                                      FontSize="12"
-                                      SelectedIndex="0"/>
-                        </StackPanel>
-
-                        <!-- Audio Share Toggle -->
-                        <CheckBox x:Name="AudioShareCheckBox"
-                                  Content="Transmitir audio del sistema (Loopback)"
-                                  IsChecked="True"
-                                  Foreground="#E4E4E7"
-                                  FontSize="11"
-                                  Margin="0,2,0,0"/>
-
-                        <!-- Microphone Share Toggle -->
-                        <CheckBox x:Name="MicShareCheckBox"
-                                  Content="Transmitir micrófono del anfitrión"
-                                  IsChecked="False"
-                                  Foreground="#E4E4E7"
-                                  FontSize="11"
-                                  Margin="0,2,0,0"/>
-
-                        <!-- Remote Control Allow Toggle -->
-                        <CheckBox x:Name="AllowRemoteControlCheckBox"
-                                  Content="Permitir control remoto (Mouse/Teclas)"
-                                  IsChecked="True"
-                                  Foreground="#E4E4E7"
-                                  FontSize="11"
-                                  Margin="0,2,0,0"/>
-
-                        <!-- Stream Access Approval Mode -->
-                        <StackPanel Spacing="3" Margin="0,4,0,0">
-                            <TextBlock Text="Acceso a la Transmisión" FontSize="11" Foreground="#A1A1AA"/>
-                            <ComboBox x:Name="StreamAccessModeComboBox"
-                                      HorizontalAlignment="Stretch"
-                                      FontSize="11"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="Cualquiera en LAN (Automático)" Tag="auto"/>
-                                <ComboBoxItem Content="Solicitar aprobación de espectadores" Tag="ask"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <!-- Remote Control Access Mode -->
-                        <StackPanel x:Name="ControlAccessModePanel" Spacing="3" Margin="0,2,0,0" IsVisible="False">
-                            <TextBlock Text="Aprobación de Control Remoto" FontSize="11" Foreground="#A1A1AA"/>
-                            <ComboBox x:Name="ControlAccessModeComboBox"
-                                      HorizontalAlignment="Stretch"
-                                      FontSize="11"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="Cualquiera con permiso (Automático)" Tag="auto"/>
-                                <ComboBoxItem Content="Solicitar aprobación antes de interactuar" Tag="ask"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <!-- Admin Privilege Warning/Badge -->
-                        <Border x:Name="AdminStatusBorder"
-                                Background="#27272A"
-                                CornerRadius="4"
-                                Padding="8,5"
-                                Margin="0,4,0,0">
-                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                <PathIcon x:Name="AdminStatusIcon" Data="{StaticResource IconShield}" Width="12" Height="12" Foreground="#F59E0B" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="AdminStatusText"
-                                           Text="Modo Estándar"
-                                           Foreground="#F59E0B"
-                                           FontSize="10"
-                                           TextWrapping="Wrap"
-                                           VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </Border>
-
-                <!-- Devices Header -->
-                <TextBlock Grid.Row="3"
-                           Text="Dispositivos detectados:"
-                           Foreground="#A1A1AA"
-                           FontSize="12"
-                           FontWeight="Medium"
-                           Margin="0,0,0,8"/>
-
-                <!-- Devices List -->
-                <ListBox Grid.Row="4"
-                         x:Name="DevicesList"
-                         Background="Transparent"
-                         BorderThickness="0"
-                         Foreground="White"
-                         ScrollViewer.VerticalScrollBarVisibility="Disabled">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="models:DeviceInfo">
-                            <Border Background="#27272A"
-                                    BorderBrush="#3F3F46"
-                                    BorderThickness="1"
-                                    CornerRadius="6"
-                                    Padding="10"
-                                    Margin="0,0,0,6">
-                                <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Center">
-                                    <StackPanel Grid.Column="0" Spacing="2">
-                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="#FAFAFA"/>
-                                        <TextBlock Text="{Binding IPAddress}" FontSize="12" Foreground="#71717A"/>
+                                    Padding="8,6"
+                                    Margin="0,2,0,0">
+                                <Grid ColumnDefinitions="Auto,*">
+                                    <PathIcon Grid.Column="0" x:Name="AdminStatusIcon" Data="{StaticResource IconShield}" Width="14" Height="14" Foreground="#F59E0B" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <StackPanel Grid.Column="1" Spacing="1">
+                                        <TextBlock x:Name="AdminStatusText"
+                                                   Text="Modo Estándar"
+                                                   Foreground="#F59E0B"
+                                                   FontSize="11"
+                                                   FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="AdminStatusSubtext"
+                                                   Text="Ejecuta como Administrador para interactuar con juegos o UAC"
+                                                   Foreground="#A1A1AA"
+                                                   FontSize="10"
+                                                   TextWrapping="Wrap"/>
                                     </StackPanel>
-                                    <Button Grid.Column="1"
-                                            Content="Ver"
-                                            Tag="{Binding}"
-                                            Click="ConnectDevice_Click"
-                                            Background="#2563EB"
-                                            Foreground="White"
-                                            FontSize="12"
-                                            Padding="10,6"
-                                            CornerRadius="4"/>
                                 </Grid>
                             </Border>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                        </StackPanel>
+                    </Expander>
 
-                <!-- Footer / Local Info -->
-                <TextBlock Grid.Row="5"
-                           x:Name="LocalInfoText"
-                           Text="Listo para transmitir o recibir"
-                           FontSize="11"
-                           Foreground="#71717A"
-                           Margin="0,8,0,0"
-                           TextWrapping="Wrap"/>
-            </Grid>
-        </ScrollViewer>
-    </Border>
+                    <!-- Expander 4: Dispositivos en LAN -->
+                    <Expander x:Name="DevicesExpander"
+                              IsExpanded="True"
+                              HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              Background="#27272A"
+                              BorderBrush="#3F3F46"
+                              BorderThickness="1"
+                              CornerRadius="8"
+                              Padding="10">
+                        <Expander.Header>
+                            <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Center">
+                                <PathIcon Grid.Column="0" Data="{StaticResource IconDevices}" Width="14" Height="14" Foreground="#60A5FA" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="Dispositivos en LAN" FontSize="12" FontWeight="SemiBold" Foreground="#FAFAFA" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Expander.Header>
+                        <StackPanel Spacing="8" Margin="0,6,0,0">
+                            <Button x:Name="SearchButton"
+                                    Content="Buscar dispositivos"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Background="#1E1E24"
+                                    BorderBrush="#3F3F46"
+                                    BorderThickness="1"
+                                    Foreground="White"
+                                    FontSize="11"
+                                    Padding="8,6"
+                                    CornerRadius="6"/>
+
+                            <ListBox x:Name="DevicesList"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Foreground="White"
+                                     ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate x:DataType="models:DeviceInfo">
+                                        <Border Background="#1E1E24"
+                                                BorderBrush="#3F3F46"
+                                                BorderThickness="1"
+                                                CornerRadius="6"
+                                                Padding="8,6"
+                                                Margin="0,0,0,4">
+                                            <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Center">
+                                                <StackPanel Grid.Column="0" Spacing="1">
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="11" Foreground="#FAFAFA"/>
+                                                    <TextBlock Text="{Binding IPAddress}" FontSize="10" Foreground="#71717A"/>
+                                                </StackPanel>
+                                                <Button Grid.Column="1"
+                                                        Content="Ver"
+                                                        Tag="{Binding}"
+                                                        Click="ConnectDevice_Click"
+                                                        Background="#2563EB"
+                                                        Foreground="White"
+                                                        FontSize="11"
+                                                        Padding="10,4"
+                                                        CornerRadius="4"/>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <TextBlock x:Name="LocalInfoText"
+                                       Text="Listo para transmitir o recibir"
+                                       FontSize="10"
+                                       Foreground="#71717A"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Expander>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
 
         <!-- Main Area (Stream Preview) -->
         <Grid Grid.Column="1" x:Name="MainAreaGrid" RowDefinitions="Auto,*">
@@ -428,7 +597,7 @@
                                 Padding="8,6"
                                 CornerRadius="4"
                                 ToolTip.Tip="Abrir transmisión en ventana emergente independiente">
-                            <PathIcon Data="{StaticResource IconOpenInNew}" Width="14" Height="14" Foreground="White"/>
+                                <PathIcon Data="{StaticResource IconOpenInNew}" Width="14" Height="14" Foreground="White"/>
                         </Button>
 
                         <Button x:Name="FullscreenButton"

@@ -104,6 +104,7 @@ namespace LanScreenShare.Desktop
         private readonly DispatcherTimer _metricsTimer;
         private AppSettings _appSettings = new();
         private bool _isInitializingSettings = true;
+        private bool _isApplyingPreset = false;
         private CaptureSource _currentSource = new()
         {
             Type = CaptureSourceType.Screen,
@@ -715,6 +716,24 @@ namespace LanScreenShare.Desktop
             }
 
             var audioShareCb = this.FindControl<CheckBox>("AudioShareCheckBox");
+            // Presets y Ajustes Avanzados
+            var presetQualityBtn = this.FindControl<Button>("PresetQualityButton");
+            if (presetQualityBtn != null) presetQualityBtn.Click += (s, e) => ApplyTransmissionPreset("quality");
+            var presetBalancedBtn = this.FindControl<Button>("PresetBalancedButton");
+            if (presetBalancedBtn != null) presetBalancedBtn.Click += (s, e) => ApplyTransmissionPreset("balanced");
+            var presetSpeedBtn = this.FindControl<Button>("PresetSpeedButton");
+            if (presetSpeedBtn != null) presetSpeedBtn.Click += (s, e) => ApplyTransmissionPreset("speed");
+            var toggleAdvBtn = this.FindControl<Button>("ToggleAdvancedSettingsButton");
+            if (toggleAdvBtn != null)
+            {
+                toggleAdvBtn.Click += (s, e) =>
+                {
+                    _appSettings.ShowAdvancedSettings = !_appSettings.ShowAdvancedSettings;
+                    UpdateAdvancedSettingsVisibility();
+                    SaveCurrentSettings();
+                };
+            }
+            UpdateAdvancedSettingsVisibility();
             if (audioShareCb != null)
             {
                 audioShareCb.IsChecked = _appSettings.ShareAudio;
@@ -758,30 +777,18 @@ namespace LanScreenShare.Desktop
             _metricsTimer.Start();
 
             // Indicador de permisos de Administrador para control de juegos/launchers
-            var adminStatusBorder = this.FindControl<Border>("AdminStatusBorder");
-            var adminStatusText = this.FindControl<TextBlock>("AdminStatusText");
-            var adminStatusIcon = this.FindControl<PathIcon>("AdminStatusIcon");
-            if (adminStatusBorder != null && adminStatusText != null)
-            {
-                if (IsRunningAsAdministrator())
-                {
-                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#14532D"));
-                    adminStatusText.Text = "Modo Administrador Activo (Control de juegos y apps elevadas)";
-                    adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
-                    if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
-                    ToolTip.SetTip(adminStatusBorder, "Permisos elevados activos: Puede interactuar libremente con launchers de juegos, Administrador de Tareas y ventanas administrativas.");
-                }
-                else
-                {
-                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#451A03"));
-                    adminStatusText.Text = "Modo EstÃ¡ndar: Ejecuta como Administrador para controlar launchers y juegos";
-                    adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
-                    if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
-                    ToolTip.SetTip(adminStatusBorder, "Windows restringe el control remoto sobre ventanas elevadas como launchers o juegos. Abre la aplicaciÃ³n con 'Ejecutar como Administrador' para habilitarlo.");
-                }
-            }
+            UpdateAdminStatusUI();
 
             this.Closing += MainWindow_Closing;
+
+            if (!string.IsNullOrEmpty(_appSettings.TransmissionPreset) && _appSettings.TransmissionPreset != "custom")
+            {
+                ApplyTransmissionPreset(_appSettings.TransmissionPreset, save: false);
+            }
+            else
+            {
+                UpdatePresetButtonsHighlight(_appSettings.TransmissionPreset ?? "balanced");
+            }
 
             _isInitializingSettings = false;
             OnSettingChanged();
@@ -1958,6 +1965,8 @@ namespace LanScreenShare.Desktop
                 }
             }
             scaleCombo.SelectedIndex = selectedIndex;
+            GetSelectedResolution(out int targetW, out int targetH, out double scale);
+            UpdateResolutionLabels(nativeW, nativeH, targetW, targetH, scale);
         }
 
         private void GetSelectedResolution(out int targetW, out int targetH, out double scale)
@@ -2221,6 +2230,16 @@ namespace LanScreenShare.Desktop
                 }
             }
 
+            int nativeW = (_currentSource != null && _currentSource.Width > 0) ? _currentSource.Width : 1920;
+            int nativeH = (_currentSource != null && _currentSource.Height > 0) ? _currentSource.Height : 1080;
+            UpdateResolutionLabels(nativeW, nativeH, targetW, targetH, scale);
+
+            if (!_isApplyingPreset && !_isInitializingSettings)
+            {
+                _appSettings.TransmissionPreset = "custom";
+                UpdatePresetButtonsHighlight("custom");
+            }
+
             _screenCaptureService.UpdateSettings(fps, quality, scale, codec, targetW, targetH, bitrateMbps);
         }
 
@@ -2274,6 +2293,9 @@ namespace LanScreenShare.Desktop
                 _appSettings.StretchMode = _currentStretchMode == Stretch.Fill ? "Fill" : "Uniform";
                 _appSettings.CaptureSourceId = _currentSource.Id;
                 _appSettings.CaptureSourceName = _currentSource.Name;
+
+                _appSettings.TransmissionPreset = string.IsNullOrEmpty(_appSettings.TransmissionPreset) ? "balanced" : _appSettings.TransmissionPreset;
+                _appSettings.ShowAdvancedSettings = this.FindControl<StackPanel>("AdvancedSettingsPanel")?.IsVisible ?? false;
 
                 SettingsService.Save(_appSettings);
             }
