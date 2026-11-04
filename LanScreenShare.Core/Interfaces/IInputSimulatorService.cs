@@ -7,5 +7,6 @@ namespace LanScreenShare.Core.Interfaces
     {
         void SimulateInput(RemoteInputMessage input);
         void SetTargetSource(CaptureSource source);
+        void ReleaseInjectedInputs();
     }
 }

@@ -3,58 +3,149 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
+using LanScreenShare.Core.Security;
 
 namespace LanScreenShare.Media
 {
     [SupportedOSPlatform("windows")]
     public class WindowsInputSimulatorService : IInputSimulatorService
     {
+        private readonly object _inputLock = new();
+        private readonly InjectedInputTracker _tracker = new();
         private bool _disposed;
         private CaptureSource? _currentTargetSource;
 
+        public InjectedInputTracker Tracker => _tracker;
+
         public void SetTargetSource(CaptureSource source)
         {
-            _currentTargetSource = source;
+            lock (_inputLock)
+            {
+                _currentTargetSource = source;
+            }
         }
 
         public void SimulateInput(RemoteInputMessage input)
         {
-            try
+            if (_disposed) return;
+
+            lock (_inputLock)
             {
-                switch (input.Type)
+                try
                 {
-                    case InputEventType.MouseMove:
-                        SendMouseMove(input.NormalizedX, input.NormalizedY);
-                        break;
+                    switch (input.Type)
+                    {
+                        case InputEventType.MouseMove:
+                            SendMouseMove(input.NormalizedX, input.NormalizedY);
+                            break;
 
-                    case InputEventType.MouseMoveRelative:
-                        SendMouseMoveRelative((int)Math.Round(input.NormalizedX), (int)Math.Round(input.NormalizedY));
-                        break;
+                        case InputEventType.MouseMoveRelative:
+                            SendMouseMoveRelative((int)Math.Round(input.NormalizedX), (int)Math.Round(input.NormalizedY));
+                            break;
 
-                    case InputEventType.MouseDown:
-                        SendMouseButton(input.Button, isDown: true, input.NormalizedX, input.NormalizedY);
-                        break;
+                        case InputEventType.MouseDown:
+                            SendMouseButton(input.Button, isDown: true, input.NormalizedX, input.NormalizedY);
+                            break;
 
-                    case InputEventType.MouseUp:
-                        SendMouseButton(input.Button, isDown: false, input.NormalizedX, input.NormalizedY);
-                        break;
+                        case InputEventType.MouseUp:
+                            SendMouseButton(input.Button, isDown: false, input.NormalizedX, input.NormalizedY);
+                            break;
 
-                    case InputEventType.MouseWheel:
-                        SendMouseWheel(input.WheelDelta, input.NormalizedX, input.NormalizedY);
-                        break;
+                        case InputEventType.MouseWheel:
+                            SendMouseWheel(input.WheelDelta, input.NormalizedX, input.NormalizedY);
+                            break;
 
-                    case InputEventType.KeyDown:
-                        SendKeyboard(input.KeyCode, isDown: true);
-                        break;
+                        case InputEventType.KeyDown:
+                            SendKeyboard(input.KeyCode, isDown: true);
+                            break;
 
-                    case InputEventType.KeyUp:
-                        SendKeyboard(input.KeyCode, isDown: false);
-                        break;
+                        case InputEventType.KeyUp:
+                            SendKeyboard(input.KeyCode, isDown: false);
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[InputSimulator] Error simulando entrada: {ex.Message}");
                 }
             }
-            catch (Exception ex)
+        }
+
+        public void ReleaseInjectedInputs()
+        {
+            lock (_inputLock)
             {
-                Console.WriteLine($"[InputSimulator] Error simulando entrada: {ex.Message}");
+                var keys = _tracker.GetPressedKeysSnapshot();
+                var buttons = _tracker.GetPressedMouseButtonsSnapshot();
+
+                if (keys.Length == 0 && buttons.Length == 0)
+                    return;
+
+                var inputs = new INPUT[keys.Length + buttons.Length];
+                int idx = 0;
+
+                // 1. Liberar teclas registradas exclusivamente (KEYUP)
+                foreach (int vk in keys)
+                {
+                    inputs[idx++] = new INPUT
+                    {
+                        type = INPUT_KEYBOARD,
+                        u = new InputUnion
+                        {
+                            ki = new KEYBDINPUT
+                            {
+                                wVk = (ushort)vk,
+                                wScan = 0,
+                                dwFlags = KEYEVENTF_KEYUP,
+                                time = 0,
+                                dwExtraInfo = UIntPtr.Zero
+                            }
+                        }
+                    };
+                }
+
+                // 2. Liberar botones de ratón registrados exclusivamente (UP)
+                foreach (var button in buttons)
+                {
+                    uint flag = button switch
+                    {
+                        RemoteMouseButton.Left => MOUSEEVENTF_LEFTUP,
+                        RemoteMouseButton.Right => MOUSEEVENTF_RIGHTUP,
+                        RemoteMouseButton.Middle => MOUSEEVENTF_MIDDLEUP,
+                        _ => 0
+                    };
+
+                    if (flag != 0)
+                    {
+                        inputs[idx++] = new INPUT
+                        {
+                            type = INPUT_MOUSE,
+                            u = new InputUnion
+                            {
+                                mi = new MOUSEINPUT
+                                {
+                                    dx = 0,
+                                    dy = 0,
+                                    mouseData = 0,
+                                    dwFlags = flag,
+                                    time = 0,
+                                    dwExtraInfo = UIntPtr.Zero
+                                }
+                            }
+                        };
+                    }
+                }
+
+                if (idx > 0)
+                {
+                    uint inserted = SendInput((uint)idx, inputs, Marshal.SizeOf<INPUT>());
+                    if (inserted < (uint)idx)
+                    {
+                        Console.WriteLine($"[InputSimulator] Advertencia: Sólo se liberaron {inserted} de {idx} eventos de limpieza.");
+                    }
+                }
+
+                _tracker.Reset();
             }
         }
 
@@ -99,7 +190,27 @@ namespace LanScreenShare.Media
             if (dx == 0 && dy == 0)
                 return;
 
-            mouse_event(MOUSEEVENTF_MOVE, (uint)dx, (uint)dy, 0, UIntPtr.Zero);
+            var input = new INPUT[]
+            {
+                new()
+                {
+                    type = INPUT_MOUSE,
+                    u = new InputUnion
+                    {
+                        mi = new MOUSEINPUT
+                        {
+                            dx = dx,
+                            dy = dy,
+                            mouseData = 0,
+                            dwFlags = MOUSEEVENTF_MOVE,
+                            time = 0,
+                            dwExtraInfo = UIntPtr.Zero
+                        }
+                    }
+                }
+            };
+
+            SendInput(1, input, Marshal.SizeOf<INPUT>());
         }
 
         private void SendMouseButton(RemoteMouseButton button, bool isDown, float normX, float normY)
@@ -109,29 +220,46 @@ namespace LanScreenShare.Media
                 SendMouseMove(normX, normY);
             }
 
-            // Si es una ventana específica, enfocarla al hacer clic
             if (isDown && _currentTargetSource?.Type == CaptureSourceType.Window && _currentTargetSource.Handle != IntPtr.Zero)
             {
                 SetForegroundWindow(_currentTargetSource.Handle);
             }
 
-            uint flag = 0;
-            switch (button)
+            uint flag = button switch
             {
-                case RemoteMouseButton.Left:
-                    flag = isDown ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
-                    break;
-                case RemoteMouseButton.Right:
-                    flag = isDown ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
-                    break;
-                case RemoteMouseButton.Middle:
-                    flag = isDown ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
-                    break;
-                default:
-                    return;
-            }
+                RemoteMouseButton.Left => isDown ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP,
+                RemoteMouseButton.Right => isDown ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP,
+                RemoteMouseButton.Middle => isDown ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP,
+                _ => 0
+            };
 
-            mouse_event(flag, 0, 0, 0, UIntPtr.Zero);
+            if (flag == 0) return;
+
+            var input = new INPUT[]
+            {
+                new()
+                {
+                    type = INPUT_MOUSE,
+                    u = new InputUnion
+                    {
+                        mi = new MOUSEINPUT
+                        {
+                            dx = 0,
+                            dy = 0,
+                            mouseData = 0,
+                            dwFlags = flag,
+                            time = 0,
+                            dwExtraInfo = UIntPtr.Zero
+                        }
+                    }
+                }
+            };
+
+            uint inserted = SendInput(1, input, Marshal.SizeOf<INPUT>());
+            if (inserted > 0)
+            {
+                _tracker.RecordMouseButton(button, isDown);
+            }
         }
 
         private void SendMouseWheel(short delta, float normX, float normY)
@@ -140,22 +268,70 @@ namespace LanScreenShare.Media
             {
                 SendMouseMove(normX, normY);
             }
-            mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (uint)delta, UIntPtr.Zero);
+
+            var input = new INPUT[]
+            {
+                new()
+                {
+                    type = INPUT_MOUSE,
+                    u = new InputUnion
+                    {
+                        mi = new MOUSEINPUT
+                        {
+                            dx = 0,
+                            dy = 0,
+                            mouseData = (uint)delta,
+                            dwFlags = MOUSEEVENTF_WHEEL,
+                            time = 0,
+                            dwExtraInfo = UIntPtr.Zero
+                        }
+                    }
+                }
+            };
+
+            SendInput(1, input, Marshal.SizeOf<INPUT>());
         }
 
-        private static void SendKeyboard(int keyCode, bool isDown)
+        private void SendKeyboard(int keyCode, bool isDown)
         {
             if (keyCode <= 0 || keyCode > 0xFF)
                 return;
 
             uint flags = isDown ? 0 : KEYEVENTF_KEYUP;
-            keybd_event((byte)keyCode, 0, flags, UIntPtr.Zero);
+
+            var input = new INPUT[]
+            {
+                new()
+                {
+                    type = INPUT_KEYBOARD,
+                    u = new InputUnion
+                    {
+                        ki = new KEYBDINPUT
+                        {
+                            wVk = (ushort)keyCode,
+                            wScan = 0,
+                            dwFlags = flags,
+                            time = 0,
+                            dwExtraInfo = UIntPtr.Zero
+                        }
+                    }
+                }
+            };
+
+            uint inserted = SendInput(1, input, Marshal.SizeOf<INPUT>());
+            if (inserted > 0)
+            {
+                _tracker.RecordKey(keyCode, isDown);
+            }
         }
 
-        #region Win32 P/Invoke
+        #region Win32 P/Invoke & Structures
 
         private const int SM_CXSCREEN = 0;
         private const int SM_CYSCREEN = 1;
+
+        private const uint INPUT_MOUSE = 0;
+        private const uint INPUT_KEYBOARD = 1;
 
         private const uint MOUSEEVENTF_MOVE = 0x0001;
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
@@ -184,17 +360,49 @@ namespace LanScreenShare.Media
             public int y;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct INPUT
+        {
+            public uint type;
+            public InputUnion u;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct InputUnion
+        {
+            [FieldOffset(0)] public MOUSEINPUT mi;
+            [FieldOffset(0)] public KEYBDINPUT ki;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public UIntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public UIntPtr dwExtraInfo;
+        }
+
         [DllImport("user32.dll")]
         private static extern int GetSystemMetrics(int nIndex);
 
         [DllImport("user32.dll")]
         private static extern bool SetCursorPos(int X, int Y);
 
-        [DllImport("user32.dll")]
-        private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
-
-        [DllImport("user32.dll")]
-        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(uint nInputs, [In] INPUT[] pInputs, int cbSize);
 
         [DllImport("user32.dll")]
         private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
@@ -213,6 +421,7 @@ namespace LanScreenShare.Media
                 return;
 
             _disposed = true;
+            ReleaseInjectedInputs();
             GC.SuppressFinalize(this);
         }
     }
