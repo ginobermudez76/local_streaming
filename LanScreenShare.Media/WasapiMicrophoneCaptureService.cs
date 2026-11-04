@@ -18,6 +18,8 @@ namespace LanScreenShare.Media
         public event EventHandler<CapturedAudioChunk>? AudioCaptured;
         public bool IsCapturing => _capture != null;
 
+        public void StartCapture(int processId) => StartCapture();
+
         public void StartCapture()
         {
             if (IsCapturing)

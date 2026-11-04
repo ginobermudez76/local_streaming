@@ -8,6 +8,7 @@ namespace LanScreenShare.Core.Interfaces
         event EventHandler<CapturedAudioChunk>? AudioCaptured;
         bool IsCapturing { get; }
         void StartCapture();
+        void StartCapture(int processId);
         void StopCapture();
     }
 }

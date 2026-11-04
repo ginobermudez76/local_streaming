@@ -198,6 +198,7 @@ namespace LanScreenShare.Media
                         Subtitle = $"{procName} • {w}×{h}",
                         Handle = hWnd,
                         ProcessName = procName,
+                        ProcessId = (int)pid,
                         X = rect.Left,
                         Y = rect.Top,
                         Width = w,

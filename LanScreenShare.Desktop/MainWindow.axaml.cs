@@ -329,9 +329,33 @@ namespace LanScreenShare.Desktop
             if (micShareCb != null)
             {
                 micShareCb.IsChecked = _appSettings.ShareMicrophone;
-                micShareCb.IsCheckedChanged += (s, e) =>
+                micShareCb.IsCheckedChanged += async (s, e) =>
                 {
+                    bool isChecked = micShareCb.IsChecked == true;
+                    _appSettings.ShareMicrophone = isChecked;
                     SaveCurrentSettings();
+
+                    if (_isHosting)
+                    {
+                        if (isChecked)
+                        {
+                            try
+                            {
+                                await _audioServer.StartAsync(5002);
+                                _micCaptureService?.StartCapture();
+                                Console.WriteLine("[Host] Captura de micrófono iniciada dinámicamente.");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[Host] Error activando micrófono: {ex.Message}");
+                            }
+                        }
+                        else
+                        {
+                            _micCaptureService?.StopCapture();
+                            Console.WriteLine("[Host] Captura de micrófono detenida dinámicamente.");
+                        }
+                    }
                 };
             }
 
@@ -656,7 +680,35 @@ namespace LanScreenShare.Desktop
             if (audioShareCb != null)
             {
                 audioShareCb.IsChecked = _appSettings.ShareAudio;
-                audioShareCb.IsCheckedChanged += (s, e) => SaveCurrentSettings();
+                audioShareCb.IsCheckedChanged += async (s, e) =>
+                {
+                    bool isChecked = audioShareCb.IsChecked == true;
+                    _appSettings.ShareAudio = isChecked;
+                    SaveCurrentSettings();
+
+                    if (_isHosting)
+                    {
+                        if (isChecked)
+                        {
+                            try
+                            {
+                                await _audioServer.StartAsync(5002);
+                                int targetPid = GetTargetAudioProcessId();
+                                _audioCaptureService?.StartCapture(targetPid);
+                                Console.WriteLine($"[Host] Captura de audio iniciada dinámicamente (PID {targetPid}).");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[Host] Error activando audio: {ex.Message}");
+                            }
+                        }
+                        else
+                        {
+                            _audioCaptureService?.StopCapture();
+                            Console.WriteLine("[Host] Captura de audio detenida dinámicamente.");
+                        }
+                    }
+                };
             }
 
             // Temporizador de métricas (1 segundo)
@@ -1922,6 +1974,14 @@ namespace LanScreenShare.Desktop
                 GetSelectedResolution(out int targetW, out int targetH, out double scale);
 
                 SwitchCaptureSource(source, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+
+                bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
+                if (shareAudio && _audioCaptureService != null)
+                {
+                    int targetPid = GetTargetAudioProcessId();
+                    _audioCaptureService.StartCapture(targetPid);
+                }
+
                 UpdateStatus($"Transmitiendo: {source.Name}", "#22C55E");
             }
         }
@@ -2043,6 +2103,12 @@ namespace LanScreenShare.Desktop
             if (qualityLabel != null)
             {
                 qualityLabel.Text = codec == "h264" ? $"{sliderVal} Mbps" : $"{sliderVal}%";
+            }
+
+            var qualityTitle = this.FindControl<TextBlock>("QualityTitleLabel");
+            if (qualityTitle != null)
+            {
+                qualityTitle.Text = codec == "h264" ? "Tasa de Bits (Bitrate H.264)" : "Calidad JPEG";
             }
 
             int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
@@ -2233,7 +2299,8 @@ namespace LanScreenShare.Desktop
                             await _audioServer.StartAsync(5002);
                             if (shareAudio)
                             {
-                                _audioCaptureService?.StartCapture();
+                                int targetPid = GetTargetAudioProcessId();
+                                _audioCaptureService?.StartCapture(targetPid);
                             }
                             if (shareMic)
                             {
@@ -2791,6 +2858,29 @@ namespace LanScreenShare.Desktop
             {
                 return false;
             }
+        }
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        private int GetTargetAudioProcessId()
+        {
+            if (_currentSource?.Type == CaptureSourceType.Window)
+            {
+                if (_currentSource.ProcessId > 0)
+                    return _currentSource.ProcessId;
+
+                if (_currentSource.Handle != IntPtr.Zero)
+                {
+                    GetWindowThreadProcessId(_currentSource.Handle, out uint pid);
+                    if (pid > 0)
+                    {
+                        _currentSource.ProcessId = (int)pid;
+                        return (int)pid;
+                    }
+                }
+            }
+            return 0;
         }
 
         #region Win32 P/Invoke for Mouse Centering and Screen Metrics

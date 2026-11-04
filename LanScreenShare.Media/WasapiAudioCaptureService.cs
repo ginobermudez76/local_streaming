@@ -12,15 +12,40 @@ namespace LanScreenShare.Media
     public class WasapiAudioCaptureService : IAudioCaptureService
     {
         private WasapiLoopbackCapture? _capture;
+        private ProcessLoopbackAudioCapture? _processCapture;
+        private int _currentProcessId;
         private bool _disposed;
 
         public event EventHandler<CapturedAudioChunk>? AudioCaptured;
-        public bool IsCapturing => _capture != null;
+        public bool IsCapturing => _capture != null || (_processCapture != null && _processCapture.IsCapturing);
 
-        public void StartCapture()
+        public void StartCapture() => StartCapture(0);
+
+        public void StartCapture(int processId)
         {
-            if (IsCapturing)
-                return;
+            StopCapture();
+            _currentProcessId = processId;
+
+            if (processId > 0)
+            {
+                try
+                {
+                    var procCap = new ProcessLoopbackAudioCapture();
+                    procCap.AudioCaptured += (s, chunk) => AudioCaptured?.Invoke(this, chunk);
+                    bool started = procCap.StartAsync(processId).GetAwaiter().GetResult();
+                    if (started)
+                    {
+                        _processCapture = procCap;
+                        Console.WriteLine($"[WASAPI Loopback] Captura de audio aislada para PID {processId} iniciada.");
+                        return;
+                    }
+                    procCap.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[WASAPI Loopback] Fallo captura de proceso PID {processId}, recurriendo a loopback global: {ex.Message}");
+                }
+            }
 
             try
             {
@@ -57,7 +82,7 @@ namespace LanScreenShare.Media
                 };
 
                 _capture.StartRecording();
-                Console.WriteLine($"[WASAPI Loopback] Captura de audio iniciada ({waveFormat.SampleRate}Hz, {waveFormat.Channels} canales, {waveFormat.BitsPerSample} bits)");
+                Console.WriteLine($"[WASAPI Loopback] Captura de audio de escritorio iniciada ({waveFormat.SampleRate}Hz, {waveFormat.Channels} canales, {waveFormat.BitsPerSample} bits)");
             }
             catch (Exception ex)
             {
@@ -69,6 +94,17 @@ namespace LanScreenShare.Media
 
         public void StopCapture()
         {
+            if (_processCapture != null)
+            {
+                try
+                {
+                    _processCapture.Stop();
+                    _processCapture.Dispose();
+                }
+                catch { }
+                _processCapture = null;
+            }
+
             if (_capture != null)
             {
                 try

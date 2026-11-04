@@ -19,6 +19,7 @@ namespace LanScreenShare.Core.Models
         public int MonitorIndex { get; set; } = 0;
         public string? DeviceName { get; set; }
         public string? ProcessName { get; set; }
+        public int ProcessId { get; set; } = 0;
         public int X { get; set; }
         public int Y { get; set; }
         public int Width { get; set; }
