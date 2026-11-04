@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
@@ -11,10 +11,24 @@ namespace LanScreenShare.Network.Streaming
 {
     public class TcpAudioServer : IDisposable
     {
+        private sealed class AudioClientContext : IDisposable
+        {
+            public required TcpClient Client { get; init; }
+            public required NetworkStream Stream { get; init; }
+            public SemaphoreSlim SendLock { get; } = new(1, 1);
+
+            public void Dispose()
+            {
+                try { Stream.Dispose(); } catch { }
+                try { Client.Dispose(); } catch { }
+                try { SendLock.Dispose(); } catch { }
+            }
+        }
+
         private const uint AudioHeaderMagic = 0x4C534131; // "LSA1"
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
-        private readonly ConcurrentDictionary<string, NetworkStream> _clients = new();
+        private readonly ConcurrentDictionary<string, AudioClientContext> _clients = new();
         private bool _disposed;
 
         public event EventHandler<string>? ClientConnected;
@@ -49,7 +63,12 @@ namespace LanScreenShare.Network.Streaming
                         var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
                         var stream = client.GetStream();
 
-                        _clients[clientId] = stream;
+                        var clientCtx = new AudioClientContext
+                        {
+                            Client = client,
+                            Stream = stream
+                        };
+                        _clients[clientId] = clientCtx;
                         Console.WriteLine($"[AudioServer] Cliente de audio conectado: {clientId}");
                         ClientConnected?.Invoke(this, clientId);
 
@@ -116,38 +135,40 @@ namespace LanScreenShare.Network.Streaming
                 packet = ms.ToArray();
             }
 
-            foreach (var kvp in _clients)
+            var tasks = _clients.Select(async kvp =>
             {
                 var clientId = kvp.Key;
-                var stream = kvp.Value;
-
+                var clientCtx = kvp.Value;
+                bool lockTaken = false;
                 try
                 {
-                    await stream.WriteAsync(packet, 0, packet.Length);
+                    lockTaken = await clientCtx.SendLock.WaitAsync(100);
+                    if (lockTaken)
+                    {
+                        await clientCtx.Stream.WriteAsync(packet, 0, packet.Length);
+                    }
                 }
                 catch
                 {
-                    RemoveClient(clientId, null);
+                    RemoveClient(clientId, clientCtx.Client);
                 }
-            }
+                finally
+                {
+                    if (lockTaken)
+                    {
+                        clientCtx.SendLock.Release();
+                    }
+                }
+            });
+
+            await Task.WhenAll(tasks);
         }
 
         private void RemoveClient(string clientId, TcpClient? client)
         {
-            if (_clients.TryRemove(clientId, out var stream))
+            if (_clients.TryRemove(clientId, out var clientCtx))
             {
-                try
-                {
-                    stream.Dispose();
-                }
-                catch { }
-
-                try
-                {
-                    client?.Dispose();
-                }
-                catch { }
-
+                clientCtx.Dispose();
                 Console.WriteLine($"[AudioServer] Cliente desconectado: {clientId}");
                 ClientDisconnected?.Invoke(this, clientId);
             }
@@ -160,11 +181,7 @@ namespace LanScreenShare.Network.Streaming
 
             foreach (var kvp in _clients)
             {
-                try
-                {
-                    kvp.Value.Dispose();
-                }
-                catch { }
+                kvp.Value.Dispose();
             }
             _clients.Clear();
 

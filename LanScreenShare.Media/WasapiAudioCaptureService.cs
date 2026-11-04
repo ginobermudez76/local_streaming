@@ -26,7 +26,7 @@ namespace LanScreenShare.Media
             {
                 _capture = new WasapiLoopbackCapture();
                 var waveFormat = _capture.WaveFormat;
-                short formatEncoding = (short)waveFormat.Encoding;
+                short formatEncoding = (short)(waveFormat.BitsPerSample == 32 ? 3 : (short)waveFormat.Encoding);
 
                 _capture.DataAvailable += (sender, e) =>
                 {

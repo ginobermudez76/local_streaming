@@ -52,13 +52,13 @@ namespace LanScreenShare.Media
                 if (_waveProvider != null)
                 {
                     float currentVol = _isMuted ? 0f : _volume;
-                    ApplyVolume(chunk.Data, chunk.AudioFormat, currentVol);
+                    ApplyVolume(chunk.Data, chunk.AudioFormat, chunk.BitsPerSample, currentVol);
                     _waveProvider.AddSamples(chunk.Data, 0, chunk.Data.Length);
                 }
             }
         }
 
-        private static void ApplyVolume(byte[] data, int audioFormat, float volume)
+        private static void ApplyVolume(byte[] data, int audioFormat, int bitsPerSample, float volume)
         {
             if (volume <= 0.001f)
             {
@@ -69,7 +69,7 @@ namespace LanScreenShare.Media
             if (Math.Abs(volume - 1.0f) < 0.001f)
                 return;
 
-            if (audioFormat == 3) // IEEE Float 32-bit
+            if (audioFormat == 3 || bitsPerSample == 32) // IEEE Float 32-bit
             {
                 var floatSpan = MemoryMarshal.Cast<byte, float>(data.AsSpan());
                 for (int i = 0; i < floatSpan.Length; i++)
@@ -92,7 +92,7 @@ namespace LanScreenShare.Media
             Stop();
 
             WaveFormat waveFormat;
-            if (chunk.AudioFormat == 3) // IEEE Float
+            if (chunk.AudioFormat == 3 || chunk.BitsPerSample == 32) // IEEE Float
             {
                 waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(chunk.SampleRate, chunk.Channels);
             }
