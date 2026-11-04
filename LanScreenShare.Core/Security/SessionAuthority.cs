@@ -20,6 +20,7 @@ namespace LanScreenShare.Core.Security
             _deviceStore = deviceStore;
         }
 
+        public event EventHandler<string>? SessionTerminated;
         public string? ActiveControllerSessionId => GetActiveControllerSessionId();
 
         public ActiveSession CreateSession(string peerFingerprint, string peerName, TimeSpan? ttl = null)
@@ -268,6 +269,8 @@ namespace LanScreenShare.Core.Security
                     _attachmentTokens.TryRemove(kvp.Key, out _);
                 }
             }
+
+            SessionTerminated?.Invoke(this, sessionId);
         }
 
         public void PruneExpired()

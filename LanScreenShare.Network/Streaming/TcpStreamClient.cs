@@ -1,10 +1,12 @@
 using System;
 using System.IO;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
+using LanScreenShare.Network.Security;
 
 namespace LanScreenShare.Network.Streaming
 {
@@ -12,16 +14,28 @@ namespace LanScreenShare.Network.Streaming
     {
         private const uint FrameHeaderMagicJpeg = 0x4C535331; // "LSS1"
         private const uint FrameHeaderMagicH264 = 0x4C535332; // "LSS2"
+
         private TcpClient? _client;
+        private Stream? _stream;
         private CancellationTokenSource? _cts;
         private bool _disposed;
 
         public event EventHandler<CapturedFrame>? FrameReceived;
         public event EventHandler<string>? StatusChanged;
 
-        public bool IsConnected => _client != null && _client.Connected;
+        public bool IsConnected => _client != null && _client.Connected && _stream != null;
+        public SessionHandshakeMessage? ActiveSessionHandshake { get; private set; }
 
         public async Task ConnectAsync(string hostIp, int port = 5001, CancellationToken cancellationToken = default)
+        {
+            await ConnectAsync(hostIp, port, null, cancellationToken);
+        }
+
+        public async Task ConnectAsync(
+            string hostIp,
+            int port = 5001,
+            SslClientAuthenticationOptions? sslOptions = null,
+            CancellationToken cancellationToken = default)
         {
             if (IsConnected)
                 await DisconnectAsync();
@@ -35,12 +49,32 @@ namespace LanScreenShare.Network.Streaming
             _client.NoDelay = true;
 
             await _client.ConnectAsync(hostIp, port, token);
+            Stream stream = _client.GetStream();
 
+            if (sslOptions != null)
+            {
+                var sslStream = new SslStream(stream, false);
+                using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
+
+                await sslStream.AuthenticateAsClientAsync(sslOptions, linkedCts.Token);
+
+                // Leer mensaje de señalización inicial (SESSION_OK)
+                var handshake = await SessionHandshakeMessage.ReadAsync(sslStream, linkedCts.Token);
+                if (handshake.Type != "SESSION_OK")
+                {
+                    throw new InvalidOperationException($"Sesión rechazada por el anfitrión: {handshake.ErrorMessage}");
+                }
+
+                ActiveSessionHandshake = handshake;
+                stream = sslStream;
+            }
+
+            _stream = stream;
             StatusChanged?.Invoke(this, $"Conectado a {hostIp}:{port}");
 
             _ = Task.Run(async () =>
             {
-                var stream = _client.GetStream();
                 byte[] headerBuffer = new byte[32];
 
                 try
@@ -100,8 +134,7 @@ namespace LanScreenShare.Network.Streaming
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[StreamClient] Error en recepción de flujo: {ex.Message}");
-                    StatusChanged?.Invoke(this, $"Desconectado: {ex.Message}");
+                    Console.WriteLine($"[StreamClient] Desconexión de flujo: {ex.Message}");
                 }
                 finally
                 {
@@ -110,28 +143,31 @@ namespace LanScreenShare.Network.Streaming
             }, token);
         }
 
-        private static async Task ReadExactBytesAsync(NetworkStream stream, byte[] buffer, int offset, int count, CancellationToken token)
+        private static async Task ReadExactBytesAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken token)
         {
-            int totalRead = 0;
-            while (totalRead < count)
+            int totalBytesRead = 0;
+            while (totalBytesRead < count)
             {
-                int read = await stream.ReadAsync(buffer, offset + totalRead, count - totalRead, token);
-                if (read == 0)
+                int bytesRead = await stream.ReadAsync(buffer.AsMemory(offset + totalBytesRead, count - totalBytesRead), token);
+                if (bytesRead == 0)
                 {
-                    throw new IOException("El servidor cerró la conexión prematuramente.");
+                    throw new EndOfStreamException("El servidor cerró la conexión.");
                 }
-                totalRead += read;
+                totalBytesRead += bytesRead;
             }
         }
 
         public Task DisconnectAsync()
         {
             _cts?.Cancel();
-            try { _client?.Close(); } catch { }
-            _client = null;
+            try { _stream?.Dispose(); } catch { }
+            try { _client?.Close(); _client?.Dispose(); } catch { }
 
+            _stream = null;
+            _client = null;
             _cts?.Dispose();
             _cts = null;
+            ActiveSessionHandshake = null;
 
             StatusChanged?.Invoke(this, "Desconectado");
             return Task.CompletedTask;
@@ -142,7 +178,7 @@ namespace LanScreenShare.Network.Streaming
             if (_disposed)
                 return;
 
-            DisconnectAsync().GetAwaiter().GetResult();
+            _ = DisconnectAsync();
             _disposed = true;
             GC.SuppressFinalize(this);
         }

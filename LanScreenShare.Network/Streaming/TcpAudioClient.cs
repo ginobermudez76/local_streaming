@@ -1,9 +1,12 @@
 using System;
 using System.IO;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using LanScreenShare.Core.Models;
+using LanScreenShare.Core.Security;
+using LanScreenShare.Network.Security;
 
 namespace LanScreenShare.Network.Streaming
 {
@@ -11,15 +14,22 @@ namespace LanScreenShare.Network.Streaming
     {
         private const uint AudioHeaderMagic = 0x4C534131; // "LSA1"
         private TcpClient? _client;
+        private Stream? _stream;
         private CancellationTokenSource? _cts;
         private bool _disposed;
 
         public event EventHandler<CapturedAudioChunk>? AudioReceived;
         public event EventHandler<string>? StatusChanged;
 
-        public bool IsConnected => _client != null && _client.Connected;
+        public bool IsConnected => _client != null && _client.Connected && _stream != null;
 
-        public async Task ConnectAsync(string hostIp, int port = 5002, CancellationToken cancellationToken = default)
+        public async Task ConnectAsync(
+            string hostIp,
+            int port = 5002,
+            SslClientAuthenticationOptions? sslOptions = null,
+            string? sessionId = null,
+            string? attachmentToken = null,
+            CancellationToken cancellationToken = default)
         {
             if (IsConnected)
                 await DisconnectAsync();
@@ -33,12 +43,40 @@ namespace LanScreenShare.Network.Streaming
             _client.NoDelay = true;
 
             await _client.ConnectAsync(hostIp, port, token);
+            Stream stream = _client.GetStream();
 
+            if (sslOptions != null)
+            {
+                var sslStream = new SslStream(stream, false);
+                using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
+
+                await sslStream.AuthenticateAsClientAsync(sslOptions, linkedCts.Token);
+
+                if (sessionId != null && attachmentToken != null)
+                {
+                    // Enviar CHANNEL_ATTACH (37 bytes)
+                    byte[] attachBytes = ChannelAttachmentMessage.Serialize(sessionId, attachmentToken, ChannelType.Audio);
+                    await sslStream.WriteAsync(attachBytes, linkedCts.Token);
+
+                    // Leer código de respuesta (1 byte)
+                    byte[] response = new byte[1];
+                    int r = await sslStream.ReadAsync(response.AsMemory(0, 1), linkedCts.Token);
+                    if (r == 0 || response[0] != (byte)AttachmentStatus.Success)
+                    {
+                        var status = (AttachmentStatus)response[0];
+                        throw new InvalidOperationException($"Fijación de canal de audio rechazada por el anfitrión: {status}");
+                    }
+                }
+
+                stream = sslStream;
+            }
+
+            _stream = stream;
             StatusChanged?.Invoke(this, $"Audio conectado a {hostIp}:{port}");
 
             _ = Task.Run(async () =>
             {
-                var stream = _client.GetStream();
                 byte[] headerBuffer = new byte[28];
 
                 try
@@ -101,7 +139,6 @@ namespace LanScreenShare.Network.Streaming
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[AudioClient] Desconexión de audio: {ex.Message}");
-                    StatusChanged?.Invoke(this, $"Audio desconectado: {ex.Message}");
                 }
                 finally
                 {
@@ -110,15 +147,15 @@ namespace LanScreenShare.Network.Streaming
             }, token);
         }
 
-        private static async Task ReadExactBytesAsync(NetworkStream stream, byte[] buffer, int offset, int count, CancellationToken token)
+        private static async Task ReadExactBytesAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken token)
         {
             int totalBytesRead = 0;
             while (totalBytesRead < count)
             {
-                int bytesRead = await stream.ReadAsync(buffer, offset + totalBytesRead, count - totalBytesRead, token);
+                int bytesRead = await stream.ReadAsync(buffer.AsMemory(offset + totalBytesRead, count - totalBytesRead), token);
                 if (bytesRead == 0)
                 {
-                    throw new EndOfStreamException("El servidor cerró la conexión TCP de audio antes de recibir todos los datos esperados.");
+                    throw new EndOfStreamException("El servidor cerró la conexión de audio.");
                 }
                 totalBytesRead += bytesRead;
             }
@@ -127,13 +164,10 @@ namespace LanScreenShare.Network.Streaming
         public Task DisconnectAsync()
         {
             _cts?.Cancel();
-            try
-            {
-                _client?.Close();
-                _client?.Dispose();
-            }
-            catch { }
+            try { _stream?.Dispose(); } catch { }
+            try { _client?.Close(); _client?.Dispose(); } catch { }
 
+            _stream = null;
             _client = null;
             _cts?.Dispose();
             _cts = null;
@@ -153,4 +187,3 @@ namespace LanScreenShare.Network.Streaming
         }
     }
 }
-

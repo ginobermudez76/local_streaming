@@ -7,6 +7,7 @@ namespace LanScreenShare.Core.Security
     public interface ISessionAuthority
     {
         string? ActiveControllerSessionId { get; }
+        event EventHandler<string>? SessionTerminated;
 
         ActiveSession CreateSession(string peerFingerprint, string peerName, TimeSpan? ttl = null);
         Task<(bool Success, ActiveSession? Session, string? FailureReason)> TryCreateSessionAsync(string peerFingerprint, string peerName = "RemotePeer", TimeSpan? ttl = null);
