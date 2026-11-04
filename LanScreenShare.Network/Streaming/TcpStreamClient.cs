@@ -14,10 +14,12 @@ namespace LanScreenShare.Network.Streaming
     {
         private const uint FrameHeaderMagicJpeg = 0x4C535331; // "LSS1"
         private const uint FrameHeaderMagicH264 = 0x4C535332; // "LSS2"
+        private const uint FrameHeaderMagicEnd  = 0x4C535330; // "LSS0"
 
         private TcpClient? _client;
         private Stream? _stream;
         private CancellationTokenSource? _cts;
+        private int _isDisconnecting = 0;
         private bool _disposed;
 
         public event EventHandler<CapturedFrame>? FrameReceived;
@@ -76,10 +78,11 @@ namespace LanScreenShare.Network.Streaming
             _ = Task.Run(async () =>
             {
                 byte[] headerBuffer = new byte[32];
+                bool endedByHost = false;
 
                 try
                 {
-                    while (!token.IsCancellationRequested && _client.Connected)
+                    while (!token.IsCancellationRequested && _client != null && _client.Connected)
                     {
                         // 1. Leer encabezado completo de 32 bytes
                         await ReadExactBytesAsync(stream, headerBuffer, 0, 32, token);
@@ -102,6 +105,14 @@ namespace LanScreenShare.Network.Streaming
                             timestamp = reader.ReadInt64();
                             hostFps = reader.ReadInt32();
                             hostFrameTimeMs = reader.ReadInt32();
+                        }
+
+                        // Señal de finalización explícita enviada por el anfitrión (LSS0)
+                        if (magic == FrameHeaderMagicEnd)
+                        {
+                            Console.WriteLine("[StreamClient] Recibida señal de fin de transmisión del anfitrión (LSS0).");
+                            endedByHost = true;
+                            break;
                         }
 
                         if ((magic != FrameHeaderMagicJpeg && magic != FrameHeaderMagicH264) || dataLength <= 0 || dataLength > 50 * 1024 * 1024)
@@ -138,7 +149,10 @@ namespace LanScreenShare.Network.Streaming
                 }
                 finally
                 {
-                    await DisconnectAsync();
+                    string reason = endedByHost
+                        ? "El anfitrión ha finalizado la transmisión"
+                        : (token.IsCancellationRequested ? "Desconectado" : "Conexión perdida con el anfitrión");
+                    await DisconnectInternalAsync(reason);
                 }
             }, token);
         }
@@ -157,8 +171,11 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
-        public Task DisconnectAsync()
+        private Task DisconnectInternalAsync(string reason)
         {
+            if (Interlocked.Exchange(ref _isDisconnecting, 1) != 0)
+                return Task.CompletedTask;
+
             _cts?.Cancel();
             try { _stream?.Dispose(); } catch { }
             try { _client?.Close(); _client?.Dispose(); } catch { }
@@ -169,8 +186,14 @@ namespace LanScreenShare.Network.Streaming
             _cts = null;
             ActiveSessionHandshake = null;
 
-            StatusChanged?.Invoke(this, "Desconectado");
+            StatusChanged?.Invoke(this, reason);
+            _isDisconnecting = 0;
             return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            return DisconnectInternalAsync("Desconectado");
         }
 
         public void Dispose()

@@ -2440,6 +2440,11 @@ namespace LanScreenShare.Desktop
                     _isHosting = true;
                     ResetMetrics();
 
+                    var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
+                    var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
+                    if (placeholderTitle != null) placeholderTitle.Text = "Transmitiendo Pantalla";
+                    if (placeholderSubtitle != null) placeholderSubtitle.Text = "Tu pantalla está siendo compartida en la red local. Los visores conectados verán tu pantalla en tiempo real.";
+
                     if (hostBtn != null)
                     {
                         hostBtn.Content = "Detener TransmisiÃ³n";
@@ -2471,6 +2476,11 @@ namespace LanScreenShare.Desktop
 
                 _isHosting = false;
                 ResetMetrics();
+
+                var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
+                var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
+                if (placeholderTitle != null) placeholderTitle.Text = "Área de Transmisión";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Haz clic en 'Transmitir mi pantalla' para compartir con otros equipos, o presiona 'Ver' en un dispositivo detectado para ver su pantalla en tiempo real.";
 
                 if (hostBtn != null)
                 {
@@ -2622,6 +2632,11 @@ namespace LanScreenShare.Desktop
             UpdateStatus($"Conectando a {device.Name} ({device.IPAddress}:5001)...", "#F59E0B");
             ResetMetrics();
 
+            var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
+            var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
+            if (placeholderTitle != null) placeholderTitle.Text = "Conectando al anfitrión...";
+            if (placeholderSubtitle != null) placeholderSubtitle.Text = $"Estableciendo conexión segura con {device.Name} ({device.IPAddress})...";
+
             try
             {
                 // 1. Conectar flujo de video
@@ -2700,7 +2715,7 @@ namespace LanScreenShare.Desktop
             catch (Exception ex)
             {
                 string detail = ex.InnerException != null ? $"{ex.Message} ({ex.InnerException.Message})" : ex.Message;
-                UpdateStatus($"No se pudo conectar a {device.Name}: {detail}", "#EF4444");
+                HandleViewerDisconnected($"No se pudo conectar a {device.Name}: {detail}");
                 Console.WriteLine($"[ConnectError] No se pudo conectar a {device.Name}: {ex}");
             }
         }
@@ -2809,51 +2824,72 @@ namespace LanScreenShare.Desktop
         {
             Dispatcher.UIThread.Post(() =>
             {
-                UpdateStatus(status, _streamClient.IsConnected ? "#22C55E" : "#71717A");
+                if (!_streamClient.IsConnected)
+                {
+                    // Si éramos visores (no anfitriones) y estábamos conectados o viendo pantalla
+                    if (!_isHosting && (_currentConnectedDeviceIp != null || ScreenImage?.Source != null))
+                    {
+                        HandleViewerDisconnected(status);
+                        return;
+                    }
+
+                    UpdateStatus(status, "#71717A");
+                    HideViewerControls();
+                    return;
+                }
+
+                UpdateStatus(status, "#22C55E");
 
                 var disconnectBtn = this.FindControl<Button>("DisconnectButton");
                 if (disconnectBtn != null)
                 {
-                    disconnectBtn.IsVisible = _streamClient.IsConnected;
+                    disconnectBtn.IsVisible = true;
                 }
 
                 var audioPanel = this.FindControl<Border>("AudioControlPanel");
                 if (audioPanel != null)
                 {
-                    audioPanel.IsVisible = _streamClient.IsConnected;
+                    audioPanel.IsVisible = true;
                 }
-                if (_streamClient.IsConnected)
-                {
-                    UpdateAudioUI();
-                }
+                UpdateAudioUI();
 
                 var micPanel = this.FindControl<Border>("MicControlPanel");
                 if (micPanel != null)
                 {
-                    micPanel.IsVisible = _streamClient.IsConnected;
+                    micPanel.IsVisible = true;
                 }
-                if (_streamClient.IsConnected)
-                {
-                    UpdateMicUI();
-                }
+                UpdateMicUI();
 
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
                 if (remoteControlBtn != null)
                 {
-                    remoteControlBtn.IsVisible = _streamClient.IsConnected && _currentDeviceAllowsRemoteControl;
-                    if (!_streamClient.IsConnected) remoteControlBtn.IsChecked = false;
+                    remoteControlBtn.IsVisible = _currentDeviceAllowsRemoteControl;
+                    if (!_currentDeviceAllowsRemoteControl) remoteControlBtn.IsChecked = false;
                 }
 
                 var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
                 if (gameModeBtn != null)
                 {
-                    gameModeBtn.IsVisible = _streamClient.IsConnected && _currentDeviceAllowsRemoteControl;
-                    if (!_streamClient.IsConnected) gameModeBtn.IsChecked = false;
+                    gameModeBtn.IsVisible = _currentDeviceAllowsRemoteControl;
+                    if (!_currentDeviceAllowsRemoteControl) gameModeBtn.IsChecked = false;
                 }
             });
         }
 
         private async void DisconnectButton_Click(object? sender, RoutedEventArgs? e = null)
+        {
+            await HandleViewerDisconnectedAsync("Te has desconectado de la transmisión.");
+        }
+
+        private void HandleViewerDisconnected(string reason)
+        {
+            Dispatcher.UIThread.Post(async () =>
+            {
+                await HandleViewerDisconnectedAsync(reason);
+            });
+        }
+
+        private async Task HandleViewerDisconnectedAsync(string reason)
         {
             ClosePopoutWindow();
             SetFullscreen(false);
@@ -2862,9 +2898,9 @@ namespace LanScreenShare.Desktop
             _currentConnectedDeviceIp = null;
             _currentConnectedDeviceName = null;
 
-            await _streamClient.DisconnectAsync();
-            await _audioClient.DisconnectAsync();
-            await _controlClient.DisconnectAsync();
+            try { await _streamClient.DisconnectAsync(); } catch { }
+            try { await _audioClient.DisconnectAsync(); } catch { }
+            try { await _controlClient.DisconnectAsync(); } catch { }
 
             _audioPlayerService?.Stop();
             _remoteControlEnabled = false;
@@ -2883,49 +2919,61 @@ namespace LanScreenShare.Desktop
                 screenImage.Source = null;
             }
 
+            _viewerWriteableBitmap?.Dispose();
+            _viewerWriteableBitmap = null;
+
             var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
             if (placeholder != null)
             {
                 placeholder.IsVisible = true;
             }
 
-            var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
-            if (fullscreenBtn != null)
+            var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
+            var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
+
+            if (reason.Contains("finaliz", StringComparison.OrdinalIgnoreCase))
             {
-                fullscreenBtn.IsVisible = false;
+                if (placeholderTitle != null) placeholderTitle.Text = "Transmisión Finalizada";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "El anfitrión ha finalizado la transmisión.";
+                UpdateStatus("El anfitrión ha finalizado la transmisión", "#F59E0B");
             }
+            else if (reason.Contains("perdida", StringComparison.OrdinalIgnoreCase) ||
+                     reason.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                     reason.Contains("No se pudo", StringComparison.OrdinalIgnoreCase))
+            {
+                if (placeholderTitle != null) placeholderTitle.Text = "Conexión Perdida";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = reason;
+                UpdateStatus(reason, "#EF4444");
+            }
+            else
+            {
+                if (placeholderTitle != null) placeholderTitle.Text = "Área de Transmisión";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Haz clic en 'Transmitir mi pantalla' para compartir con otros equipos, o presiona 'Ver' en un dispositivo detectado para ver su pantalla en tiempo real.";
+                UpdateStatus(reason, "#71717A");
+            }
+
+            HideViewerControls();
+        }
+
+        private void HideViewerControls()
+        {
+            var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
+            if (fullscreenBtn != null) fullscreenBtn.IsVisible = false;
 
             var stretchBtn = this.FindControl<Button>("StretchModeButton");
-            if (stretchBtn != null)
-            {
-                stretchBtn.IsVisible = false;
-            }
+            if (stretchBtn != null) stretchBtn.IsVisible = false;
 
             var popoutBtn = this.FindControl<Button>("PopoutWindowButton");
-            if (popoutBtn != null)
-            {
-                popoutBtn.IsVisible = false;
-            }
-
-            ClosePopoutWindow();
+            if (popoutBtn != null) popoutBtn.IsVisible = false;
 
             var disconnectBtn = this.FindControl<Button>("DisconnectButton");
-            if (disconnectBtn != null)
-            {
-                disconnectBtn.IsVisible = false;
-            }
+            if (disconnectBtn != null) disconnectBtn.IsVisible = false;
 
             var audioPanel = this.FindControl<Border>("AudioControlPanel");
-            if (audioPanel != null)
-            {
-                audioPanel.IsVisible = false;
-            }
+            if (audioPanel != null) audioPanel.IsVisible = false;
 
             var micPanel = this.FindControl<Border>("MicControlPanel");
-            if (micPanel != null)
-            {
-                micPanel.IsVisible = false;
-            }
+            if (micPanel != null) micPanel.IsVisible = false;
 
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
             if (remoteControlBtn != null)
@@ -2940,8 +2988,6 @@ namespace LanScreenShare.Desktop
                 gameModeBtn.IsVisible = false;
                 gameModeBtn.IsChecked = false;
             }
-
-            UpdateStatus("Desconectado", "#71717A");
         }
 
         #endregion

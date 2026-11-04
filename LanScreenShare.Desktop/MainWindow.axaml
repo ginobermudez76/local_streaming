@@ -767,12 +767,14 @@
                     <Border Width="64" Height="64" CornerRadius="32" Background="#27272A" HorizontalAlignment="Center">
                         <PathIcon Data="{StaticResource IconTv}" Width="28" Height="28" Foreground="#A1A1AA" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
-                    <TextBlock Text="Área de Transmisión"
+                    <TextBlock x:Name="PlaceholderTitleText"
+                               Text="Área de Transmisión"
                                FontSize="18"
                                FontWeight="Bold"
                                Foreground="#FAFAFA"
                                HorizontalAlignment="Center"/>
-                    <TextBlock Text="Haz clic en 'Transmitir mi pantalla' para compartir con otros equipos, o presiona 'Ver' en un dispositivo detectado para ver su pantalla en tiempo real."
+                    <TextBlock x:Name="PlaceholderSubtitleText"
+                               Text="Haz clic en 'Transmitir mi pantalla' para compartir con otros equipos, o presiona 'Ver' en un dispositivo detectado para ver su pantalla en tiempo real."
                                FontSize="13"
                                Foreground="#71717A"
                                TextAlignment="Center"

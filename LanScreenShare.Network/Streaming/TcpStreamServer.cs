@@ -18,8 +18,9 @@ namespace LanScreenShare.Network.Streaming
 {
     public class TcpStreamServer : IStreamServer
     {
-        private const uint FrameHeaderMagicJpeg = 0x4C535331; // "LSS1"
-        private const uint FrameHeaderMagicH264 = 0x4C535332; // "LSS2"
+        public const uint FrameHeaderMagicJpeg = 0x4C535331; // "LSS1"
+        public const uint FrameHeaderMagicH264 = 0x4C535332; // "LSS2"
+        public const uint FrameHeaderMagicEnd  = 0x4C535330; // "LSS0"
 
         private readonly ISessionAuthority? _sessionAuthority;
         private readonly SslServerAuthenticationOptions? _sslServerOptions;
@@ -78,6 +79,7 @@ namespace LanScreenShare.Network.Streaming
                     {
                         var client = await _listener.AcceptTcpClientAsync(token);
                         client.NoDelay = true; // Deshabilitar Nagle para menor latencia
+                        client.LingerState = new LingerOption(true, 2); // Evitar RST prematuro al cerrar socket
 
                         _ = Task.Run(async () =>
                         {
@@ -278,13 +280,20 @@ namespace LanScreenShare.Network.Streaming
                         break;
                 }
             }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
             catch
             {
                 // Conexión cerrada
             }
             finally
             {
-                RemoveClient(clientId);
+                if (!token.IsCancellationRequested)
+                {
+                    RemoveClient(clientId);
+                }
             }
         }
 
@@ -316,13 +325,20 @@ namespace LanScreenShare.Network.Streaming
                     }
                 }
             }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
             catch
             {
                 // Desconexión normal
             }
             finally
             {
-                RemoveClient(clientId);
+                if (!token.IsCancellationRequested)
+                {
+                    RemoveClient(clientId);
+                }
             }
         }
 
@@ -360,6 +376,31 @@ namespace LanScreenShare.Network.Streaming
 
         public void Stop()
         {
+            // Notificar a todos los espectadores que la transmisión finaliza explícitamente (LSS0)
+            byte[] endHeader = new byte[32];
+            using (var ms = new MemoryStream(endHeader))
+            using (var writer = new BinaryWriter(ms))
+            {
+                writer.Write(FrameHeaderMagicEnd);
+                writer.Write(0); // dataLength = 0
+            }
+
+            foreach (var kvp in _clients)
+            {
+                try
+                {
+                    kvp.Value.Stream.Write(endHeader, 0, endHeader.Length);
+                    kvp.Value.Stream.Flush();
+                }
+                catch
+                {
+                    // Ignorar si el cliente ya cerró el socket
+                }
+            }
+
+            // Pausa breve (60ms) para garantizar que el buffer TCP drene el encabezado LSS0 antes del cierre del socket
+            Thread.Sleep(60);
+
             _cts?.Cancel();
             try { _listener?.Stop(); } catch { }
             _listener = null;
@@ -367,6 +408,7 @@ namespace LanScreenShare.Network.Streaming
             foreach (var kvp in _clients)
             {
                 try { kvp.Value.Channel.Writer.Complete(); } catch { }
+                try { kvp.Value.Client.Client.Shutdown(SocketShutdown.Both); } catch { }
                 try { kvp.Value.Stream.Dispose(); } catch { }
                 try { kvp.Value.Client.Close(); } catch { }
 
