@@ -65,6 +65,7 @@ namespace LanScreenShare.Desktop
         private DispatcherTimer? _gameModeBannerTimer;
 
         private bool _isHosting;
+        private bool _isViewing;
         private string? _currentConnectedDeviceName;
         private string? _currentConnectedDeviceIp;
         private bool _currentDeviceAllowsRemoteControl;
@@ -2438,6 +2439,7 @@ namespace LanScreenShare.Desktop
                     _discoveryService.StartHostingBroadcast();
 
                     _isHosting = true;
+                    _isViewing = false;
                     ResetMetrics();
 
                     var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
@@ -2641,6 +2643,7 @@ namespace LanScreenShare.Desktop
             {
                 // 1. Conectar flujo de video
                 await _streamClient.ConnectAsync(device.IPAddress, 5001, _sslClientOptions);
+                _isViewing = true;
 
                 var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
 
@@ -2824,10 +2827,16 @@ namespace LanScreenShare.Desktop
         {
             Dispatcher.UIThread.Post(() =>
             {
+                if (status.StartsWith("Conectando", StringComparison.OrdinalIgnoreCase))
+                {
+                    UpdateStatus(status, "#F59E0B");
+                    return;
+                }
+
                 if (!_streamClient.IsConnected)
                 {
-                    // Si éramos visores (no anfitriones) y estábamos conectados o viendo pantalla
-                    if (!_isHosting && (_currentConnectedDeviceIp != null || ScreenImage?.Source != null))
+                    // Si éramos visores activos y se perdió o finalizó la transmisión
+                    if (!_isHosting && _isViewing)
                     {
                         HandleViewerDisconnected(status);
                         return;
@@ -2891,6 +2900,7 @@ namespace LanScreenShare.Desktop
 
         private async Task HandleViewerDisconnectedAsync(string reason)
         {
+            _isViewing = false;
             ClosePopoutWindow();
             SetFullscreen(false);
             StopDeviceSearch();

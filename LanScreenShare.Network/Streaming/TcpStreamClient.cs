@@ -42,6 +42,7 @@ namespace LanScreenShare.Network.Streaming
             if (IsConnected)
                 await DisconnectAsync();
 
+            _isDisconnecting = 0;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var token = _cts.Token;
 
