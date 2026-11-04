@@ -47,14 +47,15 @@ namespace LanScreenShare.Media
                         int h = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
                         bool isPrimary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
                         string devName = new string(mi.szDevice).TrimEnd('\0');
-                        string monitorName = isPrimary ? $"Pantalla {monitorIndex + 1} (Principal)" : $"Pantalla {monitorIndex + 1}";
+                        string cleanDevName = devName.Replace(@"\\.\", "").Trim();
+                        string monitorName = $"Pantalla {monitorIndex + 1}";
 
                         sources.Add(new CaptureSource
                         {
                             Type = CaptureSourceType.Screen,
                             Id = $"screen:{monitorIndex}",
                             Name = monitorName,
-                            Subtitle = $"{w}×{h} • {devName}",
+                            Subtitle = $"{w} × {h} · {cleanDevName}",
                             MonitorIndex = monitorIndex,
                             DeviceName = devName,
                             Handle = hMonitor,
@@ -77,8 +78,8 @@ namespace LanScreenShare.Media
                     {
                         Type = CaptureSourceType.AllScreens,
                         Id = "screen:all",
-                        Name = "Todas las Pantallas (Escritorio Completo)",
-                        Subtitle = $"{vWidth}×{vHeight} • Combinadas",
+                        Name = "Todas las pantallas",
+                        Subtitle = $"{vWidth} × {vHeight} · Escritorio completo",
                         DeviceName = "VirtualDesktop",
                         X = vLeft,
                         Y = vTop,
@@ -94,8 +95,8 @@ namespace LanScreenShare.Media
                     {
                         Type = CaptureSourceType.Screen,
                         Id = "screen:0",
-                        Name = "Pantalla Principal",
-                        Subtitle = $"{vWidth}×{vHeight}",
+                        Name = "Pantalla 1",
+                        Subtitle = $"{vWidth} × {vHeight} · DISPLAY1",
                         MonitorIndex = 0,
                         DeviceName = @"\\.\DISPLAY1",
                         X = 0,
@@ -195,7 +196,7 @@ namespace LanScreenShare.Media
                         Type = CaptureSourceType.Window,
                         Id = $"window:{hWnd.ToInt64()}",
                         Name = title,
-                        Subtitle = $"{procName} • {w}×{h}",
+                        Subtitle = $"{procName} · {w} × {h}",
                         Handle = hWnd,
                         ProcessName = procName,
                         ProcessId = (int)pid,
@@ -283,4 +284,3 @@ namespace LanScreenShare.Media
         #endregion
     }
 }
-

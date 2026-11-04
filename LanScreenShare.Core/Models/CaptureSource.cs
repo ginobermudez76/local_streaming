@@ -25,6 +25,7 @@ namespace LanScreenShare.Core.Models
         public int Width { get; set; }
         public int Height { get; set; }
         public bool IsPrimary { get; set; }
+        public bool IsAllScreens => Type == CaptureSourceType.AllScreens;
+        public bool IsSingleScreen => Type == CaptureSourceType.Screen;
     }
 }
-
