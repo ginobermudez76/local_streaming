@@ -294,11 +294,34 @@ namespace LanScreenShare.Desktop
             {
                 devicesList.ItemsSource = Devices;
             }
+            Devices.CollectionChanged += (s, e) => UpdateDevicesSectionUI();
+            UpdateDevicesSectionUI();
 
             var hostButton = this.FindControl<Button>("HostButton");
             if (hostButton != null)
             {
                 hostButton.Click += HostButton_Click;
+            }
+
+            var centerHostButton = this.FindControl<Button>("CenterHostButton");
+            if (centerHostButton != null)
+            {
+                centerHostButton.Click += HostButton_Click;
+            }
+
+            var centerSelectSourceBtn = this.FindControl<Button>("CenterSelectSourceButton");
+            if (centerSelectSourceBtn != null)
+            {
+                centerSelectSourceBtn.Click += SelectSourceButton_Click;
+            }
+
+            var helpButton = this.FindControl<Button>("HelpButton");
+            if (helpButton != null)
+            {
+                helpButton.Click += (s, e) =>
+                {
+                    UpdateStatus("Ayuda: Presiona 'Transmitir mi pantalla' o 'Buscar dispositivos' en tu red.", "#3B82F6");
+                };
             }
 
             var searchButton = this.FindControl<Button>("SearchButton");
@@ -373,6 +396,7 @@ namespace LanScreenShare.Desktop
                 {
                     bool isChecked = micShareCb.IsChecked == true;
                     _appSettings.ShareMicrophone = isChecked;
+                    UpdateCanvasFooterAudioStatus();
                     SaveCurrentSettings();
 
                     if (_isHosting)
@@ -383,17 +407,17 @@ namespace LanScreenShare.Desktop
                             {
                                 await _audioServer.StartAsync(5002);
                                 _micCaptureService?.StartCapture();
-                                Console.WriteLine("[Host] Captura de micrÃ³fono iniciada dinÃ¡micamente.");
+                                Console.WriteLine("[Host] Captura de micrófono iniciada dinámicamente.");
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[Host] Error activando micrÃ³fono: {ex.Message}");
+                                Console.WriteLine($"[Host] Error activando micrófono: {ex.Message}");
                             }
                         }
                         else
                         {
                             _micCaptureService?.StopCapture();
-                            Console.WriteLine("[Host] Captura de micrÃ³fono detenida dinÃ¡micamente.");
+                            Console.WriteLine("[Host] Captura de micrófono detenida dinámicamente.");
                         }
                     }
                 };
@@ -704,6 +728,28 @@ namespace LanScreenShare.Desktop
                 };
             }
 
+            var bitrateCombo = this.FindControl<ComboBox>("BitrateComboBox");
+            if (bitrateCombo != null)
+            {
+                bitrateCombo.SelectionChanged += (s, e) =>
+                {
+                    if (_isUpdatingQualitySlider) return;
+                    if (bitrateCombo.SelectedItem is ComboBoxItem item && item.Tag is string tag && int.TryParse(tag, out int val))
+                    {
+                        var slider = this.FindControl<Slider>("QualitySlider");
+                        if (slider != null && (int)slider.Value != val)
+                        {
+                            slider.Value = val;
+                        }
+                        else
+                        {
+                            OnSettingChanged();
+                            SaveCurrentSettings();
+                        }
+                    }
+                };
+            }
+
             InitializeResolutionOptions();
 
             var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
@@ -742,6 +788,7 @@ namespace LanScreenShare.Desktop
                 {
                     bool isChecked = audioShareCb.IsChecked == true;
                     _appSettings.ShareAudio = isChecked;
+                    UpdateCanvasFooterAudioStatus();
                     SaveCurrentSettings();
 
                     if (_isHosting)
@@ -753,7 +800,7 @@ namespace LanScreenShare.Desktop
                                 await _audioServer.StartAsync(5002);
                                 int targetPid = GetTargetAudioProcessId();
                                 _audioCaptureService?.StartCapture(targetPid);
-                                Console.WriteLine($"[Host] Captura de audio iniciada dinÃ¡micamente (PID {targetPid}).");
+                                Console.WriteLine($"[Host] Captura de audio iniciada dinámicamente (PID {targetPid}).");
                             }
                             catch (Exception ex)
                             {
@@ -763,13 +810,14 @@ namespace LanScreenShare.Desktop
                         else
                         {
                             _audioCaptureService?.StopCapture();
-                            Console.WriteLine("[Host] Captura de audio detenida dinÃ¡micamente.");
+                            Console.WriteLine("[Host] Captura de audio detenida dinámicamente.");
                         }
                     }
                 };
             }
+            UpdateCanvasFooterAudioStatus();
 
-            // Temporizador de mÃ©tricas (1 segundo)
+            // Temporizador de métricas (1 segundo)
             _metricsTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(1)
@@ -788,7 +836,7 @@ namespace LanScreenShare.Desktop
             }
             else
             {
-                UpdatePresetButtonsHighlight(_appSettings.TransmissionPreset ?? "balanced");
+                UpdatePresetButtonsHighlight(_appSettings.TransmissionPreset ?? "quality");
             }
 
             _isInitializingSettings = false;
@@ -920,15 +968,19 @@ namespace LanScreenShare.Desktop
             _isFullscreen = fullscreen;
             var sidebar = this.FindControl<Border>("SidebarBorder");
             var rootGrid = this.FindControl<Grid>("RootGrid");
-            var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
             var floatExitBtn = this.FindControl<Button>("ExitFullscreenFloatButton");
 
             var fullscreenIcon = this.FindControl<PathIcon>("FullscreenButtonIcon");
             var fullscreenText = this.FindControl<TextBlock>("FullscreenButtonText");
 
-            var mainAreaGrid = this.FindControl<Grid>("MainAreaGrid");
             var headerBar = this.FindControl<Border>("StreamHeaderBar");
-            var viewportGrid = this.FindControl<Grid>("StreamViewportGrid");
+            var workspaceContainer = this.FindControl<Grid>("WorkspaceContainerGrid");
+            var workspaceHeader = this.FindControl<Grid>("WorkspaceHeaderGrid");
+            var canvasCardBorder = this.FindControl<Border>("CanvasCardBorder");
+            var canvasCardHeader = this.FindControl<Border>("CanvasCardHeader");
+            var canvasCardFooter = this.FindControl<Border>("CanvasCardFooter");
+            var devicesSection = this.FindControl<Border>("DevicesSectionBorder");
+            var bottomFooter = this.FindControl<Grid>("BottomFooterGrid");
 
             if (_isFullscreen)
             {
@@ -941,19 +993,25 @@ namespace LanScreenShare.Desktop
                 if (fullscreenText != null) fullscreenText.Text = "Salir";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = false;
 
-                // El viewport de transmisiÃ³n ocupa el 100% de la pantalla sin franjas ni barras
-                if (mainAreaGrid != null) mainAreaGrid.RowDefinitions = new RowDefinitions("*");
-                if (viewportGrid != null)
+                if (workspaceHeader != null) workspaceHeader.IsVisible = false;
+                if (devicesSection != null) devicesSection.IsVisible = false;
+                if (bottomFooter != null) bottomFooter.IsVisible = false;
+                if (canvasCardHeader != null) canvasCardHeader.IsVisible = false;
+                if (canvasCardFooter != null) canvasCardFooter.IsVisible = false;
+                if (workspaceContainer != null) workspaceContainer.Margin = new Thickness(0);
+                if (canvasCardBorder != null)
                 {
-                    Grid.SetRow(viewportGrid, 0);
-                    Grid.SetRowSpan(viewportGrid, 1);
+                    canvasCardBorder.CornerRadius = new CornerRadius(0);
+                    canvasCardBorder.BorderThickness = new Thickness(0);
                 }
+
                 if (headerBar != null)
                 {
                     Grid.SetRow(headerBar, 0);
+                    Grid.SetRowSpan(headerBar, 2);
                     headerBar.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top;
                     headerBar.ZIndex = 100;
-                    headerBar.Background = new SolidColorBrush(Color.Parse("#F218181B"));
+                    headerBar.Background = new SolidColorBrush(Color.Parse("#F211161F"));
                     headerBar.IsVisible = false; // Permanece oculta hasta que el cursor se acerca arriba
                 }
             }
@@ -962,25 +1020,31 @@ namespace LanScreenShare.Desktop
                 this.WindowState = _previousWindowState == WindowState.FullScreen ? WindowState.Normal : _previousWindowState;
 
                 if (sidebar != null) sidebar.IsVisible = true;
-                if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("310,*");
+                if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("315,*");
                 if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreen") as StreamGeometry)!;
                 if (fullscreenText != null) fullscreenText.Text = "Pantalla Completa";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = false;
 
-                // Restaurar la barra fija en la parte superior y el viewport abajo
-                if (mainAreaGrid != null) mainAreaGrid.RowDefinitions = new RowDefinitions("Auto,*");
+                if (workspaceHeader != null) workspaceHeader.IsVisible = true;
+                if (devicesSection != null) devicesSection.IsVisible = true;
+                if (bottomFooter != null) bottomFooter.IsVisible = true;
+                if (canvasCardHeader != null) canvasCardHeader.IsVisible = true;
+                if (canvasCardFooter != null) canvasCardFooter.IsVisible = true;
+                if (workspaceContainer != null) workspaceContainer.Margin = new Thickness(28, 20, 28, 14);
+                if (canvasCardBorder != null)
+                {
+                    canvasCardBorder.CornerRadius = new CornerRadius(14);
+                    canvasCardBorder.BorderThickness = new Thickness(1);
+                }
+
                 if (headerBar != null)
                 {
                     Grid.SetRow(headerBar, 0);
+                    Grid.SetRowSpan(headerBar, 1);
                     headerBar.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
                     headerBar.ZIndex = 0;
-                    headerBar.Background = new SolidColorBrush(Color.Parse("#1F1F23"));
+                    headerBar.Background = new SolidColorBrush(Color.Parse("#11161F"));
                     headerBar.IsVisible = true;
-                }
-                if (viewportGrid != null)
-                {
-                    Grid.SetRow(viewportGrid, 1);
-                    Grid.SetRowSpan(viewportGrid, 1);
                 }
             }
         }
@@ -1898,14 +1962,14 @@ namespace LanScreenShare.Desktop
 
             var items = new List<ComboBoxItem>();
 
-            // 1. ResoluciÃ³n nativa como primera opciÃ³n
+            // 1. Resolución nativa como primera opción
             items.Add(new ComboBoxItem
             {
-                Content = $"{nativeW}Ã—{nativeH} (Nativa)",
+                Content = $"{nativeW} × {nativeH} · Nativa",
                 Tag = $"{nativeW}x{nativeH}"
             });
 
-            // 2. Si es configuraciÃ³n multi-pantalla extendida (aspecto muy ancho > 2.2)
+            // 2. Si es configuración multi-pantalla extendida (aspecto muy ancho > 2.2)
             if (nativeAspect > 2.2)
             {
                 var ratios = new (double s, string label)[]
@@ -1922,7 +1986,7 @@ namespace LanScreenShare.Desktop
                     {
                         items.Add(new ComboBoxItem
                         {
-                            Content = $"{scaledW}Ã—{scaledH} ({rLabel})",
+                            Content = $"{scaledW} × {scaledH} · {rLabel}",
                             Tag = $"{scaledW}x{scaledH}"
                         });
                     }
@@ -1930,7 +1994,7 @@ namespace LanScreenShare.Desktop
             }
             else
             {
-                // Filtrar resoluciones menores compatibles con la relaciÃ³n de aspecto
+                // Filtrar resoluciones menores compatibles con la relación de aspecto
                 foreach (var (w, h, label) in commonResolutions)
                 {
                     if (w >= nativeW && h >= nativeH)
@@ -1944,7 +2008,7 @@ namespace LanScreenShare.Desktop
                     {
                         items.Add(new ComboBoxItem
                         {
-                            Content = $"{w}Ã—{h} ({label})",
+                            Content = $"{w} × {h} · {label}",
                             Tag = $"{w}x{h}"
                         });
                     }
@@ -2098,6 +2162,25 @@ namespace LanScreenShare.Desktop
                 sourceNameText.Text = _currentSource.Name;
             }
 
+            var sourceSubText = this.FindControl<TextBlock>("SelectedSourceSubText");
+            if (sourceSubText != null)
+            {
+                sourceSubText.Text = _currentSource.Type switch
+                {
+                    CaptureSourceType.Window => "Aplicación",
+                    CaptureSourceType.AllScreens => "Escritorio extendido",
+                    _ => _currentSource.IsPrimary ? "Principal" : "Secundaria"
+                };
+            }
+
+            var canvasSourceTitle = this.FindControl<TextBlock>("CanvasSourceTitleText");
+            if (canvasSourceTitle != null)
+            {
+                canvasSourceTitle.Text = _currentSource.Type == CaptureSourceType.Screen && _currentSource.IsPrimary
+                    ? $"{_currentSource.Name} (Principal)"
+                    : _currentSource.Name;
+            }
+
             var badgeText = this.FindControl<TextBlock>("SourceTypeBadge");
             if (badgeText != null)
             {
@@ -2109,27 +2192,62 @@ namespace LanScreenShare.Desktop
                 };
             }
 
-            var icon = this.FindControl<PathIcon>("SourceIcon");
-            if (icon != null)
+            string iconKey = _currentSource.Type == CaptureSourceType.Window ? "IconWindow" : "IconTv";
+            if (this.TryFindResource(iconKey, out var res) && res is StreamGeometry geom)
             {
-                string iconKey = _currentSource.Type == CaptureSourceType.Window ? "IconWindow" : "IconTv";
-                if (this.TryFindResource(iconKey, out var res) && res is StreamGeometry geom)
+                var icon = this.FindControl<PathIcon>("SourceIcon");
+                if (icon != null)
                 {
                     icon.Data = geom;
-                    icon.Foreground = new SolidColorBrush(_currentSource.Type == CaptureSourceType.Window
-                        ? Color.Parse("#A78BFA")
-                        : Color.Parse("#38BDF8"));
+                    icon.Foreground = new SolidColorBrush(Color.Parse("#CBD5E1"));
+                }
+
+                var canvasIcon = this.FindControl<PathIcon>("CanvasSourceIcon");
+                if (canvasIcon != null)
+                {
+                    canvasIcon.Data = geom;
                 }
             }
         }
 
-                private bool _isUpdatingQualitySlider = false;
+        private void UpdateCanvasFooterAudioStatus()
+        {
+            bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
+            bool shareMic = this.FindControl<CheckBox>("MicShareCheckBox")?.IsChecked ?? false;
+
+            var audioText = this.FindControl<TextBlock>("CanvasAudioStatusText");
+            var audioIcon = this.FindControl<PathIcon>("CanvasAudioStatusIcon");
+            if (audioText != null)
+            {
+                audioText.Text = shareAudio ? "Audio del sistema activado" : "Audio del sistema desactivado";
+                audioText.Foreground = new SolidColorBrush(Color.Parse(shareAudio ? "#94A3B8" : "#64748B"));
+            }
+            if (audioIcon != null)
+            {
+                audioIcon.Foreground = new SolidColorBrush(Color.Parse(shareAudio ? "#22C55E" : "#64748B"));
+            }
+
+            var micText = this.FindControl<TextBlock>("CanvasMicStatusText");
+            var micIcon = this.FindControl<PathIcon>("CanvasMicStatusIcon");
+            if (micText != null)
+            {
+                micText.Text = shareMic ? "Micrófono activado" : "Micrófono desactivado";
+                micText.Foreground = new SolidColorBrush(Color.Parse(shareMic ? "#94A3B8" : "#64748B"));
+            }
+            if (micIcon != null)
+            {
+                micIcon.Foreground = new SolidColorBrush(Color.Parse(shareMic ? "#22C55E" : "#64748B"));
+            }
+        }
+
+        private bool _isUpdatingQualitySlider = false;
 
         private void UpdateQualitySliderForCodec(string codec)
         {
             var slider = this.FindControl<Slider>("QualitySlider");
             var title = this.FindControl<TextBlock>("QualityTitleLabel");
             var valueLabel = this.FindControl<TextBlock>("QualityValueLabel");
+            var bitrateCombo = this.FindControl<ComboBox>("BitrateComboBox");
             if (slider == null || title == null || valueLabel == null) return;
 
             _isUpdatingQualitySlider = true;
@@ -2137,23 +2255,65 @@ namespace LanScreenShare.Desktop
             {
                 if (codec == "h264")
                 {
-                    title.Text = "Tasa de Bits (Bitrate H.264)";
+                    title.Text = "Tasa de bits";
                     slider.Minimum = 2;
                     slider.Maximum = 25;
                     slider.SmallChange = 1;
                     slider.LargeChange = 5;
-                    slider.Value = Math.Clamp(_appSettings.BitrateMbps, 2, 25);
-                    valueLabel.Text = $"{(int)slider.Value} Mbps";
+                    int val = Math.Clamp(_appSettings.BitrateMbps, 2, 25);
+                    slider.Value = val;
+                    valueLabel.Text = $"{val} Mbps";
+
+                    if (bitrateCombo != null)
+                    {
+                        var options = new[] { 3, 5, 8, 12, 15, 20, 25 };
+                        var items = new List<ComboBoxItem>();
+                        int bestIdx = 0;
+                        int bestDiff = int.MaxValue;
+                        for (int i = 0; i < options.Length; i++)
+                        {
+                            items.Add(new ComboBoxItem { Content = $"{options[i]} Mbps", Tag = options[i].ToString() });
+                            int diff = Math.Abs(options[i] - val);
+                            if (diff < bestDiff)
+                            {
+                                bestDiff = diff;
+                                bestIdx = i;
+                            }
+                        }
+                        bitrateCombo.ItemsSource = items;
+                        bitrateCombo.SelectedIndex = bestIdx;
+                    }
                 }
                 else
                 {
-                    title.Text = "Calidad de Imagen (JPEG)";
+                    title.Text = "Calidad JPEG";
                     slider.Minimum = 20;
                     slider.Maximum = 95;
                     slider.SmallChange = 5;
                     slider.LargeChange = 10;
-                    slider.Value = Math.Clamp(_appSettings.Quality, 20, 95);
-                    valueLabel.Text = $"{(int)slider.Value}%";
+                    int val = Math.Clamp(_appSettings.Quality, 20, 95);
+                    slider.Value = val;
+                    valueLabel.Text = $"{val}%";
+
+                    if (bitrateCombo != null)
+                    {
+                        var options = new[] { 40, 60, 75, 85, 95 };
+                        var items = new List<ComboBoxItem>();
+                        int bestIdx = 0;
+                        int bestDiff = int.MaxValue;
+                        for (int i = 0; i < options.Length; i++)
+                        {
+                            items.Add(new ComboBoxItem { Content = $"{options[i]}%", Tag = options[i].ToString() });
+                            int diff = Math.Abs(options[i] - val);
+                            if (diff < bestDiff)
+                            {
+                                bestDiff = diff;
+                                bestIdx = i;
+                            }
+                        }
+                        bitrateCombo.ItemsSource = items;
+                        bitrateCombo.SelectedIndex = bestIdx;
+                    }
                 }
             }
             finally
@@ -2200,7 +2360,7 @@ namespace LanScreenShare.Desktop
             var fpsLabel = this.FindControl<TextBlock>("FpsValueLabel");
             if (fpsLabel != null)
             {
-                fpsLabel.Text = $"{fps} FPS";
+                fpsLabel.Text = $"{fps} fps";
             }
 
             var qualityLabel = this.FindControl<TextBlock>("QualityValueLabel");
@@ -2212,7 +2372,7 @@ namespace LanScreenShare.Desktop
             var qualityTitle = this.FindControl<TextBlock>("QualityTitleLabel");
             if (qualityTitle != null)
             {
-                qualityTitle.Text = codec == "h264" ? "Tasa de Bits (Bitrate H.264)" : "Calidad JPEG";
+                qualityTitle.Text = codec == "h264" ? "Tasa de bits" : "Calidad JPEG";
             }
 
             int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
@@ -2223,7 +2383,7 @@ namespace LanScreenShare.Desktop
             {
                 if (targetW > 0 && targetH > 0)
                 {
-                    scaleLabel.Text = $"{targetW}Ã—{targetH}";
+                    scaleLabel.Text = $"{targetW} × {targetH}";
                 }
                 else
                 {
@@ -2384,10 +2544,47 @@ namespace LanScreenShare.Desktop
 
         #region Hosting Logic
 
-        private async void HostButton_Click(object? sender, RoutedEventArgs e)
+        private void UpdateHostButtonsUI(bool isHosting)
         {
             var hostBtn = this.FindControl<Button>("HostButton");
+            var hostBtnText = this.FindControl<TextBlock>("HostButtonText");
+            var centerHostBtn = this.FindControl<Button>("CenterHostButton");
+            var centerHostBtnText = this.FindControl<TextBlock>("CenterHostButtonText");
 
+            var bg = new SolidColorBrush(Color.Parse(isHosting ? "#DC2626" : "#3B82F6"));
+            string label = isHosting ? "Detener transmisión" : "Transmitir mi pantalla";
+
+            if (hostBtn != null) hostBtn.Background = bg;
+            if (hostBtnText != null) hostBtnText.Text = label;
+
+            if (centerHostBtn != null) centerHostBtn.Background = bg;
+            if (centerHostBtnText != null) centerHostBtnText.Text = label;
+        }
+
+        private void UpdateStreamStateBadge()
+        {
+            var badgeText = this.FindControl<TextBlock>("StreamStateBadgeText");
+            var badgeDot = this.FindControl<Ellipse>("StreamStateDot");
+
+            if (_isHosting)
+            {
+                if (badgeText != null) badgeText.Text = "Transmitiendo";
+                if (badgeDot != null) badgeDot.Fill = new SolidColorBrush(Color.Parse("#22C55E"));
+            }
+            else if (_isViewing)
+            {
+                if (badgeText != null) badgeText.Text = "Visualizando";
+                if (badgeDot != null) badgeDot.Fill = new SolidColorBrush(Color.Parse("#3B82F6"));
+            }
+            else
+            {
+                if (badgeText != null) badgeText.Text = "Sin transmisión";
+                if (badgeDot != null) badgeDot.Fill = new SolidColorBrush(Color.Parse("#7C8B9E"));
+            }
+        }
+
+        private async void HostButton_Click(object? sender, RoutedEventArgs e)
+        {
             if (!_isHosting)
             {
                 // Iniciar Host
@@ -2406,7 +2603,7 @@ namespace LanScreenShare.Desktop
                     SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
                     _inputSimulatorService?.SetTargetSource(_currentSource);
 
-                    // 2. Iniciar servidor y captura de audio (Puerto 5002) si estÃ¡ habilitado
+                    // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
                     bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
                     bool shareMic = this.FindControl<CheckBox>("MicShareCheckBox")?.IsChecked ?? false;
                     if (shareAudio || shareMic)
@@ -2430,7 +2627,7 @@ namespace LanScreenShare.Desktop
                         }
                     }
 
-                    // 3. Iniciar servidor de control remoto (Puerto 5003) si estÃ¡ habilitado
+                    // 3. Iniciar servidor de control remoto (Puerto 5003) si está habilitado
                     if (_allowRemoteControl)
                     {
                         await _controlServer.StartAsync(5003);
@@ -2444,22 +2641,18 @@ namespace LanScreenShare.Desktop
 
                     var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
                     var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
-                    if (placeholderTitle != null) placeholderTitle.Text = "Transmitiendo Pantalla";
-                    if (placeholderSubtitle != null) placeholderSubtitle.Text = "Tu pantalla está siendo compartida en la red local. Los visores conectados verán tu pantalla en tiempo real.";
+                    if (placeholderTitle != null) placeholderTitle.Text = "Transmitiendo tu pantalla";
+                    if (placeholderSubtitle != null) placeholderSubtitle.Text = "Tu pantalla está siendo compartida en tu red local.\nLos equipos conectados la verán en tiempo real.";
 
-                    if (hostBtn != null)
-                    {
-                        hostBtn.Content = "Detener TransmisiÃ³n";
-                        hostBtn.Background = new SolidColorBrush(Color.Parse("#DC2626"));
-                    }
+                    UpdateHostButtonsUI(true);
+                    UpdateStreamStateBadge();
 
-                    string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
-                    string audioStatus = shareAudio ? " + Audio WASAPI" : "";
-                    UpdateStatus($"Transmitiendo {_currentSource.Name} con {engineName}{audioStatus} - Esperando espectadores", "#22C55E");
+                    string engineName = engine == "dxgi" ? "DirectX DXGI" : "GDI BitBlt";
+                    UpdateStatus($"Transmitiendo {_currentSource.Name} ({engineName}) · Esperando visores", "#22C55E");
                 }
                 catch (Exception ex)
                 {
-                    UpdateStatus($"Error al iniciar transmisiÃ³n: {ex.Message}", "#EF4444");
+                    UpdateStatus($"Error al iniciar transmisión: {ex.Message}", "#EF4444");
                 }
             }
             else
@@ -2481,16 +2674,13 @@ namespace LanScreenShare.Desktop
 
                 var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
                 var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
-                if (placeholderTitle != null) placeholderTitle.Text = "Área de Transmisión";
-                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Haz clic en 'Transmitir mi pantalla' para compartir con otros equipos, o presiona 'Ver' en un dispositivo detectado para ver su pantalla en tiempo real.";
+                if (placeholderTitle != null) placeholderTitle.Text = "Todo listo para compartir";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Comparte una pantalla o una aplicación con otros equipos.\nTú eliges qué mostrar y quién puede controlarlo.";
 
-                if (hostBtn != null)
-                {
-                    hostBtn.Content = "Transmitir mi pantalla";
-                    hostBtn.Background = new SolidColorBrush(Color.Parse("#3B82F6"));
-                }
+                UpdateHostButtonsUI(false);
+                UpdateStreamStateBadge();
 
-                UpdateStatus("TransmisiÃ³n detenida", "#71717A");
+                UpdateStatus("Sin conexión activa", "#34D399");
             }
         }
 
@@ -2512,7 +2702,7 @@ namespace LanScreenShare.Desktop
             Dispatcher.UIThread.Post(() =>
             {
                 int count = _streamServer.ConnectedClientsCount;
-                UpdateStatus($"Transmitiendo pantalla activa - {count} espectador(es) conectado(s)", "#22C55E");
+                UpdateStatus($"Transmitiendo pantalla · {count} espectador(es) conectado(s)", "#22C55E");
             });
         }
 
@@ -2523,7 +2713,7 @@ namespace LanScreenShare.Desktop
                 int count = _streamServer.ConnectedClientsCount;
                 if (_isHosting)
                 {
-                    UpdateStatus($"Transmitiendo pantalla activa - {count} espectador(es) conectado(s)", "#22C55E");
+                    UpdateStatus($"Transmitiendo pantalla · {count} espectador(es) conectado(s)", "#22C55E");
                 }
             });
         }
@@ -2532,6 +2722,27 @@ namespace LanScreenShare.Desktop
 
         #region Discovery & Client Viewing Logic
 
+        private void UpdateDevicesSectionUI()
+        {
+            var countText = this.FindControl<TextBlock>("DevicesCountText");
+            if (countText != null)
+            {
+                countText.Text = Devices.Count == 1 ? "1 encontrado" : $"{Devices.Count} encontrados";
+            }
+
+            var placeholder = this.FindControl<Grid>("NoDevicesPlaceholder");
+            if (placeholder != null)
+            {
+                placeholder.IsVisible = Devices.Count == 0;
+            }
+
+            var list = this.FindControl<ListBox>("DevicesList");
+            if (list != null)
+            {
+                list.IsVisible = Devices.Count > 0;
+            }
+        }
+
         private void StopDeviceSearch()
         {
             _searchTimer?.Stop();
@@ -2539,9 +2750,13 @@ namespace LanScreenShare.Desktop
             _discoveryService.StopListening();
 
             var searchBtn = this.FindControl<Button>("SearchButton");
+            var searchBtnText = this.FindControl<TextBlock>("SearchButtonText");
+            if (searchBtnText != null)
+            {
+                searchBtnText.Text = "Buscar dispositivos";
+            }
             if (searchBtn != null)
             {
-                searchBtn.Content = "Buscar dispositivos";
                 searchBtn.IsEnabled = true;
             }
 
@@ -2549,8 +2764,8 @@ namespace LanScreenShare.Desktop
             if (localInfo != null)
             {
                 localInfo.Text = Devices.Count > 0
-                    ? $"Detectados {Devices.Count} dispositivo(s)"
-                    : "Listo para buscar";
+                    ? $"Listo para transmitir o recibir · {Devices.Count} detectado(s)"
+                    : "Listo para transmitir o recibir";
             }
         }
 
@@ -2559,19 +2774,24 @@ namespace LanScreenShare.Desktop
             _searchTimer?.Stop();
             _discoveryService.StartListening();
 
-            if (sender is Button searchBtn)
+            var searchBtn = this.FindControl<Button>("SearchButton");
+            var searchBtnText = this.FindControl<TextBlock>("SearchButtonText");
+            if (searchBtnText != null)
             {
-                searchBtn.Content = "Buscando en LAN...";
+                searchBtnText.Text = "Buscando en LAN...";
+            }
+            if (searchBtn != null)
+            {
                 searchBtn.IsEnabled = false;
             }
 
             var localInfo = this.FindControl<TextBlock>("LocalInfoText");
             if (localInfo != null)
             {
-                localInfo.Text = "Escuchando anuncios en puerto UDP 5000...";
+                localInfo.Text = "Buscando equipos en tu red local (UDP 5000)...";
             }
 
-            // Auto-detener bÃºsqueda despuÃ©s de 10 segundos para no quedar en bucle
+            // Auto-detener búsqueda después de 10 segundos para no quedar en bucle
             _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
             _searchTimer.Tick += (s, args) =>
             {
@@ -2595,6 +2815,8 @@ namespace LanScreenShare.Desktop
                 {
                     Devices.Add(device);
                 }
+
+                UpdateDevicesSectionUI();
 
                 if (_streamClient.IsConnected && _currentConnectedDeviceIp == device.IPAddress)
                 {
@@ -2636,14 +2858,17 @@ namespace LanScreenShare.Desktop
 
             var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
             var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
+            var placeholderActions = this.FindControl<StackPanel>("PlaceholderActionsPanel");
             if (placeholderTitle != null) placeholderTitle.Text = "Conectando al anfitrión...";
             if (placeholderSubtitle != null) placeholderSubtitle.Text = $"Estableciendo conexión segura con {device.Name} ({device.IPAddress})...";
+            if (placeholderActions != null) placeholderActions.IsVisible = false;
 
             try
             {
                 // 1. Conectar flujo de video
                 await _streamClient.ConnectAsync(device.IPAddress, 5001, _sslClientOptions);
                 _isViewing = true;
+                UpdateStreamStateBadge();
 
                 var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
 
@@ -2657,8 +2882,8 @@ namespace LanScreenShare.Desktop
                     Console.WriteLine($"[AudioClient] Audio no disponible en el host: {ex.Message}");
                 }
 
-                // El control remoto NO se conecta automÃ¡ticamente aquÃ­ para no solicitar permisos antes de tiempo.
-                // Se conecta Ãºnicamente a demanda cuando el visor hace clic en 'Control' o 'Modo 3D'.
+                // El control remoto NO se conecta automáticamente aquí para no solicitar permisos antes de tiempo.
+                // Se conecta únicamente a demanda cuando el visor hace clic en 'Control' o 'Modo 3D'.
 
                 var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
                 if (fullscreenBtn != null)
@@ -2704,7 +2929,7 @@ namespace LanScreenShare.Desktop
                     remoteControlBtn.IsVisible = _currentDeviceAllowsRemoteControl;
                     remoteControlBtn.IsChecked = false;
                     remoteControlBtn.IsEnabled = true;
-                    ToolTip.SetTip(remoteControlBtn, "Habilitar interacciÃ³n con mouse y teclado");
+                    ToolTip.SetTip(remoteControlBtn, "Habilitar interacción con mouse y teclado");
                 }
 
                 var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
@@ -2842,7 +3067,7 @@ namespace LanScreenShare.Desktop
                         return;
                     }
 
-                    UpdateStatus(status, "#71717A");
+                    UpdateStatus(status, "#7C8B9E");
                     HideViewerControls();
                     return;
                 }
@@ -2901,6 +3126,7 @@ namespace LanScreenShare.Desktop
         private async Task HandleViewerDisconnectedAsync(string reason)
         {
             _isViewing = false;
+            UpdateStreamStateBadge();
             ClosePopoutWindow();
             SetFullscreen(false);
             StopDeviceSearch();
@@ -2938,13 +3164,19 @@ namespace LanScreenShare.Desktop
                 placeholder.IsVisible = true;
             }
 
+            var placeholderActions = this.FindControl<StackPanel>("PlaceholderActionsPanel");
+            if (placeholderActions != null)
+            {
+                placeholderActions.IsVisible = true;
+            }
+
             var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
             var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
 
             if (reason.Contains("finaliz", StringComparison.OrdinalIgnoreCase))
             {
                 if (placeholderTitle != null) placeholderTitle.Text = "Transmisión Finalizada";
-                if (placeholderSubtitle != null) placeholderSubtitle.Text = "El anfitrión ha finalizado la transmisión.";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "El anfitrión ha finalizado la transmisión.\nPuedes iniciar tu propia transmisión o conectarte a otro equipo.";
                 UpdateStatus("El anfitrión ha finalizado la transmisión", "#F59E0B");
             }
             else if (reason.Contains("perdida", StringComparison.OrdinalIgnoreCase) ||
@@ -2957,9 +3189,9 @@ namespace LanScreenShare.Desktop
             }
             else
             {
-                if (placeholderTitle != null) placeholderTitle.Text = "Área de Transmisión";
-                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Haz clic en 'Transmitir mi pantalla' para compartir con otros equipos, o presiona 'Ver' en un dispositivo detectado para ver su pantalla en tiempo real.";
-                UpdateStatus(reason, "#71717A");
+                if (placeholderTitle != null) placeholderTitle.Text = "Todo listo para compartir";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Comparte una pantalla o una aplicación con otros equipos.\nTú eliges qué mostrar y quién puede controlarlo.";
+                UpdateStatus("Sin conexión activa", "#34D399");
             }
 
             HideViewerControls();
@@ -3016,6 +3248,12 @@ namespace LanScreenShare.Desktop
             if (indicator != null)
             {
                 indicator.Fill = new SolidColorBrush(Color.Parse(hexColor));
+            }
+
+            var topNetIcon = this.FindControl<PathIcon>("TopNetworkStatusIcon");
+            if (topNetIcon != null)
+            {
+                topNetIcon.Foreground = new SolidColorBrush(Color.Parse(hexColor));
             }
         }
 

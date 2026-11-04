@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using LanScreenShare.Core.Models;
@@ -19,6 +20,7 @@ namespace LanScreenShare.Desktop
                 var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
                 var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
                 var qualitySlider = this.FindControl<Slider>("QualitySlider");
+                var bitrateCombo = this.FindControl<ComboBox>("BitrateComboBox");
 
                 switch (presetName.ToLowerInvariant())
                 {
@@ -35,6 +37,7 @@ namespace LanScreenShare.Desktop
                         {
                             qualitySlider.Value = 15;
                         }
+                        SelectComboBoxItemByTag(bitrateCombo, "15");
                         break;
 
                     case "speed":
@@ -47,11 +50,12 @@ namespace LanScreenShare.Desktop
                         {
                             qualitySlider.Value = 3;
                         }
+                        SelectComboBoxItemByTag(bitrateCombo, "3");
                         break;
 
                     case "balanced":
                     default:
-                        // 70-75% Escala, 30 FPS, Bitrate balanceado (8 Mbps H.264 / 75% JPEG)
+                        // 75% Escala, 30 FPS, Bitrate balanceado (8 Mbps H.264 / 75% JPEG)
                         SelectScaleApproximate(scaleCombo, 0.75);
                         SelectComboBoxItemByTag(fpsCombo, "30");
                         SelectComboBoxItemByTag(codecCombo, "h264");
@@ -60,6 +64,7 @@ namespace LanScreenShare.Desktop
                         {
                             qualitySlider.Value = 8;
                         }
+                        SelectComboBoxItemByTag(bitrateCombo, "8");
                         break;
                 }
 
@@ -83,40 +88,60 @@ namespace LanScreenShare.Desktop
             var presetSpeedBtn = this.FindControl<Button>("PresetSpeedButton");
             var presetBadgeText = this.FindControl<TextBlock>("PresetBadgeText");
 
-            var activeBg = new SolidColorBrush(Color.Parse("#1E3A8A"));
+            var activeBg = new SolidColorBrush(Color.Parse("#192B4D"));
             var activeBorder = new SolidColorBrush(Color.Parse("#3B82F6"));
-            var normalBg = new SolidColorBrush(Color.Parse("#1E1E24"));
-            var normalBorder = new SolidColorBrush(Color.Parse("#3F3F46"));
+            var normalBg = new SolidColorBrush(Color.Parse("#1A2230"));
+            var normalBorder = new SolidColorBrush(Color.Parse("#263246"));
 
-            if (presetQualityBtn != null)
+            var activeIconBrush = new SolidColorBrush(Color.Parse("#60A5FA"));
+            var normalIconBrush = new SolidColorBrush(Color.Parse("#94A3B8"));
+            var activeTitleBrush = new SolidColorBrush(Color.Parse("#F8FAFC"));
+            var normalTitleBrush = new SolidColorBrush(Color.Parse("#E2E8F0"));
+            var activeSubBrush = new SolidColorBrush(Color.Parse("#93C5FD"));
+            var normalSubBrush = new SolidColorBrush(Color.Parse("#7C8B9E"));
+
+            void ApplyButtonState(Button? btn, PathIcon? icon, TextBlock? title, TextBlock? sub, bool isAct)
             {
-                bool isAct = activePreset == "quality";
-                presetQualityBtn.Background = isAct ? activeBg : normalBg;
-                presetQualityBtn.BorderBrush = isAct ? activeBorder : normalBorder;
+                if (btn != null)
+                {
+                    btn.Background = isAct ? activeBg : normalBg;
+                    btn.BorderBrush = isAct ? activeBorder : normalBorder;
+                    btn.BorderThickness = isAct ? new Thickness(1.5) : new Thickness(1);
+                }
+                if (icon != null) icon.Foreground = isAct ? activeIconBrush : normalIconBrush;
+                if (title != null) title.Foreground = isAct ? activeTitleBrush : normalTitleBrush;
+                if (sub != null) sub.Foreground = isAct ? activeSubBrush : normalSubBrush;
             }
 
-            if (presetBalancedBtn != null)
-            {
-                bool isAct = activePreset == "balanced";
-                presetBalancedBtn.Background = isAct ? activeBg : normalBg;
-                presetBalancedBtn.BorderBrush = isAct ? activeBorder : normalBorder;
-            }
+            ApplyButtonState(
+                presetQualityBtn,
+                this.FindControl<PathIcon>("PresetQualityIcon"),
+                this.FindControl<TextBlock>("PresetQualityTitleText"),
+                this.FindControl<TextBlock>("PresetQualitySubText"),
+                activePreset == "quality");
 
-            if (presetSpeedBtn != null)
-            {
-                bool isAct = activePreset == "speed";
-                presetSpeedBtn.Background = isAct ? activeBg : normalBg;
-                presetSpeedBtn.BorderBrush = isAct ? activeBorder : normalBorder;
-            }
+            ApplyButtonState(
+                presetBalancedBtn,
+                this.FindControl<PathIcon>("PresetBalancedIcon"),
+                this.FindControl<TextBlock>("PresetBalancedTitleText"),
+                this.FindControl<TextBlock>("PresetBalancedSubText"),
+                activePreset == "balanced");
+
+            ApplyButtonState(
+                presetSpeedBtn,
+                this.FindControl<PathIcon>("PresetSpeedIcon"),
+                this.FindControl<TextBlock>("PresetSpeedTitleText"),
+                this.FindControl<TextBlock>("PresetSpeedSubText"),
+                activePreset == "speed");
 
             if (presetBadgeText != null)
             {
                 presetBadgeText.Text = activePreset switch
                 {
-                    "quality" => "🌟 Calidad",
-                    "speed" => "🍃 Fluidez",
-                    "custom" => "⚙️ Personalizado",
-                    _ => "⚡ Equilibrado"
+                    "quality" => "Calidad",
+                    "speed" => "Fluidez",
+                    "custom" => "Personalizado",
+                    _ => "Equilibrado"
                 };
             }
         }
@@ -140,24 +165,33 @@ namespace LanScreenShare.Desktop
             var captureResLabel = this.FindControl<TextBlock>("CaptureResolutionText");
             if (captureResLabel != null)
             {
-                captureResLabel.Text = $"{nativeW}×{nativeH}";
+                captureResLabel.Text = $"{nativeW} × {nativeH}";
+            }
+
+            int outW;
+            int outH;
+            if (targetW > 0 && targetH > 0)
+            {
+                outW = targetW;
+                outH = targetH;
+            }
+            else
+            {
+                outW = (int)Math.Round((nativeW * scale) / 2.0) * 2;
+                outH = (int)Math.Round((nativeH * scale) / 2.0) * 2;
             }
 
             var outputResLabel = this.FindControl<TextBlock>("OutputResolutionText");
             if (outputResLabel != null)
             {
-                if (targetW > 0 && targetH > 0)
-                {
-                    int pct = (int)Math.Round(((double)targetW / Math.Max(1, nativeW)) * 100);
-                    outputResLabel.Text = $"{targetW}×{targetH} ({pct}%)";
-                }
-                else
-                {
-                    int outW = (int)Math.Round((nativeW * scale) / 2.0) * 2;
-                    int outH = (int)Math.Round((nativeH * scale) / 2.0) * 2;
-                    int pct = (int)Math.Round(scale * 100);
-                    outputResLabel.Text = $"{outW}×{outH} ({pct}%)";
-                }
+                outputResLabel.Text = $"{outW} × {outH}";
+            }
+
+            var canvasSpecs = this.FindControl<TextBlock>("CanvasSpecsText");
+            if (canvasSpecs != null)
+            {
+                int fps = GetSelectedFps();
+                canvasSpecs.Text = $"{outW} × {outH} · {fps} fps";
             }
         }
 
@@ -172,9 +206,9 @@ namespace LanScreenShare.Desktop
             {
                 if (IsRunningAsAdministrator())
                 {
-                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#14532D"));
-                    adminStatusBorder.BorderBrush = new SolidColorBrush(Color.Parse("#16A34A"));
-                    adminStatusText.Text = "Administrador Activo";
+                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#14291F"));
+                    adminStatusBorder.BorderBrush = new SolidColorBrush(Color.Parse("#1E4631"));
+                    adminStatusText.Text = "Modo administrador · Juegos y UAC activos";
                     adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
                     if (adminStatusSubtext != null)
                     {
@@ -186,16 +220,16 @@ namespace LanScreenShare.Desktop
                 }
                 else
                 {
-                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#451A03"));
-                    adminStatusBorder.BorderBrush = new SolidColorBrush(Color.Parse("#D97706"));
-                    adminStatusText.Text = "Modo Estándar";
+                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#231F1A"));
+                    adminStatusBorder.BorderBrush = new SolidColorBrush(Color.Parse("#42331B"));
+                    adminStatusText.Text = "Modo estándar · Juegos/UAC requieren admin.";
                     adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
                     if (adminStatusSubtext != null)
                     {
                         adminStatusSubtext.Text = "Ejecuta como Administrador para interactuar con juegos o UAC.";
                         adminStatusSubtext.Foreground = new SolidColorBrush(Color.Parse("#FDE68A"));
                     }
-                    if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
+                    if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#F59E0B"));
                     ToolTip.SetTip(adminStatusBorder, "Windows restringe el control remoto sobre ventanas elevadas como launchers o juegos. Abre la aplicación con 'Ejecutar como Administrador' para habilitarlo.");
                 }
             }
@@ -256,4 +290,3 @@ namespace LanScreenShare.Desktop
         }
     }
 }
-
