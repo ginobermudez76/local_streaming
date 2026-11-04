@@ -88,3 +88,4 @@ public class InjectedInputTrackerTests
         Assert.IsFalse(tracker.IsKeyPressed(1));
     }
 }
+
