@@ -528,16 +528,7 @@
                                             <TextBlock x:Name="QualityValueLabel" Text="15 Mbps" IsVisible="False"/>
                                             <ComboBox x:Name="BitrateComboBox"
                                                       Classes="darkCombo"
-                                                      HorizontalAlignment="Stretch"
-                                                      SelectedIndex="4">
-                                                <ComboBoxItem Content="3 Mbps" Tag="3"/>
-                                                <ComboBoxItem Content="5 Mbps" Tag="5"/>
-                                                <ComboBoxItem Content="8 Mbps" Tag="8"/>
-                                                <ComboBoxItem Content="12 Mbps" Tag="12"/>
-                                                <ComboBoxItem Content="15 Mbps" Tag="15"/>
-                                                <ComboBoxItem Content="20 Mbps" Tag="20"/>
-                                                <ComboBoxItem Content="25 Mbps" Tag="25"/>
-                                            </ComboBox>
+                                                      HorizontalAlignment="Stretch"/>
                                             <Slider x:Name="QualitySlider"
                                                     Minimum="2"
                                                     Maximum="25"
