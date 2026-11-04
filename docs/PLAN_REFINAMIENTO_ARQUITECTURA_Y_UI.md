@@ -73,16 +73,17 @@ flowchart TD
 
 ### 🛡️ Fase 2: Seguridad y Autorización del Control Remoto (Puerto 5003)
 > [!WARNING]
-> La recepción de paquetes `SendInput` en una red compartida sin autenticación supone un vector de riesgo que debe acotarse.
+> La recepción de paquetes `SendInput` en una red compartida sin autenticación supone un vector de riesgo que debe acotarse. La aprobación interactiva en UI debe estar respaldada por identidad de sesión criptográfica.
 
 1. **Clarificación del selector de modo de control:**
    * Reemplazar los textos ambiguos por:
      * `Solo Visualización (Control desactivado)`
      * `Solicitar Aprobación al Anfitrión (Recomendado, con diálogo interactivo)`
      * `Acceso Directo con PIN Temporal`
-2. **Handshake interactivo robusto:**
-   * Refinar `RequestControlApprovalAsync` para asociar la petición a una clave/nonce único por sesión.
-   * Añadir cuenta regresiva visual visible para el anfitrión (25 segundos) y descarte por timeout.
+2. **Autenticación e Identidad de Sesión:**
+   * Generar un token de sesión/nonce criptográfico en el handshake de aprobación.
+   * Vincular los paquetes del puerto 5003 al token concedido; rechazar cualquier paquete que no provenga de la sesión aprobada.
+   * Prevenir inyección previa a la aprobación: el socket de control no procesa ningún mensaje de entrada hasta que la promesa `ClientApprovalCallback` retorne afirmativamente.
 3. **Botón de revocación inmediata (*Panic Button*):**
    * Cuando un cliente tenga el control remoto activo, mostrar un botón prominente en el anfitrión: `Revocar Control Remoto`, que cierre el socket inmediatamente y limpie cualquier pulsación retenida en `SendInput`.
 
@@ -124,3 +125,4 @@ flowchart TD
 
 ## 📝 Registro de Actualizaciones del Plan
 * **2026-11-04:** Creación inicial del plan en la rama `feature/ui-and-architecture-refinement` tras el análisis y contraste técnico con la IA externa.
+
