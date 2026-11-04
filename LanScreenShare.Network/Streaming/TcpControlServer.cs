@@ -170,6 +170,16 @@ namespace LanScreenShare.Network.Streaming
                                     }
                                 }
 
+                                if (_sessionAuthority != null && assignedSessionId != null)
+                                {
+                                    if (!_sessionAuthority.TryAcquireControl(assignedSessionId, out string? acquireError))
+                                    {
+                                        Console.WriteLine($"[ControlServer] Conflicto de controlador único para {clientId}: {acquireError}");
+                                        try { client.Close(); } catch { }
+                                        return;
+                                    }
+                                }
+
                                 _clients[clientId] = (stream, client, assignedSessionId);
                                 Console.WriteLine($"[ControlServer] Controlador LSI2 conectado: {clientId}");
                                 ClientConnected?.Invoke(this, clientId);
@@ -279,6 +289,11 @@ namespace LanScreenShare.Network.Streaming
                 try { ctx.Stream.Dispose(); } catch { }
                 try { ctx.Client.Dispose(); } catch { }
 
+                if (_sessionAuthority != null && ctx.SessionId != null)
+                {
+                    _sessionAuthority.ReleaseRemoteControl(ctx.SessionId);
+                }
+
                 // ADR-001 Sección 9: Liberación idempotente de entradas inyectadas ante desconexión
                 _inputSimulator?.ReleaseInjectedInputs();
 
@@ -295,6 +310,11 @@ namespace LanScreenShare.Network.Streaming
             {
                 try { kvp.Value.Stream.Dispose(); } catch { }
                 try { kvp.Value.Client.Dispose(); } catch { }
+
+                if (_sessionAuthority != null && kvp.Value.SessionId != null)
+                {
+                    _sessionAuthority.ReleaseRemoteControl(kvp.Value.SessionId);
+                }
             }
             _clients.Clear();
 

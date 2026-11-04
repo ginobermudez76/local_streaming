@@ -96,7 +96,7 @@ namespace LanScreenShare.Core.Security
             RandomNumberGenerator.Fill(tokenBytes);
             string tokenId = Convert.ToHexString(tokenBytes).ToLowerInvariant();
 
-            var expiration = DateTime.UtcNow.Add(validFor ?? TimeSpan.FromSeconds(15));
+            var expiration = DateTime.UtcNow.Add(validFor ?? TimeSpan.FromHours(24));
             var token = new ChannelAttachmentToken(tokenId, sessionId, session.PeerFingerprint, channel, expiration);
 
             _attachmentTokens[tokenId] = token;

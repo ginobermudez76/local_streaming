@@ -282,7 +282,8 @@ namespace LanScreenShare.Desktop
             {
                 if (_allowRemoteControl)
                 {
-                    _inputSimulatorService?.SimulateInput(input);
+                    // Inyección gestionada y rastreada directamente por TcpControlServer
+                    // _inputSimulatorService?.SimulateInput(input);
                 }
             };
 
@@ -1388,7 +1389,8 @@ namespace LanScreenShare.Desktop
             catch (Exception ex)
             {
                 Console.WriteLine($"[ControlClient] Control remoto denegado o no disponible: {ex.Message}");
-                UpdateStatus("Control remoto rechazado o no disponible en el anfitriÃ³n", "#EF4444");
+                string detail = ex.InnerException != null ? $"{ex.Message} ({ex.InnerException.Message})" : ex.Message;
+                UpdateStatus($"Control remoto no disponible: {detail}", "#EF4444");
                 return false;
             }
         }
