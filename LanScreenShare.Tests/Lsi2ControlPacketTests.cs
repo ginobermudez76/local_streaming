@@ -42,6 +42,33 @@ public class Lsi2ControlPacketTests
     }
 
     [TestMethod]
+    public void MouseMoveRelative_RoundTrip_PreservesSignedDeltas()
+    {
+        var input = new RemoteInputMessage
+        {
+            Type = InputEventType.MouseMoveRelative,
+            NormalizedX = -35f,
+            NormalizedY = 82f
+        };
+
+        byte[] buffer = new byte[Lsi2ControlPacket.PacketSize];
+        Lsi2ControlPacket.WritePacket(buffer, 12, 3456, input);
+
+        bool parsed = Lsi2ControlPacket.TryReadPacket(
+            buffer,
+            out ulong readSeq,
+            out ulong readTs,
+            out var readInput,
+            out string? error);
+
+        Assert.IsTrue(parsed);
+        Assert.IsNull(error);
+        Assert.AreEqual(InputEventType.MouseMoveRelative, readInput!.Type);
+        Assert.AreEqual(-35f, readInput.NormalizedX);
+        Assert.AreEqual(82f, readInput.NormalizedY);
+    }
+
+    [TestMethod]
     public void KeyDown_RoundTrip_PreservesKeyCode()
     {
         var input = new RemoteInputMessage

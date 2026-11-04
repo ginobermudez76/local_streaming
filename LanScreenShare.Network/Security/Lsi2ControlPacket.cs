@@ -73,13 +73,29 @@ public sealed class Lsi2ControlPacket
         {
             BinaryPrimitives.WriteInt32BigEndian(destination.Slice(24, 4), input.KeyCode);
         }
+        else if (input.Type == InputEventType.MouseMoveRelative)
+        {
+            // Coordenadas relativas en modo juego: deltas de píxeles con signo (-32768 a 32767)
+            short relX = (short)Math.Clamp((int)Math.Round(input.NormalizedX), short.MinValue, short.MaxValue);
+            short relY = (short)Math.Clamp((int)Math.Round(input.NormalizedY), short.MinValue, short.MaxValue);
+            BinaryPrimitives.WriteInt16BigEndian(destination.Slice(24, 2), relX);
+            BinaryPrimitives.WriteInt16BigEndian(destination.Slice(26, 2), relY);
+        }
         else
         {
-            // Empaquetar coordenadas normalizadas (0.0 a 1.0) en dos enteros sin signo de 16 bits (0 a 65535)
-            ushort packedX = (ushort)Math.Clamp((int)Math.Round(input.NormalizedX * 65535f), 0, 65535);
-            ushort packedY = (ushort)Math.Clamp((int)Math.Round(input.NormalizedY * 65535f), 0, 65535);
-            BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(24, 2), packedX);
-            BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(26, 2), packedY);
+            // Coordenadas absolutas normalizadas (0.0 a 1.0) en dos enteros de 16 bits (0 a 65535)
+            if (input.NormalizedX < 0f || input.NormalizedY < 0f)
+            {
+                BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(24, 2), 0xFFFF);
+                BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(26, 2), 0xFFFF);
+            }
+            else
+            {
+                ushort packedX = (ushort)Math.Clamp((int)Math.Round(input.NormalizedX * 65535f), 0, 65535);
+                ushort packedY = (ushort)Math.Clamp((int)Math.Round(input.NormalizedY * 65535f), 0, 65535);
+                BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(24, 2), packedX);
+                BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(26, 2), packedY);
+            }
         }
     }
 
@@ -139,12 +155,27 @@ public sealed class Lsi2ControlPacket
         {
             keyCode = BinaryPrimitives.ReadInt32BigEndian(source.Slice(24, 4));
         }
+        else if (eventType == InputEventType.MouseMoveRelative)
+        {
+            short relX = BinaryPrimitives.ReadInt16BigEndian(source.Slice(24, 2));
+            short relY = BinaryPrimitives.ReadInt16BigEndian(source.Slice(26, 2));
+            normX = relX;
+            normY = relY;
+        }
         else
         {
             ushort packedX = BinaryPrimitives.ReadUInt16BigEndian(source.Slice(24, 2));
             ushort packedY = BinaryPrimitives.ReadUInt16BigEndian(source.Slice(26, 2));
-            normX = packedX / 65535f;
-            normY = packedY / 65535f;
+            if (packedX == 0xFFFF && packedY == 0xFFFF)
+            {
+                normX = -1f;
+                normY = -1f;
+            }
+            else
+            {
+                normX = packedX / 65535f;
+                normY = packedY / 65535f;
+            }
         }
 
         inputMessage = new RemoteInputMessage
