@@ -714,9 +714,11 @@ namespace LanScreenShare.Desktop
                 {
                     string selCodec = GetSelectedCodec();
                     UpdateQualitySliderForCodec(selCodec);
+                    UpdateHardwareEncoderBadgeUI();
                     OnSettingChanged();
                     SaveCurrentSettings();
                 };
+                UpdateHardwareEncoderBadgeUI();
             }
 
             var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
@@ -2541,9 +2543,14 @@ namespace LanScreenShare.Desktop
                         ? (_screenCaptureService is DxgiScreenCaptureService ? " â€¢ DXGI GPU" : " â€¢ GDI CPU")
                         : "";
 
-                    string codecTag = _isHosting
-                        ? $" â€¢ {_screenCaptureService.Codec.ToUpper()}"
-                        : "";
+                    string codecTag = "";
+                    if (_isHosting)
+                    {
+                        string encDesc = _screenCaptureService.ActiveEncoderDescription ?? _screenCaptureService.Codec.ToUpper();
+                        codecTag = _screenCaptureService.IsHardwareAccelerated
+                            ? $" • ⚡ {encDesc}"
+                            : $" • {encDesc}";
+                    }
 
                     string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient.IsConnected && _audioClient.IsConnected)
                         ? " â€¢ Audio"

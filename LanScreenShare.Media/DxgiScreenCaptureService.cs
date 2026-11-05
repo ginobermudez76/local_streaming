@@ -38,6 +38,8 @@ namespace LanScreenShare.Media
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public event EventHandler<Exception>? CaptureFailed;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
+        public string? ActiveEncoderDescription => _codec == "h264" ? _h264Encoder?.EncoderDescription : "JPEG";
+        public bool IsHardwareAccelerated => _codec == "h264" && (_h264Encoder?.IsHardwareAccelerated ?? false);
 
         public int MonitorIndex
         {
@@ -78,7 +80,11 @@ namespace LanScreenShare.Media
         public int TargetFps
         {
             get => _targetFps;
-            set => _targetFps = Math.Clamp(value, 1, 120);
+            set
+            {
+                _targetFps = Math.Clamp(value, 1, 120);
+                _h264Encoder?.UpdateFps(_targetFps);
+            }
         }
 
         public int Quality
@@ -161,7 +167,7 @@ namespace LanScreenShare.Media
             }
             catch
             {
-                // Ignorar cancelación
+                // Ignorar cancelaciÃ³n
             }
             _cts?.Dispose();
             _cts = null;
@@ -360,7 +366,7 @@ namespace LanScreenShare.Media
                             int currentFps = _targetFps;
                             int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, currentFps));
 
-                            // Medir duración de captura y codificación (frame time)
+                            // Medir duraciÃ³n de captura y codificaciÃ³n (frame time)
                             var frameProcStopwatch = Stopwatch.StartNew();
 
                             // Adquirir el siguiente frame de la GPU
@@ -421,7 +427,7 @@ namespace LanScreenShare.Media
                             }
                             else if (acquireResult.Code == Vortice.DXGI.ResultCode.WaitTimeout.Code)
                             {
-                                // La pantalla no cambió en este intervalo; normal en DXGI.
+                                // La pantalla no cambiÃ³ en este intervalo; normal en DXGI.
                             }
                             else if (acquireResult.Code == Vortice.DXGI.ResultCode.AccessLost.Code ||
                                      acquireResult.Code == Vortice.DXGI.ResultCode.AccessDenied.Code)
@@ -502,7 +508,7 @@ namespace LanScreenShare.Media
 
                 if (targetW > 0 && targetH > 0 && (targetW != width || targetH != height))
                 {
-                    // Remuestreo cúbico CatmullRom para máxima nitidez en textos y detalles finos sin pixelación
+                    // Remuestreo cÃºbico CatmullRom para mÃ¡xima nitidez en textos y detalles finos sin pixelaciÃ³n
                     resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKCubicResampler.CatmullRom));
                     if (resizedBitmap != null)
                     {
@@ -528,7 +534,7 @@ namespace LanScreenShare.Media
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[DXGI] H.264 error, fallback automático a JPEG: {ex.Message}");
+                            Console.WriteLine($"[DXGI] H.264 error, fallback automÃ¡tico a JPEG: {ex.Message}");
                             encodedBytes = null;
                         }
                     }

@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LanScreenShare.Core\LanScreenShare.Core.csproj" />
+    <ProjectReference Include="..\LanScreenShare.Media\LanScreenShare.Media.csproj" />
     <ProjectReference Include="..\LanScreenShare.Network\LanScreenShare.Network.csproj" />
   </ItemGroup>
 

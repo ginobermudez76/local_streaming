@@ -436,6 +436,20 @@
                                                 <ComboBoxItem Content="H.264 / AVC · Media Foundation" Tag="h264"/>
                                             </ComboBox>
 
+                                            <!-- Hardware Acceleration Status Indicator -->
+                                            <Border x:Name="HardwareEncoderBadge"
+                                                    Background="#0F2922"
+                                                    BorderBrush="#10B981"
+                                                    BorderThickness="1"
+                                                    CornerRadius="6"
+                                                    Padding="8,5"
+                                                    Margin="0,1,0,0">
+                                                <Grid ColumnDefinitions="Auto,*">
+                                                    <PathIcon Grid.Column="0" x:Name="HardwareEncoderIcon" Data="{StaticResource IconZap}" Width="11" Height="11" Foreground="#34D399" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="1" x:Name="HardwareEncoderText" Text="⚡ GPU AMD (Radeon) (Hardware)" FontSize="10.5" FontWeight="SemiBold" Foreground="#34D399" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Border>
+
                                             <!-- Side-by-side FPS & Bitrate -->
                                             <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
                                                 <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,4,0">

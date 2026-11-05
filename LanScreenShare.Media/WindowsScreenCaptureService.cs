@@ -33,6 +33,8 @@ namespace LanScreenShare.Media
 
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
+        public string? ActiveEncoderDescription => _codec == "h264" ? _h264Encoder?.EncoderDescription : "JPEG";
+        public bool IsHardwareAccelerated => _codec == "h264" && (_h264Encoder?.IsHardwareAccelerated ?? false);
 
         public int CaptureX
         {
@@ -76,7 +78,11 @@ namespace LanScreenShare.Media
         public int TargetFps
         {
             get => _targetFps;
-            set => _targetFps = Math.Clamp(value, 1, 120);
+            set
+            {
+                _targetFps = Math.Clamp(value, 1, 120);
+                _h264Encoder?.UpdateFps(_targetFps);
+            }
         }
 
         public int Quality
@@ -221,7 +227,7 @@ namespace LanScreenShare.Media
             }
             catch
             {
-                // Ignorar excepciones al esperar cancelación
+                // Ignorar excepciones al esperar cancelaciÃ³n
             }
             _cts?.Dispose();
             _cts = null;
@@ -314,7 +320,7 @@ namespace LanScreenShare.Media
 
                     if (targetW > 0 && targetH > 0 && (targetW != width || targetH != height))
                     {
-                        // Remuestreo cúbico CatmullRom para máxima nitidez en textos y detalles finos sin pixelación
+                        // Remuestreo cÃºbico CatmullRom para mÃ¡xima nitidez en textos y detalles finos sin pixelaciÃ³n
                         resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKCubicResampler.CatmullRom));
                         if (resizedBitmap != null)
                         {
@@ -340,7 +346,7 @@ namespace LanScreenShare.Media
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[GDI] H.264 error, fallback automático a JPEG: {ex.Message}");
+                                Console.WriteLine($"[GDI] H.264 error, fallback automÃ¡tico a JPEG: {ex.Message}");
                                 encodedBytes = null;
                             }
                         }

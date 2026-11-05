@@ -28,13 +28,19 @@ namespace LanScreenShare.Media
 
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
+        public string? ActiveEncoderDescription => _codec == "h264" ? _h264Encoder?.EncoderDescription : "JPEG";
+        public bool IsHardwareAccelerated => _codec == "h264" && (_h264Encoder?.IsHardwareAccelerated ?? false);
 
         public IntPtr WindowHandle => _hwnd;
 
         public int TargetFps
         {
             get => _targetFps;
-            set => _targetFps = Math.Clamp(value, 1, 120);
+            set
+            {
+                _targetFps = Math.Clamp(value, 1, 120);
+                _h264Encoder?.UpdateFps(_targetFps);
+            }
         }
 
         public int Quality
@@ -122,7 +128,7 @@ namespace LanScreenShare.Media
             }
             catch
             {
-                // Ignorar excepciones al esperar cancelación
+                // Ignorar excepciones al esperar cancelaciÃ³n
             }
             _cts?.Dispose();
             _cts = null;
@@ -152,7 +158,7 @@ namespace LanScreenShare.Media
                     break;
                 }
 
-                // Si la ventana está minimizada, pausar brevemente
+                // Si la ventana estÃ¡ minimizada, pausar brevemente
                 if (IsIconic(_hwnd))
                 {
                     Thread.Sleep(100);
@@ -242,7 +248,7 @@ namespace LanScreenShare.Media
 
             try
             {
-                // Intentar capturar con PrintWindow (PW_RENDERFULLCONTENT captura búferes acelerados por DWM/GPU)
+                // Intentar capturar con PrintWindow (PW_RENDERFULLCONTENT captura bÃºferes acelerados por DWM/GPU)
                 bool captured = PrintWindow(hwnd, hdcMem, PW_RENDERFULLCONTENT);
                 if (!captured)
                 {
@@ -250,7 +256,7 @@ namespace LanScreenShare.Media
                     BitBlt(hdcMem, 0, 0, width, height, hdcWindow, 0, 0, SRCCOPY);
                 }
 
-                // Dibujar el cursor si está sobre la ventana cliente
+                // Dibujar el cursor si estÃ¡ sobre la ventana cliente
                 DrawCursorOnDC(hwnd, hdcMem, width, height);
 
                 int finalWidth = width;

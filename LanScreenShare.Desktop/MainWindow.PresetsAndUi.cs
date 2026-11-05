@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using LanScreenShare.Core.Models;
+using LanScreenShare.Media;
 
 namespace LanScreenShare.Desktop
 {
@@ -69,6 +70,7 @@ namespace LanScreenShare.Desktop
                 }
 
                 UpdatePresetButtonsHighlight(presetName);
+                UpdateHardwareEncoderBadgeUI();
                 OnSettingChanged();
                 if (save)
                 {
@@ -288,6 +290,72 @@ namespace LanScreenShare.Desktop
                 {
                     comboBox.SelectedIndex = i;
                     return;
+                }
+            }
+        }
+
+        private void UpdateHardwareEncoderBadgeUI()
+        {
+            var badge = this.FindControl<Border>("HardwareEncoderBadge");
+            var icon = this.FindControl<PathIcon>("HardwareEncoderIcon");
+            var text = this.FindControl<TextBlock>("HardwareEncoderText");
+
+            if (badge == null || text == null) return;
+
+            var codecCombo = this.FindControl<ComboBox>("CodecComboBox");
+            string selectedCodec = (codecCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "h264";
+
+            if (selectedCodec.Equals("jpeg", StringComparison.OrdinalIgnoreCase))
+            {
+                badge.Background = new SolidColorBrush(Color.Parse("#1A2230"));
+                badge.BorderBrush = new SolidColorBrush(Color.Parse("#263246"));
+                text.Text = "Codificador: JPEG (Software CPU)";
+                text.Foreground = new SolidColorBrush(Color.Parse("#94A3B8"));
+                if (icon != null)
+                {
+                    if (this.TryFindResource("IconSliders", out var iconGeo) && iconGeo is Geometry geo)
+                    {
+                        icon.Data = geo;
+                    }
+                    icon.Foreground = new SolidColorBrush(Color.Parse("#94A3B8"));
+                }
+                return;
+            }
+
+            if (OperatingSystem.IsWindows())
+            {
+                var encoders = HardwareMftEncoderDiscovery.EnumerateEncoders();
+                var best = encoders.Count > 0 ? encoders[0] : null;
+
+                if (best != null && best.IsHardware)
+                {
+                    badge.Background = new SolidColorBrush(Color.Parse("#0F2922"));
+                    badge.BorderBrush = new SolidColorBrush(Color.Parse("#10B981"));
+                    text.Text = $"⚡ {best.DisplayName} (Hardware)";
+                    text.Foreground = new SolidColorBrush(Color.Parse("#34D399"));
+                    if (icon != null)
+                    {
+                        if (this.TryFindResource("IconZap", out var iconGeo) && iconGeo is Geometry geo)
+                        {
+                            icon.Data = geo;
+                        }
+                        icon.Foreground = new SolidColorBrush(Color.Parse("#34D399"));
+                    }
+                }
+                else
+                {
+                    badge.Background = new SolidColorBrush(Color.Parse("#261E14"));
+                    badge.BorderBrush = new SolidColorBrush(Color.Parse("#D97706"));
+                    text.Text = "⚙️ CPU (Software Microsoft)";
+                    text.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
+                    if (icon != null)
+                    {
+                        if (this.TryFindResource("IconSettings", out var iconGeo) && iconGeo is Geometry geo)
+                        {
+                            icon.Data = geo;
+                        }
+                        icon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
+                    }
                 }
             }
         }
