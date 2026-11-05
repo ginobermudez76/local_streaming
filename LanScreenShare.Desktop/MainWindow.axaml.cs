@@ -2640,6 +2640,14 @@ namespace LanScreenShare.Desktop
                 // Iniciar Host
                 try
                 {
+                    if (_isViewing)
+                    {
+                        await HandleViewerDisconnectedAsync("Iniciando transmisión local...");
+                    }
+
+                    _isHosting = true;
+                    _isViewing = false;
+
                     int fps = GetSelectedFps();
                     string engine = GetSelectedEngine();
                     string codec = GetSelectedCodec();
@@ -2685,8 +2693,6 @@ namespace LanScreenShare.Desktop
 
                     _discoveryService.StartHostingBroadcast();
 
-                    _isHosting = true;
-                    _isViewing = false;
                     ResetMetrics();
 
                     var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
@@ -2702,6 +2708,7 @@ namespace LanScreenShare.Desktop
                 }
                 catch (Exception ex)
                 {
+                    _isHosting = false;
                     UpdateStatus($"Error al iniciar transmisión: {ex.Message}", "#EF4444");
                 }
             }
@@ -3213,6 +3220,7 @@ namespace LanScreenShare.Desktop
             try { await _controlClient.DisconnectAsync(); } catch { }
 
             _audioPlayerService?.Stop();
+            _micAudioPlayerService?.Stop();
             _remoteControlEnabled = false;
 
             if (_isGameMode)

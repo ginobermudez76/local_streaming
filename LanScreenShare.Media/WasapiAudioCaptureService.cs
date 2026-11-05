@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.Versioning;
+using System.Threading.Tasks;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
 using NAudio.Wave;
@@ -26,63 +27,74 @@ namespace LanScreenShare.Media
             StopCapture();
             _currentProcessId = processId;
 
-            if (processId > 0)
+            try
             {
-                try
+                var procCap = new ProcessLoopbackAudioCapture();
+                procCap.AudioCaptured += (s, chunk) => AudioCaptured?.Invoke(this, chunk);
+                bool started = procCap.StartAsync(processId).GetAwaiter().GetResult();
+                if (started)
                 {
-                    var procCap = new ProcessLoopbackAudioCapture();
-                    procCap.AudioCaptured += (s, chunk) => AudioCaptured?.Invoke(this, chunk);
-                    bool started = procCap.StartAsync(processId).GetAwaiter().GetResult();
-                    if (started)
+                    _processCapture = procCap;
+                    if (processId > 0)
                     {
-                        _processCapture = procCap;
                         Console.WriteLine($"[WASAPI Loopback] Captura de audio aislada para PID {processId} iniciada.");
-                        return;
                     }
-                    procCap.Dispose();
+                    else
+                    {
+                        Console.WriteLine("[WASAPI Loopback] Captura de audio de sistema completo iniciada (ProcessLoopback).");
+                    }
+                    return;
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[WASAPI Loopback] Fallo captura de proceso PID {processId}, recurriendo a loopback global: {ex.Message}");
-                }
+                procCap.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WASAPI Loopback] Fallo ProcessLoopback (PID {processId}), recurriendo a WasapiLoopbackCapture: {ex.Message}");
             }
 
             try
             {
-                _capture = new WasapiLoopbackCapture();
-                var waveFormat = _capture.WaveFormat;
-                short formatEncoding = (short)(waveFormat.BitsPerSample == 32 ? 3 : (short)waveFormat.Encoding);
-
-                _capture.DataAvailable += (sender, e) =>
+                Task.Run(() =>
                 {
-                    if (e.BytesRecorded <= 0)
-                        return;
+                    var captureInstance = new WasapiLoopbackCapture();
+                    var waveFormat = captureInstance.WaveFormat;
+                    short formatEncoding = (short)(waveFormat.BitsPerSample == 32 ? 3 : (short)waveFormat.Encoding);
 
-                    byte[] buffer = new byte[e.BytesRecorded];
-                    Buffer.BlockCopy(e.Buffer, 0, buffer, 0, e.BytesRecorded);
-
-                    var chunk = new CapturedAudioChunk
+                    captureInstance.DataAvailable += (sender, e) =>
                     {
-                        Data = buffer,
-                        SampleRate = waveFormat.SampleRate,
-                        Channels = waveFormat.Channels,
-                        BitsPerSample = waveFormat.BitsPerSample,
-                        AudioFormat = formatEncoding,
-                        Source = AudioSourceType.Desktop,
-                        Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        if (e.BytesRecorded <= 0)
+                            return;
+
+                        byte[] buffer = new byte[e.BytesRecorded];
+                        Buffer.BlockCopy(e.Buffer, 0, buffer, 0, e.BytesRecorded);
+
+                        var chunk = new CapturedAudioChunk
+                        {
+                            Data = buffer,
+                            SampleRate = waveFormat.SampleRate,
+                            Channels = waveFormat.Channels,
+                            BitsPerSample = waveFormat.BitsPerSample,
+                            AudioFormat = formatEncoding,
+                            Source = AudioSourceType.Desktop,
+                            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        };
+
+                        AudioCaptured?.Invoke(this, chunk);
                     };
 
-                    AudioCaptured?.Invoke(this, chunk);
-                };
+                    captureInstance.RecordingStopped += (sender, e) =>
+                    {
+                        try { captureInstance.Dispose(); } catch { }
+                        if (ReferenceEquals(_capture, captureInstance))
+                        {
+                            _capture = null;
+                        }
+                    };
 
-                _capture.RecordingStopped += (sender, e) =>
-                {
-                    _capture?.Dispose();
-                    _capture = null;
-                };
-
-                _capture.StartRecording();
-                Console.WriteLine($"[WASAPI Loopback] Captura de audio de escritorio iniciada ({waveFormat.SampleRate}Hz, {waveFormat.Channels} canales, {waveFormat.BitsPerSample} bits)");
+                    _capture = captureInstance;
+                    captureInstance.StartRecording();
+                    Console.WriteLine($"[WASAPI Loopback] Captura de audio de escritorio iniciada ({waveFormat.SampleRate}Hz, {waveFormat.Channels} canales, {waveFormat.BitsPerSample} bits)");
+                }).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -96,30 +108,33 @@ namespace LanScreenShare.Media
         {
             if (_processCapture != null)
             {
+                var procCap = _processCapture;
+                _processCapture = null;
                 try
                 {
-                    _processCapture.Stop();
-                    _processCapture.Dispose();
+                    procCap.Stop();
+                    procCap.Dispose();
                 }
                 catch { }
-                _processCapture = null;
             }
 
             if (_capture != null)
             {
-                try
-                {
-                    _capture.StopRecording();
-                }
-                catch { }
-
-                try
-                {
-                    _capture.Dispose();
-                }
-                catch { }
-
+                var captureInstance = _capture;
                 _capture = null;
+
+                try
+                {
+                    captureInstance.StopRecording();
+                }
+                catch { }
+
+                try
+                {
+                    captureInstance.Dispose();
+                }
+                catch { }
+
                 Console.WriteLine("[WASAPI Loopback] Captura de audio detenida.");
             }
         }

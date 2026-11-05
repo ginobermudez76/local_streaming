@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.Versioning;
+using System.Threading.Tasks;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
 using NAudio.CoreAudioApi;
@@ -27,53 +28,61 @@ namespace LanScreenShare.Media
 
             try
             {
-                // Obtener el dispositivo de captura de audio predeterminado (micrófono)
-                using var enumerator = new MMDeviceEnumerator();
-                MMDevice? defaultDevice = null;
-                try
+                Task.Run(() =>
                 {
-                    defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications)
-                                  ?? enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
-                }
-                catch
-                {
-                    // Fallback a constructor por defecto
-                }
-
-                _capture = defaultDevice != null ? new WasapiCapture(defaultDevice) : new WasapiCapture();
-                var waveFormat = _capture.WaveFormat;
-                short formatEncoding = (short)(waveFormat.BitsPerSample == 32 ? 3 : (short)waveFormat.Encoding);
-
-                _capture.DataAvailable += (sender, e) =>
-                {
-                    if (e.BytesRecorded <= 0)
-                        return;
-
-                    byte[] buffer = new byte[e.BytesRecorded];
-                    Buffer.BlockCopy(e.Buffer, 0, buffer, 0, e.BytesRecorded);
-
-                    var chunk = new CapturedAudioChunk
+                    // Obtener el dispositivo de captura de audio predeterminado (micrófono)
+                    // Preferir Role.Multimedia para evitar que Windows active "Communications Ducking" (atenuación del audio del sistema)
+                    using var enumerator = new MMDeviceEnumerator();
+                    MMDevice? defaultDevice = null;
+                    try
                     {
-                        Data = buffer,
-                        SampleRate = waveFormat.SampleRate,
-                        Channels = waveFormat.Channels,
-                        BitsPerSample = waveFormat.BitsPerSample,
-                        AudioFormat = formatEncoding,
-                        Source = AudioSourceType.Microphone,
-                        Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia)
+                                      ?? enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+                    }
+                    catch
+                    {
+                        // Fallback a constructor por defecto
+                    }
+
+                    var captureInstance = defaultDevice != null ? new WasapiCapture(defaultDevice) : new WasapiCapture();
+                    var waveFormat = captureInstance.WaveFormat;
+                    short formatEncoding = (short)(waveFormat.BitsPerSample == 32 ? 3 : (short)waveFormat.Encoding);
+
+                    captureInstance.DataAvailable += (sender, e) =>
+                    {
+                        if (e.BytesRecorded <= 0)
+                            return;
+
+                        byte[] buffer = new byte[e.BytesRecorded];
+                        Buffer.BlockCopy(e.Buffer, 0, buffer, 0, e.BytesRecorded);
+
+                        var chunk = new CapturedAudioChunk
+                        {
+                            Data = buffer,
+                            SampleRate = waveFormat.SampleRate,
+                            Channels = waveFormat.Channels,
+                            BitsPerSample = waveFormat.BitsPerSample,
+                            AudioFormat = formatEncoding,
+                            Source = AudioSourceType.Microphone,
+                            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        };
+
+                        AudioCaptured?.Invoke(this, chunk);
                     };
 
-                    AudioCaptured?.Invoke(this, chunk);
-                };
+                    captureInstance.RecordingStopped += (sender, e) =>
+                    {
+                        try { captureInstance.Dispose(); } catch { }
+                        if (ReferenceEquals(_capture, captureInstance))
+                        {
+                            _capture = null;
+                        }
+                    };
 
-                _capture.RecordingStopped += (sender, e) =>
-                {
-                    _capture?.Dispose();
-                    _capture = null;
-                };
-
-                _capture.StartRecording();
-                Console.WriteLine($"[WASAPI Mic] Captura de micrófono iniciada ({waveFormat.SampleRate}Hz, {waveFormat.Channels} canales, {waveFormat.BitsPerSample} bits)");
+                    _capture = captureInstance;
+                    captureInstance.StartRecording();
+                    Console.WriteLine($"[WASAPI Mic] Captura de micrófono iniciada ({waveFormat.SampleRate}Hz, {waveFormat.Channels} canales, {waveFormat.BitsPerSample} bits)");
+                }).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -87,19 +96,21 @@ namespace LanScreenShare.Media
         {
             if (_capture != null)
             {
-                try
-                {
-                    _capture.StopRecording();
-                }
-                catch { }
-
-                try
-                {
-                    _capture.Dispose();
-                }
-                catch { }
-
+                var captureInstance = _capture;
                 _capture = null;
+
+                try
+                {
+                    captureInstance.StopRecording();
+                }
+                catch { }
+
+                try
+                {
+                    captureInstance.Dispose();
+                }
+                catch { }
+
                 Console.WriteLine("[WASAPI Mic] Captura de micrófono detenida.");
             }
         }

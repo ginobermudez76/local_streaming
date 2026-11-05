@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Threading;
@@ -25,23 +25,32 @@ namespace LanScreenShare.Media
         private AutoResetEvent? _bufferEvent;
         private bool _disposed;
 
-        public async Task<bool> StartAsync(int processId, CancellationToken cancellationToken = default)
+        public Task<bool> StartAsync(int processId, CancellationToken cancellationToken = default)
         {
-            if (IsCapturing || processId <= 0)
-                return false;
+            if (IsCapturing)
+                return Task.FromResult(false);
 
-            try
+            // Ejecutar la activación e inicialización COM siempre en un hilo MTA del ThreadPool
+            // para evitar bloqueos o problemas de marshaling con el hilo STA de la interfaz gráfica.
+            return Task.Run(async () =>
             {
-                var handler = new AudioInterfaceCompletionHandler();
-                var activationParams = new AUDIOCLIENT_ACTIVATION_PARAMS
+                bool includeProcess = processId > 0;
+                uint targetPid = includeProcess ? (uint)processId : (uint)Environment.ProcessId;
+
+                try
                 {
-                    ActivationType = AUDIOCLIENT_ACTIVATION_TYPE.ProcessLoopback,
-                    ProcessLoopbackParams = new AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS
+                    var handler = new AudioInterfaceCompletionHandler();
+                    var activationParams = new AUDIOCLIENT_ACTIVATION_PARAMS
                     {
-                        TargetProcessId = (uint)processId,
-                        ProcessLoopbackMode = PROCESS_LOOPBACK_MODE.IncludeTargetProcessTree
-                    }
-                };
+                        ActivationType = AUDIOCLIENT_ACTIVATION_TYPE.ProcessLoopback,
+                        ProcessLoopbackParams = new AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS
+                        {
+                            TargetProcessId = targetPid,
+                            ProcessLoopbackMode = includeProcess
+                                ? PROCESS_LOOPBACK_MODE.IncludeTargetProcessTree
+                                : PROCESS_LOOPBACK_MODE.ExcludeTargetProcessTree
+                        }
+                    };
 
                 IntPtr pParams = Marshal.AllocHGlobal(Marshal.SizeOf<AUDIOCLIENT_ACTIVATION_PARAMS>());
                 Marshal.StructureToPtr(activationParams, pParams, false);
@@ -158,7 +167,8 @@ namespace LanScreenShare.Media
                 _cts = new CancellationTokenSource();
                 IsCapturing = true;
                 _captureTask = Task.Run(() => CaptureLoop(waveFormat, _cts.Token));
-                Console.WriteLine($"[ProcessAudio] Captura exclusiva iniciada para PID {processId} ({waveFormat.SampleRate}Hz, {waveFormat.Channels}ch, {waveFormat.BitsPerSample}bits)");
+                string modeDesc = includeProcess ? $"PID {processId} (aislado)" : $"Escritorio completo (excluyendo PID {targetPid})";
+                Console.WriteLine($"[ProcessAudio] Captura iniciada: {modeDesc} ({waveFormat.SampleRate}Hz, {waveFormat.Channels}ch, {waveFormat.BitsPerSample}bits)");
                 return true;
             }
             catch (Exception ex)
@@ -167,6 +177,7 @@ namespace LanScreenShare.Media
                 Cleanup();
                 return false;
             }
+            }, cancellationToken);
         }
 
         private void CaptureLoop(WaveFormat waveFormat, CancellationToken token)

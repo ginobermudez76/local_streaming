@@ -42,14 +42,18 @@ namespace LanScreenShare.Media
 
             lock (_lock)
             {
-                if (_waveProvider == null || _currentWaveFormat == null ||
+                if (_wasapiOut == null ||
+                    _wasapiOut.PlaybackState != PlaybackState.Playing ||
+                    _waveProvider == null ||
+                    _currentWaveFormat == null ||
                     _currentWaveFormat.SampleRate != chunk.SampleRate ||
-                    _currentWaveFormat.Channels != chunk.Channels)
+                    _currentWaveFormat.Channels != chunk.Channels ||
+                    _currentWaveFormat.BitsPerSample != chunk.BitsPerSample)
                 {
                     InitializePlayer(chunk);
                 }
 
-                if (_waveProvider != null)
+                if (_waveProvider != null && _wasapiOut != null)
                 {
                     float currentVol = _isMuted ? 0f : _volume;
                     ApplyVolume(chunk.Data, chunk.AudioFormat, chunk.BitsPerSample, currentVol);
@@ -119,6 +123,8 @@ namespace LanScreenShare.Media
                 Console.WriteLine($"[WASAPI Out] Error inicializando reproductor: {ex.Message}");
                 _wasapiOut?.Dispose();
                 _wasapiOut = null;
+                _waveProvider = null;
+                _currentWaveFormat = null;
             }
         }
 
