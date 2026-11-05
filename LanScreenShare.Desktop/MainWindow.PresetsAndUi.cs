@@ -187,11 +187,14 @@ namespace LanScreenShare.Desktop
                 outputResLabel.Text = $"{outW} × {outH}";
             }
 
-            var canvasSpecs = this.FindControl<TextBlock>("CanvasSpecsText");
-            if (canvasSpecs != null)
+            if (!_isViewing)
             {
-                int fps = GetSelectedFps();
-                canvasSpecs.Text = $"{outW} × {outH} · {fps} fps";
+                var canvasSpecs = this.FindControl<TextBlock>("CanvasSpecsText");
+                if (canvasSpecs != null)
+                {
+                    int fps = GetSelectedFps();
+                    canvasSpecs.Text = $"{outW} × {outH} · {fps} fps";
+                }
             }
         }
 

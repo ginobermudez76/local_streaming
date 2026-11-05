@@ -330,6 +330,30 @@ namespace LanScreenShare.Desktop
                 searchButton.Click += SearchButton_Click;
             }
 
+            var collapseLeftBtn = this.FindControl<Button>("CollapseLeftSidebarButton");
+            if (collapseLeftBtn != null)
+            {
+                collapseLeftBtn.Click += (s, e) => SetLeftSidebarCollapsed(true);
+            }
+
+            var expandLeftBtn = this.FindControl<Button>("ExpandLeftSidebarButton");
+            if (expandLeftBtn != null)
+            {
+                expandLeftBtn.Click += (s, e) => SetLeftSidebarCollapsed(false);
+            }
+
+            var collapseRightBtn = this.FindControl<Button>("CollapseRightSidebarButton");
+            if (collapseRightBtn != null)
+            {
+                collapseRightBtn.Click += (s, e) => SetRightSidebarCollapsed(true);
+            }
+
+            var expandRightBtn = this.FindControl<Button>("ExpandRightSidebarButton");
+            if (expandRightBtn != null)
+            {
+                expandRightBtn.Click += (s, e) => SetRightSidebarCollapsed(false);
+            }
+
             var disconnectButton = this.FindControl<Button>("DisconnectButton");
             if (disconnectButton != null)
             {
@@ -958,6 +982,22 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void SetLeftSidebarCollapsed(bool collapsed)
+        {
+            var expandedPanel = this.FindControl<Grid>("LeftSidebarExpandedPanel");
+            var collapsedPanel = this.FindControl<Border>("LeftSidebarCollapsedPanel");
+            if (expandedPanel != null) expandedPanel.IsVisible = !collapsed;
+            if (collapsedPanel != null) collapsedPanel.IsVisible = collapsed;
+        }
+
+        private void SetRightSidebarCollapsed(bool collapsed)
+        {
+            var expandedPanel = this.FindControl<Grid>("RightSidebarExpandedPanel");
+            var collapsedPanel = this.FindControl<Border>("RightSidebarCollapsedPanel");
+            if (expandedPanel != null) expandedPanel.IsVisible = !collapsed;
+            if (collapsedPanel != null) collapsedPanel.IsVisible = collapsed;
+        }
+
         private void ToggleFullscreen()
         {
             SetFullscreen(!_isFullscreen);
@@ -967,7 +1007,6 @@ namespace LanScreenShare.Desktop
         {
             _isFullscreen = fullscreen;
             var sidebar = this.FindControl<Border>("SidebarBorder");
-            var rootGrid = this.FindControl<Grid>("RootGrid");
             var floatExitBtn = this.FindControl<Button>("ExitFullscreenFloatButton");
 
             var fullscreenIcon = this.FindControl<PathIcon>("FullscreenButtonIcon");
@@ -988,10 +1027,9 @@ namespace LanScreenShare.Desktop
                 this.WindowState = WindowState.FullScreen;
 
                 if (sidebar != null) sidebar.IsVisible = false;
-                if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("0,*");
                 if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreenExit") as StreamGeometry)!;
                 if (fullscreenText != null) fullscreenText.Text = "Salir";
-                if (floatExitBtn != null) floatExitBtn.IsVisible = false;
+                if (floatExitBtn != null) floatExitBtn.IsVisible = true;
 
                 if (workspaceHeader != null) workspaceHeader.IsVisible = false;
                 if (devicesSection != null) devicesSection.IsVisible = false;
@@ -1020,7 +1058,6 @@ namespace LanScreenShare.Desktop
                 this.WindowState = _previousWindowState == WindowState.FullScreen ? WindowState.Normal : _previousWindowState;
 
                 if (sidebar != null) sidebar.IsVisible = true;
-                if (rootGrid != null) rootGrid.ColumnDefinitions = new ColumnDefinitions("315,*");
                 if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreen") as StreamGeometry)!;
                 if (fullscreenText != null) fullscreenText.Text = "Pantalla Completa";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = false;
@@ -1030,7 +1067,7 @@ namespace LanScreenShare.Desktop
                 if (bottomFooter != null) bottomFooter.IsVisible = true;
                 if (canvasCardHeader != null) canvasCardHeader.IsVisible = true;
                 if (canvasCardFooter != null) canvasCardFooter.IsVisible = true;
-                if (workspaceContainer != null) workspaceContainer.Margin = new Thickness(28, 20, 28, 14);
+                if (workspaceContainer != null) workspaceContainer.Margin = new Thickness(24, 18, 24, 12);
                 if (canvasCardBorder != null)
                 {
                     canvasCardBorder.CornerRadius = new CornerRadius(14);
@@ -2173,12 +2210,15 @@ namespace LanScreenShare.Desktop
                 };
             }
 
-            var canvasSourceTitle = this.FindControl<TextBlock>("CanvasSourceTitleText");
-            if (canvasSourceTitle != null)
+            if (!_isViewing)
             {
-                canvasSourceTitle.Text = _currentSource.Type == CaptureSourceType.Screen && _currentSource.IsPrimary
-                    ? $"{_currentSource.Name} (Principal)"
-                    : _currentSource.Name;
+                var canvasSourceTitle = this.FindControl<TextBlock>("CanvasSourceTitleText");
+                if (canvasSourceTitle != null)
+                {
+                    canvasSourceTitle.Text = _currentSource.Type == CaptureSourceType.Screen && _currentSource.IsPrimary
+                        ? $"{_currentSource.Name} (Principal)"
+                        : _currentSource.Name;
+                }
             }
 
             var badgeText = this.FindControl<TextBlock>("SourceTypeBadge");
@@ -2514,6 +2554,16 @@ namespace LanScreenShare.Desktop
                         _popoutWindow.UpdateMetrics(statsText.Text);
                     }
                 }
+
+                if (_isViewing && _lastFrameWidth > 0 && _lastFrameHeight > 0)
+                {
+                    var canvasSpecs = this.FindControl<TextBlock>("CanvasSpecsText");
+                    if (canvasSpecs != null)
+                    {
+                        int displayFps = frames > 0 ? (int)frames : (_lastHostFps > 0 ? _lastHostFps : 0);
+                        canvasSpecs.Text = $"{_lastFrameWidth} × {_lastFrameHeight} · {displayFps} fps";
+                    }
+                }
             }
             else
             {
@@ -2730,7 +2780,7 @@ namespace LanScreenShare.Desktop
                 countText.Text = Devices.Count == 1 ? "1 encontrado" : $"{Devices.Count} encontrados";
             }
 
-            var placeholder = this.FindControl<Grid>("NoDevicesPlaceholder");
+            var placeholder = this.FindControl<Control>("NoDevicesPlaceholder");
             if (placeholder != null)
             {
                 placeholder.IsVisible = Devices.Count == 0;
@@ -2740,6 +2790,16 @@ namespace LanScreenShare.Desktop
             if (list != null)
             {
                 list.IsVisible = Devices.Count > 0;
+            }
+
+            UpdateDevicesViewingState();
+        }
+
+        private void UpdateDevicesViewingState()
+        {
+            foreach (var d in Devices)
+            {
+                d.IsViewing = _isViewing && !string.IsNullOrEmpty(_currentConnectedDeviceIp) && d.IPAddress == _currentConnectedDeviceIp;
             }
         }
 
@@ -2843,6 +2903,10 @@ namespace LanScreenShare.Desktop
         {
             if (sender is Button btn && btn.Tag is DeviceInfo device)
             {
+                if (device.IsViewing)
+                {
+                    return;
+                }
                 await ConnectToDeviceAsync(device);
             }
         }
@@ -2869,6 +2933,13 @@ namespace LanScreenShare.Desktop
                 await _streamClient.ConnectAsync(device.IPAddress, 5001, _sslClientOptions);
                 _isViewing = true;
                 UpdateStreamStateBadge();
+                UpdateDevicesViewingState();
+
+                var canvasSourceTitle = this.FindControl<TextBlock>("CanvasSourceTitleText");
+                if (canvasSourceTitle != null)
+                {
+                    canvasSourceTitle.Text = $"Viendo: {device.Name}";
+                }
 
                 var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
 
@@ -3133,6 +3204,9 @@ namespace LanScreenShare.Desktop
             _currentDeviceAllowsRemoteControl = false;
             _currentConnectedDeviceIp = null;
             _currentConnectedDeviceName = null;
+            UpdateDevicesViewingState();
+            UpdateSourceUI();
+            OnSettingChanged();
 
             try { await _streamClient.DisconnectAsync(); } catch { }
             try { await _audioClient.DisconnectAsync(); } catch { }
@@ -3210,12 +3284,6 @@ namespace LanScreenShare.Desktop
 
             var disconnectBtn = this.FindControl<Button>("DisconnectButton");
             if (disconnectBtn != null) disconnectBtn.IsVisible = false;
-
-            var audioPanel = this.FindControl<Border>("AudioControlPanel");
-            if (audioPanel != null) audioPanel.IsVisible = false;
-
-            var micPanel = this.FindControl<Border>("MicControlPanel");
-            if (micPanel != null) micPanel.IsVisible = false;
 
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
             if (remoteControlBtn != null)
