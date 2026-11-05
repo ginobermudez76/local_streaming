@@ -336,7 +336,7 @@ namespace LanScreenShare.Media
         }
 
         [ComImport]
-        [Guid("47A1EA56-2CEE-4C93-BF20-89841856B771")]
+        [Guid("41D949AB-9862-444A-80F6-C261334DA5EB")]
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IActivateAudioInterfaceCompletionHandler
         {
@@ -344,7 +344,14 @@ namespace LanScreenShare.Media
         }
 
         [ComImport]
-        [Guid("7AC0E2DB-FD8C-46EF-AFA3-29904E590EAF")]
+        [Guid("94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IAgileObject
+        {
+        }
+
+        [ComImport]
+        [Guid("72A22D78-CDE4-431D-B8CC-843A71199B6D")]
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IActivateAudioInterfaceAsyncOperation
         {
@@ -362,7 +369,7 @@ namespace LanScreenShare.Media
                 uint StreamFlags,
                 long hnsBufferDuration,
                 long hnsPeriodicity,
-                [In] WaveFormat pFormat,
+                [In, MarshalAs(UnmanagedType.LPStruct)] WaveFormat pFormat,
                 [In] IntPtr AudioSessionGuid);
 
             [PreserveSig]
@@ -375,7 +382,7 @@ namespace LanScreenShare.Media
             int GetCurrentPadding(out uint pNumPaddingFrames);
 
             [PreserveSig]
-            int IsFormatSupported(int ShareMode, [In] WaveFormat pFormat, out IntPtr ppClosestMatch);
+            int IsFormatSupported(int ShareMode, [In, MarshalAs(UnmanagedType.LPStruct)] WaveFormat pFormat, out IntPtr ppClosestMatch);
 
             [PreserveSig]
             int GetMixFormat(out IntPtr ppDeviceFormat);
@@ -427,7 +434,7 @@ namespace LanScreenShare.Media
             IActivateAudioInterfaceCompletionHandler completionHandler,
             out IActivateAudioInterfaceAsyncOperation activationOperation);
 
-        private sealed class AudioInterfaceCompletionHandler : IActivateAudioInterfaceCompletionHandler
+        private sealed class AudioInterfaceCompletionHandler : IActivateAudioInterfaceCompletionHandler, IAgileObject
         {
             private readonly TaskCompletionSource<object> _tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

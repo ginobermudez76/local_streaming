@@ -1005,8 +1005,12 @@ namespace LanScreenShare.Desktop
 
         private void SetFullscreen(bool fullscreen)
         {
+            if (_isFullscreen == fullscreen)
+                return;
+
             _isFullscreen = fullscreen;
             var sidebar = this.FindControl<Border>("SidebarBorder");
+            var rightSidebar = this.FindControl<Border>("RightSidebarBorder");
             var floatExitBtn = this.FindControl<Button>("ExitFullscreenFloatButton");
 
             var fullscreenIcon = this.FindControl<PathIcon>("FullscreenButtonIcon");
@@ -1027,6 +1031,7 @@ namespace LanScreenShare.Desktop
                 this.WindowState = WindowState.FullScreen;
 
                 if (sidebar != null) sidebar.IsVisible = false;
+                if (rightSidebar != null) rightSidebar.IsVisible = false;
                 if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreenExit") as StreamGeometry)!;
                 if (fullscreenText != null) fullscreenText.Text = "Salir";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = true;
@@ -1058,6 +1063,7 @@ namespace LanScreenShare.Desktop
                 this.WindowState = _previousWindowState == WindowState.FullScreen ? WindowState.Normal : _previousWindowState;
 
                 if (sidebar != null) sidebar.IsVisible = true;
+                if (rightSidebar != null) rightSidebar.IsVisible = true;
                 if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreen") as StreamGeometry)!;
                 if (fullscreenText != null) fullscreenText.Text = "Pantalla Completa";
                 if (floatExitBtn != null) floatExitBtn.IsVisible = false;
