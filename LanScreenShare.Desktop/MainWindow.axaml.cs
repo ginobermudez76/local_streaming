@@ -984,16 +984,16 @@ namespace LanScreenShare.Desktop
 
         private void SetLeftSidebarCollapsed(bool collapsed)
         {
-            var expandedPanel = this.FindControl<Grid>("LeftSidebarExpandedPanel");
-            var collapsedPanel = this.FindControl<Border>("LeftSidebarCollapsedPanel");
+            var expandedPanel = this.FindControl<Control>("LeftSidebarExpandedPanel");
+            var collapsedPanel = this.FindControl<Control>("LeftSidebarCollapsedPanel");
             if (expandedPanel != null) expandedPanel.IsVisible = !collapsed;
             if (collapsedPanel != null) collapsedPanel.IsVisible = collapsed;
         }
 
         private void SetRightSidebarCollapsed(bool collapsed)
         {
-            var expandedPanel = this.FindControl<Grid>("RightSidebarExpandedPanel");
-            var collapsedPanel = this.FindControl<Border>("RightSidebarCollapsedPanel");
+            var expandedPanel = this.FindControl<Control>("RightSidebarExpandedPanel");
+            var collapsedPanel = this.FindControl<Control>("RightSidebarCollapsedPanel");
             if (expandedPanel != null) expandedPanel.IsVisible = !collapsed;
             if (collapsedPanel != null) collapsedPanel.IsVisible = collapsed;
         }
