@@ -166,27 +166,18 @@ namespace LanScreenShare.Media
                         return true;
 
                     GetWindowThreadProcessId(hWnd, out uint pid);
+                    pid = ResolveEffectiveWindowProcess(hWnd, pid, out string procName);
 
                     // Excluir nuestra propia aplicación para evitar bucles de captura en espejo
                     if (pid == currentProcessId)
                         return true;
 
-                    string procName = "";
-                    try
-                    {
-                        using var proc = Process.GetProcessById((int)pid);
-                        procName = proc.ProcessName;
-                    }
-                    catch
-                    {
-                        procName = "Aplicación";
-                    }
-
                     // Excluir procesos de sistema de fondo
                     if (procName.Equals("SearchHost", StringComparison.OrdinalIgnoreCase) ||
                         procName.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase) ||
                         procName.Equals("TextInputHost", StringComparison.OrdinalIgnoreCase) ||
-                        procName.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase))
+                        procName.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase) ||
+                        procName.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase))
                     {
                         return true;
                     }
@@ -217,6 +208,116 @@ namespace LanScreenShare.Media
             return sources;
         }
 
+        public static int ResolveEffectiveProcessId(IntPtr hWnd, int fallbackPid = 0)
+        {
+            uint pid = (uint)Math.Max(0, fallbackPid);
+            if (hWnd != IntPtr.Zero)
+            {
+                GetWindowThreadProcessId(hWnd, out uint winPid);
+                if (winPid > 0)
+                {
+                    pid = winPid;
+                }
+            }
+
+            if (pid == 0)
+                return 0;
+
+            return (int)ResolveEffectiveWindowProcess(hWnd, pid, out _);
+        }
+
+        private static uint ResolveEffectiveWindowProcess(IntPtr hWnd, uint initialPid, out string procName)
+        {
+            uint pid = initialPid;
+            procName = GetProcessNameSafe(pid);
+
+            // 1. Si es una ventana UWP / MSIX alojada por ApplicationFrameHost.exe, obtener el PID real del hijo CoreWindow
+            if (hWnd != IntPtr.Zero && procName.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase))
+            {
+                uint realChildPid = 0;
+                EnumChildWindows(hWnd, (childHwnd, _) =>
+                {
+                    GetWindowThreadProcessId(childHwnd, out uint cPid);
+                    if (cPid != 0 && cPid != initialPid)
+                    {
+                        realChildPid = cPid;
+                        return false;
+                    }
+                    return true;
+                }, IntPtr.Zero);
+
+                if (realChildPid != 0)
+                {
+                    pid = realChildPid;
+                    procName = GetProcessNameSafe(pid);
+                }
+            }
+
+            // 2. Si el proceso tiene un padre con el mismo nombre de ejecutable (ej. Chrome, Edge, Discord, Electron),
+            // subir al proceso raíz de esa misma aplicación para que IncludeTargetProcessTree capture su subproceso de audio.
+            if (!string.IsNullOrEmpty(procName) && !procName.Equals("Aplicación", StringComparison.OrdinalIgnoreCase))
+            {
+                for (int depth = 0; depth < 6; depth++)
+                {
+                    uint parentPid = GetParentProcessId(pid);
+                    if (parentPid == 0 || parentPid == pid)
+                        break;
+
+                    string parentName = GetProcessNameSafe(parentPid);
+                    if (parentName.Equals(procName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        pid = parentPid;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return pid;
+        }
+
+        private static string GetProcessNameSafe(uint pid)
+        {
+            if (pid == 0)
+                return "Aplicación";
+
+            try
+            {
+                using var proc = Process.GetProcessById((int)pid);
+                return proc.ProcessName;
+            }
+            catch
+            {
+                return "Aplicación";
+            }
+        }
+
+        private static uint GetParentProcessId(uint pid)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById((int)pid);
+                var pbi = new PROCESS_BASIC_INFORMATION();
+                int status = NtQueryInformationProcess(
+                    proc.Handle,
+                    0, // ProcessBasicInformation
+                    ref pbi,
+                    Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(),
+                    out _);
+
+                if (status == 0)
+                {
+                    return (uint)pbi.InheritedFromUniqueProcessId.ToInt64();
+                }
+            }
+            catch
+            {
+            }
+            return 0;
+        }
+
         #region Win32 P/Invoke
 
         private const int SM_CXSCREEN = 0;
@@ -227,6 +328,17 @@ namespace LanScreenShare.Media
         private const int SM_CYVIRTUALSCREEN = 79;
         private const int MONITORINFOF_PRIMARY = 1;
         private const int DWMWA_CLOAKED = 14;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_BASIC_INFORMATION
+        {
+            public IntPtr Reserved1;
+            public IntPtr PebBaseAddress;
+            public IntPtr Reserved2_0;
+            public IntPtr Reserved2_1;
+            public IntPtr UniqueProcessId;
+            public IntPtr InheritedFromUniqueProcessId;
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT
@@ -262,6 +374,17 @@ namespace LanScreenShare.Media
 
         [DllImport("user32.dll")]
         private static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("ntdll.dll")]
+        private static extern int NtQueryInformationProcess(
+            IntPtr processHandle,
+            int processInformationClass,
+            ref PROCESS_BASIC_INFORMATION processInformation,
+            int processInformationLength,
+            out int returnLength);
 
         [DllImport("user32.dll")]
         private static extern bool IsWindowVisible(IntPtr hWnd);

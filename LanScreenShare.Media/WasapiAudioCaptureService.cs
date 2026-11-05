@@ -52,6 +52,12 @@ namespace LanScreenShare.Media
                 Console.WriteLine($"[WASAPI Loopback] Fallo ProcessLoopback (PID {processId}), recurriendo a WasapiLoopbackCapture: {ex.Message}");
             }
 
+            if (processId > 0)
+            {
+                Console.WriteLine($"[WASAPI Loopback] No se pudo iniciar la captura aislada para PID {processId}; se omite fallback global para no mezclar audio del escritorio.");
+                return;
+            }
+
             try
             {
                 Task.Run(() =>

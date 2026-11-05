@@ -69,6 +69,8 @@ namespace LanScreenShare.Media
                 Marshal.StructureToPtr(propVariant, pProp, false);
 
                 int hr;
+                object rawClient;
+                IActivateAudioInterfaceAsyncOperation? asyncOp = null;
                 try
                 {
                     hr = ActivateAudioInterfaceAsync(
@@ -76,32 +78,36 @@ namespace LanScreenShare.Media
                         typeof(IAudioClient).GUID,
                         pProp,
                         handler,
-                        out _);
+                        out asyncOp);
+
+                    if (hr < 0)
+                    {
+                        Console.WriteLine($"[ProcessAudio] ActivateAudioInterfaceAsync falló con HRESULT: 0x{hr:X8}");
+                        return false;
+                    }
+
+                    using var timeoutCts = new CancellationTokenSource(2500);
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+                    try
+                    {
+                        rawClient = await handler.Task.WaitAsync(linkedCts.Token);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ProcessAudio] Timeout o error esperando activación COM: {ex.Message}");
+                        return false;
+                    }
                 }
                 finally
                 {
+                    GC.KeepAlive(handler);
+                    if (asyncOp != null)
+                    {
+                        try { Marshal.ReleaseComObject(asyncOp); } catch { }
+                    }
                     Marshal.FreeHGlobal(pProp);
                     Marshal.FreeHGlobal(pParams);
-                }
-
-                if (hr < 0)
-                {
-                    Console.WriteLine($"[ProcessAudio] ActivateAudioInterfaceAsync falló con HRESULT: 0x{hr:X8}");
-                    return false;
-                }
-
-                using var timeoutCts = new CancellationTokenSource(2500);
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-                object rawClient;
-                try
-                {
-                    rawClient = await handler.Task.WaitAsync(linkedCts.Token);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[ProcessAudio] Timeout o error esperando activación COM: {ex.Message}");
-                    return false;
                 }
 
                 _audioClient = rawClient as IAudioClient;
@@ -111,16 +117,17 @@ namespace LanScreenShare.Media
                     return false;
                 }
 
-                WaveFormat waveFormat;
-                if (_audioClient.GetMixFormat(out IntPtr pFormat) == 0 && pFormat != IntPtr.Zero)
+                WaveFormat waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
+                var wfx = new WAVEFORMATEX
                 {
-                    waveFormat = WaveFormat.MarshalFromPtr(pFormat);
-                    Marshal.FreeCoTaskMem(pFormat);
-                }
-                else
-                {
-                    waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
-                }
+                    wFormatTag = 3, // WAVE_FORMAT_IEEE_FLOAT
+                    nChannels = 2,
+                    nSamplesPerSec = 48000,
+                    wBitsPerSample = 32,
+                    nBlockAlign = 8,
+                    nAvgBytesPerSec = 48000 * 8,
+                    cbSize = 0
+                };
 
                 long bufferDurationHns = 10000000; // 1 segundo (en unidades de 100ns)
                 hr = _audioClient.Initialize(
@@ -128,7 +135,7 @@ namespace LanScreenShare.Media
                     AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
                     bufferDurationHns,
                     0,
-                    waveFormat,
+                    ref wfx,
                     IntPtr.Zero);
 
                 if (hr < 0)
@@ -318,6 +325,18 @@ namespace LanScreenShare.Media
             public AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS ProcessLoopbackParams;
         }
 
+        [StructLayout(LayoutKind.Sequential, Pack = 2)]
+        private struct WAVEFORMATEX
+        {
+            public ushort wFormatTag;
+            public ushort nChannels;
+            public uint nSamplesPerSec;
+            public uint nAvgBytesPerSec;
+            public ushort nBlockAlign;
+            public ushort wBitsPerSample;
+            public ushort cbSize;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct BLOB
         {
@@ -369,7 +388,7 @@ namespace LanScreenShare.Media
                 uint StreamFlags,
                 long hnsBufferDuration,
                 long hnsPeriodicity,
-                [In, MarshalAs(UnmanagedType.LPStruct)] WaveFormat pFormat,
+                [In] ref WAVEFORMATEX pFormat,
                 [In] IntPtr AudioSessionGuid);
 
             [PreserveSig]
@@ -382,7 +401,7 @@ namespace LanScreenShare.Media
             int GetCurrentPadding(out uint pNumPaddingFrames);
 
             [PreserveSig]
-            int IsFormatSupported(int ShareMode, [In, MarshalAs(UnmanagedType.LPStruct)] WaveFormat pFormat, out IntPtr ppClosestMatch);
+            int IsFormatSupported(int ShareMode, [In] ref WAVEFORMATEX pFormat, out IntPtr ppClosestMatch);
 
             [PreserveSig]
             int GetMixFormat(out IntPtr ppDeviceFormat);

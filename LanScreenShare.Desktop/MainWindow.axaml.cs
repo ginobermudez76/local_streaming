@@ -3363,18 +3363,18 @@ namespace LanScreenShare.Desktop
         {
             if (_currentSource?.Type == CaptureSourceType.Window)
             {
-                if (_currentSource.ProcessId > 0)
-                    return _currentSource.ProcessId;
-
-                if (_currentSource.Handle != IntPtr.Zero)
+                if (OperatingSystem.IsWindows())
                 {
-                    GetWindowThreadProcessId(_currentSource.Handle, out uint pid);
-                    if (pid > 0)
+                    int resolvedPid = CaptureSourceDiscoveryService.ResolveEffectiveProcessId(_currentSource.Handle, _currentSource.ProcessId);
+                    if (resolvedPid > 0)
                     {
-                        _currentSource.ProcessId = (int)pid;
-                        return (int)pid;
+                        _currentSource.ProcessId = resolvedPid;
+                        return resolvedPid;
                     }
                 }
+
+                if (_currentSource.ProcessId > 0)
+                    return _currentSource.ProcessId;
             }
             return 0;
         }
