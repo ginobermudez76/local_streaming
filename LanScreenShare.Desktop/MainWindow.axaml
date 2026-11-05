@@ -227,28 +227,17 @@
 
                     <!-- Expanded Configuration Panel -->
                     <Grid x:Name="LeftSidebarExpandedPanel" Width="315" RowDefinitions="Auto,*">
-                        <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="16,12,14,4" VerticalAlignment="Center">
-                            <PathIcon Grid.Column="0"
-                                      Data="{StaticResource IconSettings}"
-                                      Width="13" Height="13"
-                                      Foreground="#6E7E94"
-                                      Margin="0,0,7,0"
-                                      VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1"
-                                       Text="CONFIGURACIÓN"
-                                       FontSize="10.5"
-                                       FontWeight="Bold"
-                                       Foreground="#6E7E94"
-                                       LetterSpacing="1"
-                                       VerticalAlignment="Center"/>
-                            <Button Grid.Column="2"
+                        <Grid Grid.Row="0" ColumnDefinitions="Auto,*" Margin="14,12,14,4" VerticalAlignment="Center">
+                            <Button Grid.Column="0"
                                     x:Name="CollapseLeftSidebarButton"
                                     Width="28" Height="28"
+                                    Margin="0,0,9,0"
                                     CornerRadius="7"
                                     Background="#171E2B"
                                     BorderBrush="#243044"
                                     BorderThickness="1"
                                     Padding="0"
+                                    VerticalAlignment="Center"
                                     Cursor="Hand"
                                     ToolTip.Tip="Ocultar configuración">
                                 <PathIcon Data="{StaticResource IconSettings}"
@@ -257,6 +246,13 @@
                                           HorizontalAlignment="Center"
                                           VerticalAlignment="Center"/>
                             </Button>
+                            <TextBlock Grid.Column="1"
+                                       Text="CONFIGURACIÓN"
+                                       FontSize="10.5"
+                                       FontWeight="Bold"
+                                       Foreground="#6E7E94"
+                                       LetterSpacing="1"
+                                       VerticalAlignment="Center"/>
                         </Grid>
 
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
