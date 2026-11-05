@@ -8,8 +8,8 @@ namespace LanScreenShare.Core.Models
         public int Quality { get; set; } = 85;
         public int BitrateMbps { get; set; } = 15;
         public string ResolutionTag { get; set; } = "";
-        public string TransmissionPreset { get; set; } = "quality";
-        public bool ShowAdvancedSettings { get; set; } = true;
+        public string TransmissionPreset { get; set; } = "balanced";
+        public bool ShowAdvancedSettings { get; set; } = false;
         public string CaptureSourceId { get; set; } = "screen:0";
         public string CaptureSourceName { get; set; } = "Pantalla 1";
         public bool ShareAudio { get; set; } = true;
