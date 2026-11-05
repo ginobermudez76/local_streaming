@@ -117,26 +117,62 @@ namespace LanScreenShare.Media
                     return false;
                 }
 
-                WaveFormat waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
-                var wfx = new WAVEFORMATEX
+                var wfExt = new WAVEFORMATEXTENSIBLE
                 {
-                    wFormatTag = 3, // WAVE_FORMAT_IEEE_FLOAT
-                    nChannels = 2,
-                    nSamplesPerSec = 48000,
-                    wBitsPerSample = 32,
-                    nBlockAlign = 8,
-                    nAvgBytesPerSec = 48000 * 8,
-                    cbSize = 0
+                    Format = new WAVEFORMATEX
+                    {
+                        wFormatTag = 0xFFFE, // WAVE_FORMAT_EXTENSIBLE
+                        nChannels = 2,
+                        nSamplesPerSec = 48000,
+                        nAvgBytesPerSec = 48000 * 8,
+                        nBlockAlign = 8,
+                        wBitsPerSample = 32,
+                        cbSize = 22
+                    },
+                    wValidBitsPerSample = 32,
+                    dwChannelMask = 0x0003, // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT
+                    SubFormat = new Guid("00000003-0000-0010-8000-00aa00389b71") // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
                 };
 
+                IntPtr pFormat = Marshal.AllocHGlobal(Marshal.SizeOf<WAVEFORMATEXTENSIBLE>());
+                WaveFormat waveFormat;
                 long bufferDurationHns = 10000000; // 1 segundo (en unidades de 100ns)
-                hr = _audioClient.Initialize(
-                    0, // AudioClientShareMode.Shared
-                    AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                    bufferDurationHns,
-                    0,
-                    ref wfx,
-                    IntPtr.Zero);
+                try
+                {
+                    Marshal.StructureToPtr(wfExt, pFormat, false);
+                    hr = _audioClient.Initialize(
+                        0, // AudioClientShareMode.Shared
+                        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                        bufferDurationHns,
+                        0,
+                        pFormat,
+                        IntPtr.Zero);
+
+                    if (hr < 0)
+                    {
+                        Console.WriteLine($"[ProcessAudio] Initialize 48kHz falló con 0x{hr:X8}, reintentando 44.1kHz...");
+                        wfExt.Format.nSamplesPerSec = 44100;
+                        wfExt.Format.nAvgBytesPerSec = 44100 * 8;
+                        Marshal.StructureToPtr(wfExt, pFormat, false);
+                        hr = _audioClient.Initialize(
+                            0,
+                            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                            bufferDurationHns,
+                            0,
+                            pFormat,
+                            IntPtr.Zero);
+
+                        waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(44100, 2);
+                    }
+                    else
+                    {
+                        waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(pFormat);
+                }
 
                 if (hr < 0)
                 {
@@ -214,7 +250,7 @@ namespace LanScreenShare.Media
                     int byteCount = (int)(numFrames * waveFormat.BlockAlign);
                     byte[] buffer = new byte[byteCount];
 
-                    if ((flags & 1) != 0) // AUDCLNT_BUFFERFLAGS_SILENT
+                    if ((flags & 2) != 0) // AUDCLNT_BUFFERFLAGS_SILENT
                     {
                         // Buffer ya en ceros
                     }
@@ -337,6 +373,15 @@ namespace LanScreenShare.Media
             public ushort cbSize;
         }
 
+        [StructLayout(LayoutKind.Sequential, Pack = 2)]
+        private struct WAVEFORMATEXTENSIBLE
+        {
+            public WAVEFORMATEX Format;
+            public ushort wValidBitsPerSample;
+            public uint dwChannelMask;
+            public Guid SubFormat;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct BLOB
         {
@@ -374,7 +419,8 @@ namespace LanScreenShare.Media
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IActivateAudioInterfaceAsyncOperation
         {
-            void GetActivateResult(out int hrResult, [MarshalAs(UnmanagedType.IUnknown)] out object ppUnk);
+            [PreserveSig]
+            int GetActivateResult(out int hrResult, [MarshalAs(UnmanagedType.IUnknown)] out object ppUnk);
         }
 
         [ComImport]
@@ -388,8 +434,8 @@ namespace LanScreenShare.Media
                 uint StreamFlags,
                 long hnsBufferDuration,
                 long hnsPeriodicity,
-                [In] ref WAVEFORMATEX pFormat,
-                [In] IntPtr AudioSessionGuid);
+                IntPtr pFormat,
+                IntPtr AudioSessionGuid);
 
             [PreserveSig]
             int GetBufferSize(out uint pNumBufferFrames);
@@ -401,7 +447,7 @@ namespace LanScreenShare.Media
             int GetCurrentPadding(out uint pNumPaddingFrames);
 
             [PreserveSig]
-            int IsFormatSupported(int ShareMode, [In] ref WAVEFORMATEX pFormat, out IntPtr ppClosestMatch);
+            int IsFormatSupported(int ShareMode, IntPtr pFormat, out IntPtr ppClosestMatch);
 
             [PreserveSig]
             int GetMixFormat(out IntPtr ppDeviceFormat);
@@ -463,14 +509,15 @@ namespace LanScreenShare.Media
             {
                 try
                 {
-                    activateOperation.GetActivateResult(out int hr, out object ppUnk);
-                    if (hr >= 0 && ppUnk != null)
+                    int hrMethod = activateOperation.GetActivateResult(out int hrActivate, out object ppUnk);
+                    if (hrMethod >= 0 && hrActivate >= 0 && ppUnk != null)
                     {
                         _tcs.TrySetResult(ppUnk);
                     }
                     else
                     {
-                        _tcs.TrySetException(new COMException("Error activando interfaz de audio por proceso", hr));
+                        int failHr = hrMethod < 0 ? hrMethod : hrActivate;
+                        _tcs.TrySetException(new COMException("Error activando interfaz de audio por proceso", failHr));
                     }
                 }
                 catch (Exception ex)
