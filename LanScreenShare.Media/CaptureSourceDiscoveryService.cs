@@ -226,16 +226,19 @@ namespace LanScreenShare.Media
                 return 0;
 
             uint rootPid = ResolveEffectiveWindowProcess(hWnd, pid, out string procName);
+            if (rootPid > 0)
+            {
+                return (int)rootPid;
+            }
 
-            // Verificar si hay una sesión de audio activa para este ejecutable
-            int audioSessionPid = FindAudioSessionProcessId(procName, (int)rootPid);
+            int audioSessionPid = FindAudioSessionProcessId(procName, (int)pid);
             if (audioSessionPid > 0)
             {
-                Console.WriteLine($"[CaptureDiscovery] Sesión de audio identificada para '{procName}': PID {audioSessionPid} (Root PID {rootPid})");
+                Console.WriteLine($"[CaptureDiscovery] Sesión de audio identificada para '{procName}': PID {audioSessionPid}");
                 return audioSessionPid;
             }
 
-            return (int)rootPid;
+            return (int)pid;
         }
 
         private static uint ResolveEffectiveWindowProcess(IntPtr hWnd, uint initialPid, out string procName)
@@ -326,7 +329,7 @@ namespace LanScreenShare.Media
             return fallbackPid;
         }
 
-        private static uint FindApplicationRootProcessId(uint pid, string procName)
+        public static uint FindApplicationRootProcessId(uint pid, string procName)
         {
             if (pid == 0)
                 return 0;

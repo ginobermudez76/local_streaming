@@ -9,9 +9,16 @@ using NAudio.Wave;
 namespace LanScreenShare.Media
 {
     [SupportedOSPlatform("windows")]
-    internal sealed class ProcessLoopbackAudioCapture : IDisposable
+    public sealed class ProcessLoopbackAudioCapture : IDisposable
     {
-        private const string VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK = "VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK";
+        public static Action<string>? OnLog;
+
+        private static void Log(string msg)
+        {
+            Console.WriteLine(msg);
+            OnLog?.Invoke(msg);
+        }
+        private const string VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK = @"VAD\Process_Loopback";
         private const uint AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000;
         private const uint AUDCLNT_STREAMFLAGS_EVENTCALLBACK = 0x00040000;
         private const uint AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM = 0x80000000;
@@ -84,7 +91,7 @@ namespace LanScreenShare.Media
 
                     if (hr < 0)
                     {
-                        Console.WriteLine($"[ProcessAudio] ActivateAudioInterfaceAsync falló con HRESULT: 0x{hr:X8}");
+                        Log($"[ProcessAudio] ActivateAudioInterfaceAsync falló con HRESULT: 0x{hr:X8}");
                         return false;
                     }
 
@@ -97,7 +104,7 @@ namespace LanScreenShare.Media
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[ProcessAudio] Timeout o error esperando activación COM: {ex.Message}");
+                        Log($"[ProcessAudio] Timeout o error esperando activación COM (targetPid={targetPid}): {ex.Message}");
                         return false;
                     }
                 }
@@ -115,7 +122,7 @@ namespace LanScreenShare.Media
                 _audioClient = rawClient as IAudioClient;
                 if (_audioClient == null)
                 {
-                    Console.WriteLine("[ProcessAudio] El objeto activado no implementa IAudioClient");
+                    Log("[ProcessAudio] El objeto activado no implementa IAudioClient");
                     return false;
                 }
 
@@ -218,7 +225,7 @@ namespace LanScreenShare.Media
 
                 if (hr < 0)
                 {
-                    Console.WriteLine($"[ProcessAudio] IAudioClient.Initialize falló con HRESULT: 0x{hr:X8}");
+                    Log($"[ProcessAudio] IAudioClient.Initialize falló con HRESULT: 0x{hr:X8}");
                     Cleanup();
                     return false;
                 }
@@ -227,7 +234,7 @@ namespace LanScreenShare.Media
                 hr = _audioClient.SetEventHandle(_bufferEvent.SafeWaitHandle.DangerousGetHandle());
                 if (hr < 0)
                 {
-                    Console.WriteLine($"[ProcessAudio] SetEventHandle falló con HRESULT: 0x{hr:X8}");
+                    Log($"[ProcessAudio] SetEventHandle falló con HRESULT: 0x{hr:X8}");
                     Cleanup();
                     return false;
                 }
@@ -235,7 +242,7 @@ namespace LanScreenShare.Media
                 hr = _audioClient.GetService(typeof(IAudioCaptureClient).GUID, out object rawCaptureClient);
                 if (hr < 0 || rawCaptureClient == null)
                 {
-                    Console.WriteLine($"[ProcessAudio] GetService(IAudioCaptureClient) falló con HRESULT: 0x{hr:X8}");
+                    Log($"[ProcessAudio] GetService(IAudioCaptureClient) falló con HRESULT: 0x{hr:X8}");
                     Cleanup();
                     return false;
                 }
@@ -244,7 +251,7 @@ namespace LanScreenShare.Media
                 hr = _audioClient.Start();
                 if (hr < 0)
                 {
-                    Console.WriteLine($"[ProcessAudio] IAudioClient.Start falló con HRESULT: 0x{hr:X8}");
+                    Log($"[ProcessAudio] IAudioClient.Start falló con HRESULT: 0x{hr:X8}");
                     Cleanup();
                     return false;
                 }
@@ -253,12 +260,12 @@ namespace LanScreenShare.Media
                 IsCapturing = true;
                 _captureTask = Task.Run(() => CaptureLoop(waveFormat, _cts.Token));
                 string modeDesc = includeProcess ? $"PID {processId} (aislado)" : $"Escritorio completo (excluyendo PID {targetPid})";
-                Console.WriteLine($"[ProcessAudio] Captura iniciada: {modeDesc} ({waveFormat.SampleRate}Hz, {waveFormat.Channels}ch, {waveFormat.BitsPerSample}bits)");
+                Log($"[ProcessAudio] Captura iniciada: {modeDesc} ({waveFormat.SampleRate}Hz, {waveFormat.Channels}ch, {waveFormat.BitsPerSample}bits)");
                 return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ProcessAudio] Error general iniciando captura de proceso: {ex.Message}");
+                Log($"[ProcessAudio] Error general iniciando captura de proceso: {ex}");
                 Cleanup();
                 return false;
             }
@@ -559,7 +566,7 @@ namespace LanScreenShare.Media
                     else
                     {
                         int failHr = hrMethod < 0 ? hrMethod : hrActivate;
-                        _tcs.TrySetException(new COMException("Error activando interfaz de audio por proceso", failHr));
+                        _tcs.TrySetException(new COMException($"Error activando interfaz de audio: hrMethod=0x{hrMethod:X8}, hrActivate=0x{hrActivate:X8}", failHr));
                     }
                 }
                 catch (Exception ex)
