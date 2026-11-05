@@ -5,6 +5,8 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
 using LanScreenShare.Core.Models;
+using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 
 namespace LanScreenShare.Media
 {
@@ -223,7 +225,17 @@ namespace LanScreenShare.Media
             if (pid == 0)
                 return 0;
 
-            return (int)ResolveEffectiveWindowProcess(hWnd, pid, out _);
+            uint rootPid = ResolveEffectiveWindowProcess(hWnd, pid, out string procName);
+
+            // Verificar si hay una sesión de audio activa para este ejecutable
+            int audioSessionPid = FindAudioSessionProcessId(procName, (int)rootPid);
+            if (audioSessionPid > 0)
+            {
+                Console.WriteLine($"[CaptureDiscovery] Sesión de audio identificada para '{procName}': PID {audioSessionPid} (Root PID {rootPid})");
+                return audioSessionPid;
+            }
+
+            return (int)rootPid;
         }
 
         private static uint ResolveEffectiveWindowProcess(IntPtr hWnd, uint initialPid, out string procName)
@@ -253,29 +265,122 @@ namespace LanScreenShare.Media
                 }
             }
 
-            // 2. Si el proceso tiene un padre con el mismo nombre de ejecutable (ej. Chrome, Edge, Discord, Electron),
-            // subir al proceso raíz de esa misma aplicación para que IncludeTargetProcessTree capture su subproceso de audio.
+            // 2. Si el proceso pertenece a una aplicación multiproceso (ej. Chrome, Edge, Discord, Spotify, WhatsApp),
+            // encontrar el proceso raíz mediante Toolhelp32 snapshot para que IncludeTargetProcessTree cubra todo el árbol de procesos.
             if (!string.IsNullOrEmpty(procName) && !procName.Equals("Aplicación", StringComparison.OrdinalIgnoreCase))
             {
-                for (int depth = 0; depth < 6; depth++)
+                uint rootPid = FindApplicationRootProcessId(pid, procName);
+                if (rootPid > 0)
                 {
-                    uint parentPid = GetParentProcessId(pid);
-                    if (parentPid == 0 || parentPid == pid)
+                    pid = rootPid;
+                }
+            }
+
+            return pid;
+        }
+
+        public static int FindAudioSessionProcessId(string procName, int fallbackPid)
+        {
+            if (string.IsNullOrEmpty(procName) || procName.Equals("Aplicación", StringComparison.OrdinalIgnoreCase))
+                return fallbackPid;
+
+            try
+            {
+                using var enumerator = new MMDeviceEnumerator();
+                using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                var mgr = device.AudioSessionManager;
+                var sessions = mgr.Sessions;
+
+                int activePid = 0;
+                int matchingPid = 0;
+
+                for (int i = 0; i < sessions.Count; i++)
+                {
+                    var s = sessions[i];
+                    uint sPid = s.GetProcessID;
+                    if (sPid == 0) continue;
+
+                    string sName = GetProcessNameSafe(sPid);
+                    if (sName.Equals(procName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (s.State == AudioSessionState.AudioSessionStateActive)
+                        {
+                            activePid = (int)sPid;
+                            break;
+                        }
+                        matchingPid = (int)sPid;
+                    }
+                }
+
+                if (activePid > 0)
+                    return activePid;
+
+                if (matchingPid > 0)
+                    return matchingPid;
+            }
+            catch
+            {
+                // Dispositivo o driver no expone IAudioSessionManager2 o sin sesiones activas
+            }
+
+            return fallbackPid;
+        }
+
+        private static uint FindApplicationRootProcessId(uint pid, string procName)
+        {
+            if (pid == 0)
+                return 0;
+
+            IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
+                return pid;
+
+            try
+            {
+                var parentMap = new Dictionary<uint, uint>();
+                var nameMap = new Dictionary<uint, string>();
+                var pe = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
+
+                if (Process32First(snapshot, ref pe))
+                {
+                    do
+                    {
+                        parentMap[pe.th32ProcessID] = pe.th32ParentProcessID;
+                        string exeName = pe.szExeFile;
+                        int dotIdx = exeName.LastIndexOf('.');
+                        if (dotIdx > 0)
+                            exeName = exeName.Substring(0, dotIdx);
+                        nameMap[pe.th32ProcessID] = exeName;
+                    } while (Process32Next(snapshot, ref pe));
+                }
+
+                uint current = pid;
+                for (int depth = 0; depth < 10; depth++)
+                {
+                    if (!parentMap.TryGetValue(current, out uint parentPid) || parentPid == 0 || parentPid == current)
                         break;
 
-                    string parentName = GetProcessNameSafe(parentPid);
-                    if (parentName.Equals(procName, StringComparison.OrdinalIgnoreCase))
+                    if (nameMap.TryGetValue(parentPid, out string? parentName) &&
+                        parentName.Equals(procName, StringComparison.OrdinalIgnoreCase))
                     {
-                        pid = parentPid;
+                        current = parentPid;
                     }
                     else
                     {
                         break;
                     }
                 }
-            }
 
-            return pid;
+                return current;
+            }
+            catch
+            {
+                return pid;
+            }
+            finally
+            {
+                CloseHandle(snapshot);
+            }
         }
 
         private static string GetProcessNameSafe(uint pid)
@@ -294,30 +399,6 @@ namespace LanScreenShare.Media
             }
         }
 
-        private static uint GetParentProcessId(uint pid)
-        {
-            try
-            {
-                using var proc = Process.GetProcessById((int)pid);
-                var pbi = new PROCESS_BASIC_INFORMATION();
-                int status = NtQueryInformationProcess(
-                    proc.Handle,
-                    0, // ProcessBasicInformation
-                    ref pbi,
-                    Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(),
-                    out _);
-
-                if (status == 0)
-                {
-                    return (uint)pbi.InheritedFromUniqueProcessId.ToInt64();
-                }
-            }
-            catch
-            {
-            }
-            return 0;
-        }
-
         #region Win32 P/Invoke
 
         private const int SM_CXSCREEN = 0;
@@ -328,6 +409,35 @@ namespace LanScreenShare.Media
         private const int SM_CYVIRTUALSCREEN = 79;
         private const int MONITORINFOF_PRIMARY = 1;
         private const int DWMWA_CLOAKED = 14;
+        private const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct PROCESSENTRY32
+        {
+            public uint dwSize;
+            public uint cntUsage;
+            public uint th32ProcessID;
+            public IntPtr th32DefaultHeapID;
+            public uint th32ModuleID;
+            public uint cntThreads;
+            public uint th32ParentProcessID;
+            public int pcPriClassBase;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string szExeFile;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct PROCESS_BASIC_INFORMATION

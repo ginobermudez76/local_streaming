@@ -14,6 +14,8 @@ namespace LanScreenShare.Media
         private const string VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK = "VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK";
         private const uint AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000;
         private const uint AUDCLNT_STREAMFLAGS_EVENTCALLBACK = 0x00040000;
+        private const uint AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM = 0x80000000;
+        private const uint AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY = 0x08000000;
 
         public event EventHandler<CapturedAudioChunk>? AudioCaptured;
         public bool IsCapturing { get; private set; }
@@ -140,27 +142,67 @@ namespace LanScreenShare.Media
                 try
                 {
                     Marshal.StructureToPtr(wfExt, pFormat, false);
+
+                    // 1. Intentar 48kHz con AUTOCONVERTPCM para que Windows resamplee y mezcle transparentemente cualquier formato de la app
+                    uint streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK |
+                                       AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+                                       AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                                       AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+
                     hr = _audioClient.Initialize(
                         0, // AudioClientShareMode.Shared
-                        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                        streamFlags,
                         bufferDurationHns,
                         0,
                         pFormat,
                         IntPtr.Zero);
 
+                    // 2. Si falla con AUTOCONVERTPCM, intentar 48kHz estándar
+                    if (hr < 0)
+                    {
+                        Console.WriteLine($"[ProcessAudio] Initialize 48kHz con AUTOCONVERTPCM falló (0x{hr:X8}), reintentando sin AUTOCONVERTPCM...");
+                        streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+                        hr = _audioClient.Initialize(
+                            0,
+                            streamFlags,
+                            bufferDurationHns,
+                            0,
+                            pFormat,
+                            IntPtr.Zero);
+                    }
+
+                    // 3. Si aún falla, probar a 44.1kHz con y sin AUTOCONVERTPCM
                     if (hr < 0)
                     {
                         Console.WriteLine($"[ProcessAudio] Initialize 48kHz falló con 0x{hr:X8}, reintentando 44.1kHz...");
                         wfExt.Format.nSamplesPerSec = 44100;
                         wfExt.Format.nAvgBytesPerSec = 44100 * 8;
                         Marshal.StructureToPtr(wfExt, pFormat, false);
+
+                        streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK |
+                                      AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+                                      AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                                      AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+
                         hr = _audioClient.Initialize(
                             0,
-                            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                            streamFlags,
                             bufferDurationHns,
                             0,
                             pFormat,
                             IntPtr.Zero);
+
+                        if (hr < 0)
+                        {
+                            streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+                            hr = _audioClient.Initialize(
+                                0,
+                                streamFlags,
+                                bufferDurationHns,
+                                0,
+                                pFormat,
+                                IntPtr.Zero);
+                        }
 
                         waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(44100, 2);
                     }
