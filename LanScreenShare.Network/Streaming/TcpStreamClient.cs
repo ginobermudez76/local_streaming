@@ -21,12 +21,20 @@ namespace LanScreenShare.Network.Streaming
         private CancellationTokenSource? _cts;
         private int _isDisconnecting = 0;
         private bool _disposed;
+        private int _currentAvDriftMs;
 
         public event EventHandler<CapturedFrame>? FrameReceived;
         public event EventHandler<string>? StatusChanged;
+        public event EventHandler<StreamTelemetry>? TelemetryUpdated;
 
         public bool IsConnected => _client != null && _client.Connected && _stream != null;
         public SessionHandshakeMessage? ActiveSessionHandshake { get; private set; }
+        public StreamTelemetry CurrentTelemetry { get; } = new();
+
+        public void UpdateAvDrift(int driftMs)
+        {
+            _currentAvDriftMs = driftMs;
+        }
 
         public async Task ConnectAsync(string hostIp, int port = 5001, CancellationToken cancellationToken = default)
         {
@@ -50,6 +58,8 @@ namespace LanScreenShare.Network.Streaming
 
             _client = new TcpClient();
             _client.NoDelay = true;
+            _client.ReceiveBufferSize = 128 * 1024; // 128 KB para streaming fluido
+            _client.SendBufferSize = 64 * 1024;    // 64 KB para telemetría ágil
 
             await _client.ConnectAsync(hostIp, port, token);
             Stream stream = _client.GetStream();
@@ -80,6 +90,9 @@ namespace LanScreenShare.Network.Streaming
             {
                 byte[] headerBuffer = new byte[32];
                 bool endedByHost = false;
+                int intervalFrames = 0;
+                long intervalBytes = 0;
+                var lastTelemetryTime = DateTime.UtcNow;
 
                 try
                 {
@@ -126,6 +139,9 @@ namespace LanScreenShare.Network.Streaming
                         byte[] frameBuffer = new byte[dataLength];
                         await ReadExactBytesAsync(stream, frameBuffer, 0, dataLength, token);
 
+                        intervalFrames++;
+                        intervalBytes += 32 + dataLength;
+
                         var frame = new CapturedFrame
                         {
                             Data = frameBuffer,
@@ -138,6 +154,52 @@ namespace LanScreenShare.Network.Streaming
                         };
 
                         FrameReceived?.Invoke(this, frame);
+
+                        // 3. Emitir telemetría de retorno (LSST) periódicamente al host (~250ms)
+                        var elapsed = (DateTime.UtcNow - lastTelemetryTime).TotalMilliseconds;
+                        if (elapsed >= 250)
+                        {
+                            double seconds = elapsed / 1000.0;
+                            int currentViewerFps = (int)Math.Round(intervalFrames / seconds);
+                            double bitrateMbps = (intervalBytes * 8.0) / (seconds * 1_000_000.0);
+
+                            var telemetryPacket = new StreamTelemetryPacket
+                            {
+                                EchoTimestamp = timestamp,
+                                ClientTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                                ViewerFps = currentViewerFps,
+                                ViewerDroppedFrames = 0,
+                                AvDriftMs = _currentAvDriftMs
+                            };
+
+                            try
+                            {
+                                await stream.WriteAsync(telemetryPacket.ToByteArray().AsMemory(), token);
+                                await stream.FlushAsync(token);
+                            }
+                            catch
+                            {
+                                // Error de socket se capturará en el siguiente ciclo de lectura
+                            }
+
+                            CurrentTelemetry.HostFps = hostFps;
+                            CurrentTelemetry.HostFrameTimeMs = hostFrameTimeMs;
+                            CurrentTelemetry.ViewerFps = currentViewerFps;
+                            CurrentTelemetry.BitrateMbps = bitrateMbps;
+                            CurrentTelemetry.AvDriftMs = _currentAvDriftMs;
+
+                            long transitMs = Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - timestamp);
+                            if (transitMs < 1000)
+                            {
+                                CurrentTelemetry.RttMs = (int)transitMs;
+                            }
+
+                            TelemetryUpdated?.Invoke(this, CurrentTelemetry);
+
+                            intervalFrames = 0;
+                            intervalBytes = 0;
+                            lastTelemetryTime = DateTime.UtcNow;
+                        }
                     }
                 }
                 catch (OperationCanceledException)

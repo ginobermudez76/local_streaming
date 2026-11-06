@@ -220,12 +220,21 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        public void UpdateMetrics(string statsText)
+        public void UpdateMetrics(string statsText, string? qualityColorHex = null)
         {
             var statsTextControl = this.FindControl<TextBlock>("StatsText");
             if (statsTextControl != null)
             {
                 statsTextControl.Text = statsText;
+            }
+
+            if (!string.IsNullOrEmpty(qualityColorHex))
+            {
+                var dot = this.FindControl<Avalonia.Controls.Shapes.Ellipse>("StatsQualityDot");
+                if (dot != null && Avalonia.Media.Color.TryParse(qualityColorHex, out var color))
+                {
+                    dot.Fill = new Avalonia.Media.SolidColorBrush(color);
+                }
             }
         }
 

@@ -134,11 +134,18 @@
                             Padding="10,5"
                             IsVisible="False"
                             VerticalAlignment="Center">
-                        <TextBlock x:Name="StatsText"
-                                   Text="0 FPS • 0 KB/s"
-                                   Foreground="#60A5FA"
-                                   FontSize="11"
-                                   FontWeight="Medium"/>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <Ellipse x:Name="StatsQualityDot"
+                                     Width="7" Height="7"
+                                     Fill="#10B981"
+                                     VerticalAlignment="Center"/>
+                            <TextBlock x:Name="StatsText"
+                                       Text="0 FPS • 0 KB/s"
+                                       Foreground="#60A5FA"
+                                       FontSize="11"
+                                       FontWeight="Medium"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
                     </Border>
                 </StackPanel>
 

@@ -17,11 +17,13 @@ namespace LanScreenShare.Network.Streaming
         private Stream? _stream;
         private CancellationTokenSource? _cts;
         private bool _disposed;
+        private long _latestAudioTimestamp;
 
         public event EventHandler<CapturedAudioChunk>? AudioReceived;
         public event EventHandler<string>? StatusChanged;
 
         public bool IsConnected => _client != null && _client.Connected && _stream != null;
+        public long LatestAudioTimestamp => Interlocked.Read(ref _latestAudioTimestamp);
 
         public async Task ConnectAsync(
             string hostIp,
@@ -41,6 +43,8 @@ namespace LanScreenShare.Network.Streaming
 
             _client = new TcpClient();
             _client.NoDelay = true;
+            _client.ReceiveBufferSize = 64 * 1024;
+            _client.SendBufferSize = 64 * 1024;
 
             await _client.ConnectAsync(hostIp, port, token);
             Stream stream = _client.GetStream();
@@ -117,6 +121,8 @@ namespace LanScreenShare.Network.Streaming
                         // 2. Leer fragmento de audio PCM
                         byte[] audioBuffer = new byte[dataLength];
                         await ReadExactBytesAsync(stream, audioBuffer, 0, dataLength, token);
+
+                        Interlocked.Exchange(ref _latestAudioTimestamp, timestamp);
 
                         var chunk = new CapturedAudioChunk
                         {

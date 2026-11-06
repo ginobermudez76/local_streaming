@@ -23,6 +23,25 @@ namespace LanScreenShare.Media
 
         public bool IsPlaying => _wasapiOut != null && _wasapiOut.PlaybackState == PlaybackState.Playing;
 
+        public int CurrentBufferedDurationMs
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return (int)(_waveProvider?.BufferedDuration.TotalMilliseconds ?? 0);
+                }
+            }
+        }
+
+        public void ClearBuffer()
+        {
+            lock (_lock)
+            {
+                _waveProvider?.ClearBuffer();
+            }
+        }
+
         public bool IsMuted
         {
             get => _isMuted;
@@ -55,6 +74,12 @@ namespace LanScreenShare.Media
 
                 if (_waveProvider != null && _wasapiOut != null)
                 {
+                    // Control de latencia ultra-baja: Si el búfer de NAudio se acumula por encima de 80ms, descartar para resincronizar
+                    if (_waveProvider.BufferedDuration.TotalMilliseconds > 80)
+                    {
+                        _waveProvider.ClearBuffer();
+                    }
+
                     float currentVol = _isMuted ? 0f : _volume;
                     ApplyVolume(chunk.Data, chunk.AudioFormat, chunk.BitsPerSample, currentVol);
                     _waveProvider.AddSamples(chunk.Data, 0, chunk.Data.Length);

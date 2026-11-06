@@ -8,8 +8,9 @@ namespace LanScreenShare.Core.Interfaces
         bool IsPlaying { get; }
         bool IsMuted { get; set; }
         float Volume { get; set; }
+        int CurrentBufferedDurationMs { get; }
         void PlayChunk(CapturedAudioChunk chunk);
+        void ClearBuffer();
         void Stop();
     }
 }
-

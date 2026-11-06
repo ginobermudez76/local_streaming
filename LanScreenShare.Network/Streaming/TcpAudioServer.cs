@@ -92,6 +92,8 @@ namespace LanScreenShare.Network.Streaming
                     {
                         var client = await _listener.AcceptTcpClientAsync(token);
                         client.NoDelay = true;
+                        client.SendBufferSize = 64 * 1024;
+                        client.ReceiveBufferSize = 64 * 1024;
 
                         _ = Task.Run(async () =>
                         {

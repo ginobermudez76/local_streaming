@@ -37,15 +37,26 @@ namespace LanScreenShare.Network.Streaming
             public Stream Stream { get; set; } = null!;
             public Channel<CapturedFrame> Channel { get; set; } = null!;
             public string? SessionId { get; set; }
+            public int CurrentRttMs { get; set; }
+            public int ViewerFps { get; set; }
+            public int ViewerDroppedFrames { get; set; }
+            public int AvDriftMs { get; set; }
+            public long LastTelemetryTimestamp { get; set; }
         }
 
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
+        public event EventHandler<StreamTelemetry>? TelemetryUpdated;
         public Func<string, Task<bool>>? ClientApprovalCallback { get; set; }
         public Func<string, string, string, Task<bool>>? PairingApprovalCallback { get; set; }
 
         public bool IsRunning => _listener != null && _cts != null && !_cts.IsCancellationRequested;
         public int ConnectedClientsCount => _clients.Count;
+        private long _droppedFramesCount;
+        public long DroppedFramesCount => Interlocked.Read(ref _droppedFramesCount);
+        public StreamTelemetry CurrentTelemetry { get; } = new();
+        private int _currentRttMs;
+        public int CurrentRttMs => _currentRttMs;
 
         public TcpStreamServer(
             ISessionAuthority? sessionAuthority = null,
@@ -79,6 +90,8 @@ namespace LanScreenShare.Network.Streaming
                     {
                         var client = await _listener.AcceptTcpClientAsync(token);
                         client.NoDelay = true; // Deshabilitar Nagle para menor latencia
+                        client.SendBufferSize = 128 * 1024; // 128 KB para streaming fluido
+                        client.ReceiveBufferSize = 64 * 1024; // 64 KB
                         client.LingerState = new LingerOption(true, 2); // Evitar RST prematuro al cerrar socket
 
                         _ = Task.Run(async () =>
@@ -270,14 +283,49 @@ namespace LanScreenShare.Network.Streaming
 
         private async Task MonitorClientLifecycleAsync(string clientId, ClientContext ctx, CancellationToken token)
         {
-            var buffer = new byte[1];
+            byte[] packetBuffer = new byte[StreamTelemetryPacket.PacketSize];
             try
             {
                 while (!token.IsCancellationRequested && ctx.Client.Connected)
                 {
-                    int read = await ctx.Stream.ReadAsync(buffer.AsMemory(0, 1), token);
-                    if (read == 0)
-                        break;
+                    int totalRead = 0;
+                    while (totalRead < StreamTelemetryPacket.PacketSize)
+                    {
+                        int bytesRead = await ctx.Stream.ReadAsync(
+                            packetBuffer.AsMemory(totalRead, StreamTelemetryPacket.PacketSize - totalRead),
+                            token);
+                        if (bytesRead == 0)
+                        {
+                            // Socket cerrado por el cliente
+                            return;
+                        }
+                        totalRead += bytesRead;
+                    }
+
+                    if (StreamTelemetryPacket.TryReadFrom(packetBuffer, out var packet) && packet != null)
+                    {
+                        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        int sampleRtt = (int)Math.Max(0, now - packet.EchoTimestamp);
+
+                        // Filtro EMA para suavizar RTT
+                        int smoothedRtt = _currentRttMs == 0
+                            ? sampleRtt
+                            : (int)(_currentRttMs * 0.75 + sampleRtt * 0.25);
+
+                        _currentRttMs = smoothedRtt;
+                        ctx.CurrentRttMs = smoothedRtt;
+                        ctx.ViewerFps = packet.ViewerFps;
+                        ctx.ViewerDroppedFrames = packet.ViewerDroppedFrames;
+                        ctx.AvDriftMs = packet.AvDriftMs;
+                        ctx.LastTelemetryTimestamp = now;
+
+                        CurrentTelemetry.RttMs = smoothedRtt;
+                        CurrentTelemetry.ViewerFps = packet.ViewerFps;
+                        CurrentTelemetry.DroppedFrames = DroppedFramesCount + packet.ViewerDroppedFrames;
+                        CurrentTelemetry.AvDriftMs = packet.AvDriftMs;
+
+                        TelemetryUpdated?.Invoke(this, CurrentTelemetry);
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -347,11 +395,20 @@ namespace LanScreenShare.Network.Streaming
             if (_clients.IsEmpty || frame.Data.Length == 0)
                 return Task.CompletedTask;
 
+            CurrentTelemetry.HostFps = frame.HostFps;
+            CurrentTelemetry.HostFrameTimeMs = frame.HostFrameTimeMs;
+
             foreach (var kvp in _clients)
             {
+                // Si la cola acotada ya contiene un fotograma en espera, se incrementa el contador de descartes
+                if (kvp.Value.Channel.Reader.Count > 0)
+                {
+                    Interlocked.Increment(ref _droppedFramesCount);
+                }
                 kvp.Value.Channel.Writer.TryWrite(frame);
             }
 
+            CurrentTelemetry.DroppedFrames = DroppedFramesCount;
             return Task.CompletedTask;
         }
 

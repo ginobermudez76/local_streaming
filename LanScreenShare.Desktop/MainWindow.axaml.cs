@@ -25,6 +25,7 @@ using LanScreenShare.Core.Security;
 using LanScreenShare.Network.Security;
 using LanScreenShare.Core.Interfaces;
 using LanScreenShare.Core.Models;
+using LanScreenShare.Core.Services;
 using LanScreenShare.Media;
 using LanScreenShare.Network;
 using LanScreenShare.Network.Streaming;
@@ -95,7 +96,8 @@ namespace LanScreenShare.Desktop
         private WriteableBitmap? _viewerWriteableBitmap;
         private readonly object _bitmapLock = new();
 
-        // EstadÃ­sticas de flujo en tiempo real
+        // Estadísticas de flujo en tiempo real y sincronización A/V
+        private readonly AudioVideoSyncController _avSyncController = new();
         private long _metricFramesCount;
         private long _metricBytesCount;
         private int _lastFrameWidth;
@@ -228,6 +230,14 @@ namespace LanScreenShare.Desktop
 
                 _audioClient.AudioReceived += (s, chunk) =>
                 {
+                    var syncAction = _avSyncController.ProcessAudioChunk(chunk.Timestamp, out int delayMs);
+                    if (syncAction == AvSyncAction.DropStaleAudio)
+                    {
+                        return; // Descartar muestra obsoleta para resincronizar audio con el flujo de video
+                    }
+
+                    _streamClient?.UpdateAvDrift(_avSyncController.CurrentDriftMs);
+
                     if (chunk.Source == AudioSourceType.Microphone)
                     {
                         _micAudioPlayerService?.PlayChunk(chunk);
@@ -2521,6 +2531,7 @@ namespace LanScreenShare.Desktop
 
             var statsBadge = this.FindControl<Border>("StatsBadge");
             var statsText = this.FindControl<TextBlock>("StatsText");
+            var statsDot = this.FindControl<Avalonia.Controls.Shapes.Ellipse>("StatsQualityDot");
 
             if (_isHosting || (_streamClient != null && _streamClient.IsConnected))
             {
@@ -2532,19 +2543,46 @@ namespace LanScreenShare.Desktop
                         ? $"{(kbPerSec / 1024.0):F1} MB/s"
                         : $"{kbPerSec:F0} KB/s";
 
+                    string rttTag = "";
+                    string qualityColor = "#10B981";
+
+                    if (_isHosting)
+                    {
+                        int rtt = _streamServer.CurrentRttMs;
+                        if (rtt > 0)
+                        {
+                            rttTag = $"RTT: {rtt} ms • ";
+                            qualityColor = rtt < 30 ? "#10B981" : (rtt < 60 ? "#3B82F6" : (rtt < 90 ? "#F59E0B" : "#EF4444"));
+                        }
+                    }
+                    else if (_streamClient != null && _streamClient.IsConnected)
+                    {
+                        int rtt = _streamClient.CurrentTelemetry.RttMs;
+                        if (rtt > 0)
+                        {
+                            rttTag = $"RTT: {rtt} ms • ";
+                            qualityColor = rtt < 30 ? "#10B981" : (rtt < 60 ? "#3B82F6" : (rtt < 90 ? "#F59E0B" : "#EF4444"));
+                        }
+                    }
+
+                    if (statsDot != null && Avalonia.Media.Color.TryParse(qualityColor, out var parsedColor))
+                    {
+                        statsDot.Fill = new Avalonia.Media.SolidColorBrush(parsedColor);
+                    }
+
                     string fpsInfo = _isHosting
                         ? $"Host: {frames} FPS"
                         : (_lastHostFps > 0
-                            ? $"Host: {_lastHostFps} FPS ({_lastHostFrameTimeMs} ms) â€¢ Red: {frames} FPS"
+                            ? $"Host: {_lastHostFps} FPS ({_lastHostFrameTimeMs} ms) • Red: {frames} FPS"
                             : $"{frames} FPS");
 
-                    string res = _lastFrameWidth > 0 ? $" â€¢ {_lastFrameWidth}x{_lastFrameHeight}" : "";
+                    string res = _lastFrameWidth > 0 ? $" • {_lastFrameWidth}x{_lastFrameHeight}" : "";
                     string engineTag = _isHosting
-                        ? (_screenCaptureService is DxgiScreenCaptureService ? " â€¢ DXGI GPU" : " â€¢ GDI CPU")
+                        ? (_screenCaptureService is DxgiScreenCaptureService ? " • DXGI GPU" : " • GDI CPU")
                         : "";
 
                     string codecTag = "";
-                    if (_isHosting)
+                    if (_isHosting && _screenCaptureService != null)
                     {
                         string encDesc = _screenCaptureService.ActiveEncoderDescription ?? _screenCaptureService.Codec.ToUpper();
                         codecTag = _screenCaptureService.IsHardwareAccelerated
@@ -2552,19 +2590,32 @@ namespace LanScreenShare.Desktop
                             : $" • {encDesc}";
                     }
 
-                    string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient.IsConnected && _audioClient.IsConnected)
-                        ? " â€¢ Audio"
+                    string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient != null && _streamClient.IsConnected && _audioClient.IsConnected)
+                        ? " • Audio"
                         : "";
 
                     string controlTag = _controlClient.IsConnected && _remoteControlEnabled
-                        ? " â€¢ Control Activo"
+                        ? " • Control Activo"
                         : "";
 
-                    statsText.Text = $"{fpsInfo} â€¢ {transferRate}{res}{engineTag}{codecTag}{audioTag}{controlTag}";
+                    string dropsTag = "";
+                    if (_isHosting && _streamServer.DroppedFramesCount > 0)
+                    {
+                        dropsTag = $" • Descartados: {_streamServer.DroppedFramesCount}";
+                    }
+
+                    string avSyncTag = "";
+                    if (!_isHosting && _audioClient.IsConnected)
+                    {
+                        int drift = _avSyncController.CurrentDriftMs;
+                        avSyncTag = $" • A/V: {drift} ms";
+                    }
+
+                    statsText.Text = $"{rttTag}{fpsInfo} • {transferRate}{res}{engineTag}{codecTag}{audioTag}{avSyncTag}{controlTag}{dropsTag}";
 
                     if (_isPopoutActive && _popoutWindow != null)
                     {
-                        _popoutWindow.UpdateMetrics(statsText.Text);
+                        _popoutWindow.UpdateMetrics(statsText.Text, qualityColor);
                     }
                 }
 
@@ -2595,6 +2646,7 @@ namespace LanScreenShare.Desktop
             _lastFrameHeight = 0;
             _lastHostFps = 0;
             _lastHostFrameTimeMs = 0;
+            _avSyncController.Reset();
 
             var statsBadge = this.FindControl<Border>("StatsBadge");
             if (statsBadge != null)
@@ -3047,6 +3099,7 @@ namespace LanScreenShare.Desktop
             _lastFrameHeight = frame.Height;
             _lastHostFps = frame.HostFps;
             _lastHostFrameTimeMs = frame.HostFrameTimeMs;
+            _avSyncController.OnVideoFrameReceived(frame.Timestamp);
 
             try
             {
