@@ -90,8 +90,6 @@ namespace LanScreenShare.Network.Streaming
                     {
                         var client = await _listener.AcceptTcpClientAsync(token);
                         client.NoDelay = true; // Deshabilitar Nagle para menor latencia
-                        client.SendBufferSize = 128 * 1024; // 128 KB para streaming fluido
-                        client.ReceiveBufferSize = 64 * 1024; // 64 KB
                         client.LingerState = new LingerOption(true, 2); // Evitar RST prematuro al cerrar socket
 
                         _ = Task.Run(async () =>

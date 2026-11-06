@@ -3013,20 +3013,10 @@ namespace LanScreenShare.Desktop
                     canvasSourceTitle.Text = $"Viendo: {device.Name}";
                 }
 
-                var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
-
-                // 2. Conectar flujo de audio en paralelo
-                try
+                if (placeholderSubtitle != null)
                 {
-                    await _audioClient.ConnectAsync(device.IPAddress, 5002, _sslClientOptions, handshake?.SessionId, handshake?.AudioToken);
+                    placeholderSubtitle.Text = $"Conectado a {device.Name}. Esperando primer fotograma...";
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[AudioClient] Audio no disponible en el host: {ex.Message}");
-                }
-
-                // El control remoto NO se conecta automáticamente aquí para no solicitar permisos antes de tiempo.
-                // Se conecta únicamente a demanda cuando el visor hace clic en 'Control' o 'Modo 3D'.
 
                 var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
                 if (fullscreenBtn != null)
@@ -3082,6 +3072,23 @@ namespace LanScreenShare.Desktop
                     gameModeBtn.IsChecked = false;
                     gameModeBtn.IsEnabled = true;
                 }
+
+                var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
+
+                // 2. Conectar flujo de audio en segundo plano sin demorar la visualización de video
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var audioCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                        await _audioClient.ConnectAsync(device.IPAddress, 5002, _sslClientOptions, handshake?.SessionId, handshake?.AudioToken, audioCts.Token);
+                        Dispatcher.UIThread.Post(UpdateAudioUI);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[AudioClient] Audio no disponible en el host: {ex.Message}");
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -3103,9 +3110,9 @@ namespace LanScreenShare.Desktop
 
             try
             {
-                if (frame.Format == "h264" && _h264Decoder != null)
+                if (frame.Format == "h264")
                 {
-                    if (_h264Decoder.TryDecodeFrame(frame.Data, frame.Width, frame.Height, out byte[] bgraPixels, out int decW, out int decH))
+                    if (_h264Decoder != null && _h264Decoder.TryDecodeFrame(frame.Data, frame.Width, frame.Height, out byte[] bgraPixels, out int decW, out int decH))
                     {
                         Dispatcher.UIThread.Post(() =>
                         {
@@ -3157,8 +3164,9 @@ namespace LanScreenShare.Desktop
                                 Console.WriteLine($"[StreamViewer] Error renderizando frame H.264: {ex.Message}");
                             }
                         });
-                        return;
                     }
+                    // Si es formato H.264, jamás caer a decodificación Bitmap JPEG
+                    return;
                 }
 
                 using var ms = new MemoryStream(frame.Data);

@@ -58,8 +58,6 @@ namespace LanScreenShare.Network.Streaming
 
             _client = new TcpClient();
             _client.NoDelay = true;
-            _client.ReceiveBufferSize = 128 * 1024; // 128 KB para streaming fluido
-            _client.SendBufferSize = 64 * 1024;    // 64 KB para telemetría ágil
 
             await _client.ConnectAsync(hostIp, port, token);
             Stream stream = _client.GetStream();

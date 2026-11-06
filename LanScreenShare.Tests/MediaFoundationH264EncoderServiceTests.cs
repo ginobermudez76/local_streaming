@@ -173,5 +173,43 @@ namespace LanScreenShare.Tests
             byte[] encoded = encoder.EncodeFrame(dummyBgra, width, height);
             Assert.IsNotNull(encoded);
         }
+
+        [TestMethod]
+        [DoNotParallelize]
+        public void MediaFoundationH264DecoderService_DecodesEncoderOutput()
+        {
+            if (!OperatingSystem.IsWindows())
+                return;
+
+            using var encoder = new MediaFoundationH264EncoderService(targetFps: 60, bitrate: 4_000_000);
+            using var decoder = new MediaFoundationH264DecoderService();
+
+            int width = 1280;
+            int height = 720;
+            byte[] dummyBgra = new byte[width * height * 4];
+            Array.Fill(dummyBgra, (byte)128);
+
+            bool decodedAny = false;
+            for (int i = 0; i < 30; i++)
+            {
+                byte[] encoded = encoder.EncodeFrame(dummyBgra, width, height, forceKeyframe: i == 0);
+                Console.WriteLine($"[Test] Frame {i}: Encoded length = {encoded.Length}");
+                if (encoded.Length > 0)
+                {
+                    bool ok = decoder.TryDecodeFrame(encoded, width, height, out byte[] bgraPixels, out int decW, out int decH);
+                    Console.WriteLine($"[Test] Frame {i}: Decode result = {ok}");
+                    if (ok)
+                    {
+                        decodedAny = true;
+                        Assert.AreEqual(width, decW);
+                        Assert.AreEqual(height, decH);
+                        Assert.IsTrue(bgraPixels.Length >= width * height * 4);
+                        break;
+                    }
+                }
+            }
+
+            Assert.IsTrue(decodedAny, "El decodificador H.264 debió decodificar exitosamente al menos un fotograma.");
+        }
     }
 }
