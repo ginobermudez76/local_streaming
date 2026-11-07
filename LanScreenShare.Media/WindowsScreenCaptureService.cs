@@ -23,7 +23,14 @@ namespace LanScreenShare.Media
         private volatile int _targetWidth = 0;
         private volatile int _targetHeight = 0;
         private volatile string _codec = "h264";
+        private volatile bool _forceKeyframeRequested = true;
+        private byte[]? _reusableBgraBytes;
         private MediaFoundationH264EncoderService? _h264Encoder;
+
+        public void RequestKeyframe()
+        {
+            _forceKeyframeRequested = true;
+        }
 
         private volatile int _captureX = 0;
         private volatile int _captureY = 0;
@@ -176,7 +183,9 @@ namespace LanScreenShare.Media
                     try
                     {
                         var frameProcStopwatch = Stopwatch.StartNew();
-                        var frame = CaptureDesktopFrame(_quality, ResolutionScale, _targetWidth, _targetHeight);
+                        bool forceKeyframe = _forceKeyframeRequested;
+                        _forceKeyframeRequested = false;
+                        var frame = CaptureDesktopFrame(_quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe);
                         if (frame != null)
                         {
                             frameProcStopwatch.Stop();
@@ -234,7 +243,7 @@ namespace LanScreenShare.Media
             _captureTask = null;
         }
 
-        private CapturedFrame? CaptureDesktopFrame(int quality, double scale, int customTargetW = 0, int customTargetH = 0)
+        private CapturedFrame? CaptureDesktopFrame(int quality, double scale, int customTargetW = 0, int customTargetH = 0, bool forceKeyframe = false)
         {
             int left;
             int top;
@@ -320,8 +329,8 @@ namespace LanScreenShare.Media
 
                     if (targetW > 0 && targetH > 0 && (targetW != width || targetH != height))
                     {
-                        // Remuestreo cÃºbico CatmullRom para mÃ¡xima nitidez en textos y detalles finos sin pixelaciÃ³n
-                        resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKCubicResampler.CatmullRom));
+                        // Remuestreo bilineal de ultra baja latencia (<2ms) optimizado para streaming en tiempo real
+                        resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
                         if (resizedBitmap != null)
                         {
                             bitmapToEncode = resizedBitmap;
@@ -340,13 +349,17 @@ namespace LanScreenShare.Media
                             try
                             {
                                 _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps, _bitrateMbps * 1_000_000);
-                                byte[] bgraBytes = new byte[finalWidth * finalHeight * 4];
-                                Marshal.Copy(bitmapToEncode.GetPixels(), bgraBytes, 0, bgraBytes.Length);
-                                encodedBytes = _h264Encoder.EncodeFrame(bgraBytes, finalWidth, finalHeight);
+                                int requiredBytes = finalWidth * finalHeight * 4;
+                                if (_reusableBgraBytes == null || _reusableBgraBytes.Length != requiredBytes)
+                                {
+                                    _reusableBgraBytes = new byte[requiredBytes];
+                                }
+                                Marshal.Copy(bitmapToEncode.GetPixels(), _reusableBgraBytes, 0, requiredBytes);
+                                encodedBytes = _h264Encoder.EncodeFrame(_reusableBgraBytes, finalWidth, finalHeight, forceKeyframe);
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[GDI] H.264 error, fallback automÃ¡tico a JPEG: {ex.Message}");
+                                Console.WriteLine($"[GDI] H.264 error, fallback automático a JPEG: {ex.Message}");
                                 encodedBytes = null;
                             }
                         }

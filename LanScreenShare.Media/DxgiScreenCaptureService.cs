@@ -27,7 +27,14 @@ namespace LanScreenShare.Media
         private volatile int _targetHeight = 0;
         private volatile string _codec = "h264";
         private volatile int _monitorIndex = 0;
+        private volatile bool _forceKeyframeRequested = true;
+        private byte[]? _reusableBgraBytes;
         private MediaFoundationH264EncoderService? _h264Encoder;
+
+        public void RequestKeyframe()
+        {
+            _forceKeyframeRequested = true;
+        }
 
         private volatile string? _deviceName;
         private volatile int _targetX = 0;
@@ -358,6 +365,7 @@ namespace LanScreenShare.Media
                         };
 
                         stagingTexture = device.CreateTexture2D(stagingDesc);
+                        bool hasCapturedAtLeastOneFrame = false;
 
                         while (!token.IsCancellationRequested)
                         {
@@ -366,11 +374,12 @@ namespace LanScreenShare.Media
                             int currentFps = _targetFps;
                             int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, currentFps));
 
-                            // Medir duraciÃ³n de captura y codificaciÃ³n (frame time)
+                            // Medir duración de captura y codificación (frame time)
                             var frameProcStopwatch = Stopwatch.StartNew();
 
                             // Adquirir el siguiente frame de la GPU
-                            var acquireResult = duplication.AcquireNextFrame((uint)Math.Max(10, frameIntervalMs), out _, out IDXGIResource? desktopResource);
+                            bool hasNewFrame = false;
+                            var acquireResult = duplication.AcquireNextFrame((uint)Math.Max(5, Math.Min(10, frameIntervalMs / 2)), out _, out IDXGIResource? desktopResource);
 
                             if (acquireResult.Success && desktopResource != null)
                             {
@@ -378,12 +387,30 @@ namespace LanScreenShare.Media
                                 {
                                     using var desktopTexture = desktopResource.QueryInterface<ID3D11Texture2D>();
                                     context.CopyResource(stagingTexture, desktopTexture);
+                                    hasNewFrame = true;
+                                    hasCapturedAtLeastOneFrame = true;
                                 }
                                 finally
                                 {
                                     duplication.ReleaseFrame();
                                     desktopResource.Dispose();
                                 }
+                            }
+                            else if (acquireResult.Code == Vortice.DXGI.ResultCode.AccessLost.Code ||
+                                     acquireResult.Code == Vortice.DXGI.ResultCode.AccessDenied.Code)
+                            {
+                                Console.WriteLine("[DXGI] Acceso perdido o cambio de escritorio. Reinicializando...");
+                                break; // Romper bucle interno para reinicializar
+                            }
+
+                            // En H.264 o cuando se solicita keyframe, mantener cadencia constante aunque la pantalla sea estática
+                            bool shouldEncode = hasNewFrame || (_forceKeyframeRequested && hasCapturedAtLeastOneFrame) ||
+                                                (_codec == "h264" && hasCapturedAtLeastOneFrame);
+
+                            if (shouldEncode)
+                            {
+                                bool forceKeyframe = _forceKeyframeRequested;
+                                _forceKeyframeRequested = false;
 
                                 // Leer pixels mapeados desde CPU
                                 var mapped = context.Map(stagingTexture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
@@ -399,7 +426,8 @@ namespace LanScreenShare.Media
                                         screenLeft,
                                         screenTop,
                                         _targetWidth,
-                                        _targetHeight);
+                                        _targetHeight,
+                                        forceKeyframe);
 
                                     if (frame != null)
                                     {
@@ -424,16 +452,6 @@ namespace LanScreenShare.Media
                                 {
                                     context.Unmap(stagingTexture, 0);
                                 }
-                            }
-                            else if (acquireResult.Code == Vortice.DXGI.ResultCode.WaitTimeout.Code)
-                            {
-                                // La pantalla no cambiÃ³ en este intervalo; normal en DXGI.
-                            }
-                            else if (acquireResult.Code == Vortice.DXGI.ResultCode.AccessLost.Code ||
-                                     acquireResult.Code == Vortice.DXGI.ResultCode.AccessDenied.Code)
-                            {
-                                Console.WriteLine("[DXGI] Acceso perdido o cambio de escritorio. Reinicializando...");
-                                break; // Romper bucle interno para reinicializar
                             }
 
                             int elapsed = (int)stopwatch.ElapsedMilliseconds;
@@ -486,7 +504,8 @@ namespace LanScreenShare.Media
             int screenLeft,
             int screenTop,
             int customTargetW = 0,
-            int customTargetH = 0)
+            int customTargetH = 0,
+            bool forceKeyframe = false)
         {
             int finalWidth = width;
             int finalHeight = height;
@@ -508,8 +527,8 @@ namespace LanScreenShare.Media
 
                 if (targetW > 0 && targetH > 0 && (targetW != width || targetH != height))
                 {
-                    // Remuestreo cÃºbico CatmullRom para mÃ¡xima nitidez en textos y detalles finos sin pixelaciÃ³n
-                    resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKCubicResampler.CatmullRom));
+                    // Remuestreo bilineal de ultra baja latencia (<2ms) optimizado para streaming en tiempo real
+                    resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
                     if (resizedBitmap != null)
                     {
                         bitmapToEncode = resizedBitmap;
@@ -528,13 +547,17 @@ namespace LanScreenShare.Media
                         try
                         {
                             _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps, _bitrateMbps * 1_000_000);
-                            byte[] bgraBytes = new byte[finalWidth * finalHeight * 4];
-                            Marshal.Copy(bitmapToEncode.GetPixels(), bgraBytes, 0, bgraBytes.Length);
-                            encodedBytes = _h264Encoder.EncodeFrame(bgraBytes, finalWidth, finalHeight);
+                            int requiredBytes = finalWidth * finalHeight * 4;
+                            if (_reusableBgraBytes == null || _reusableBgraBytes.Length != requiredBytes)
+                            {
+                                _reusableBgraBytes = new byte[requiredBytes];
+                            }
+                            Marshal.Copy(bitmapToEncode.GetPixels(), _reusableBgraBytes, 0, requiredBytes);
+                            encodedBytes = _h264Encoder.EncodeFrame(_reusableBgraBytes, finalWidth, finalHeight, forceKeyframe);
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[DXGI] H.264 error, fallback automÃ¡tico a JPEG: {ex.Message}");
+                            Console.WriteLine($"[DXGI] H.264 error, fallback automático a JPEG: {ex.Message}");
                             encodedBytes = null;
                         }
                     }

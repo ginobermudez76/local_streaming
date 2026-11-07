@@ -2821,6 +2821,7 @@ namespace LanScreenShare.Desktop
 
         private void StreamServer_ClientConnected(object? sender, string clientId)
         {
+            _screenCaptureService.RequestKeyframe();
             Dispatcher.UIThread.Post(() =>
             {
                 int count = _streamServer.ConnectedClientsCount;

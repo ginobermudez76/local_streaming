@@ -24,7 +24,14 @@ namespace LanScreenShare.Media
         private volatile int _targetWidth = 0;
         private volatile int _targetHeight = 0;
         private volatile string _codec = "jpeg";
+        private volatile bool _forceKeyframeRequested = true;
+        private byte[]? _reusableBgraBytes;
         private MediaFoundationH264EncoderService? _h264Encoder;
+
+        public void RequestKeyframe()
+        {
+            _forceKeyframeRequested = true;
+        }
 
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
@@ -171,7 +178,9 @@ namespace LanScreenShare.Media
                 try
                 {
                     var frameProcStopwatch = Stopwatch.StartNew();
-                    var frame = CaptureWindowFrame(_hwnd, _quality, ResolutionScale, _targetWidth, _targetHeight);
+                    bool forceKeyframe = _forceKeyframeRequested;
+                    _forceKeyframeRequested = false;
+                    var frame = CaptureWindowFrame(_hwnd, _quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe);
 
                     if (frame != null)
                     {
@@ -206,7 +215,7 @@ namespace LanScreenShare.Media
             }
         }
 
-        private CapturedFrame? CaptureWindowFrame(IntPtr hwnd, int quality, double scale, int customTargetW = 0, int customTargetH = 0)
+        private CapturedFrame? CaptureWindowFrame(IntPtr hwnd, int quality, double scale, int customTargetW = 0, int customTargetH = 0, bool forceKeyframe = false)
         {
             if (!GetClientRect(hwnd, out RECT clientRect))
                 return null;
@@ -248,7 +257,7 @@ namespace LanScreenShare.Media
 
             try
             {
-                // Intentar capturar con PrintWindow (PW_RENDERFULLCONTENT captura bÃºferes acelerados por DWM/GPU)
+                // Intentar capturar con PrintWindow (PW_RENDERFULLCONTENT captura búferes acelerados por DWM/GPU)
                 bool captured = PrintWindow(hwnd, hdcMem, PW_RENDERFULLCONTENT);
                 if (!captured)
                 {
@@ -256,7 +265,7 @@ namespace LanScreenShare.Media
                     BitBlt(hdcMem, 0, 0, width, height, hdcWindow, 0, 0, SRCCOPY);
                 }
 
-                // Dibujar el cursor si estÃ¡ sobre la ventana cliente
+                // Dibujar el cursor si está sobre la ventana cliente
                 DrawCursorOnDC(hwnd, hdcMem, width, height);
 
                 int finalWidth = width;
@@ -274,7 +283,8 @@ namespace LanScreenShare.Media
 
                 if (targetW > 0 && targetH > 0 && (targetW != width || targetH != height))
                 {
-                    resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKCubicResampler.CatmullRom));
+                    // Remuestreo bilineal de ultra baja latencia (<2ms) optimizado para streaming en tiempo real
+                    resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
                     if (resizedBitmap != null)
                     {
                         bitmapToEncode = resizedBitmap;
@@ -293,9 +303,13 @@ namespace LanScreenShare.Media
                         try
                         {
                             _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps, _bitrateMbps * 1_000_000);
-                            byte[] bgraBytes = new byte[finalWidth * finalHeight * 4];
-                            Marshal.Copy(bitmapToEncode.GetPixels(), bgraBytes, 0, bgraBytes.Length);
-                            encodedBytes = _h264Encoder.EncodeFrame(bgraBytes, finalWidth, finalHeight);
+                            int requiredBytes = finalWidth * finalHeight * 4;
+                            if (_reusableBgraBytes == null || _reusableBgraBytes.Length != requiredBytes)
+                            {
+                                _reusableBgraBytes = new byte[requiredBytes];
+                            }
+                            Marshal.Copy(bitmapToEncode.GetPixels(), _reusableBgraBytes, 0, requiredBytes);
+                            encodedBytes = _h264Encoder.EncodeFrame(_reusableBgraBytes, finalWidth, finalHeight, forceKeyframe);
                         }
                         catch (Exception ex)
                         {

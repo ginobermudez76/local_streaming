@@ -16,6 +16,8 @@ namespace LanScreenShare.Media
         private IMFTransform? _decoder;
         private int _width;
         private int _height;
+        private int _actualStride;
+        private int _actualBufferHeight;
         private byte[]? _decodedBgraBuffer;
         private byte[]? _nv12Buffer;
         private long _sampleTimeCounter;
@@ -38,8 +40,10 @@ namespace LanScreenShare.Media
 
             _width = width;
             _height = height;
+            _actualStride = (width + 15) & ~15;
+            _actualBufferHeight = (height + 15) & ~15;
             _decodedBgraBuffer = new byte[width * height * 4];
-            _nv12Buffer = new byte[width * height * 3 / 2];
+            _nv12Buffer = new byte[_actualStride * _actualBufferHeight * 3 / 2];
             _sampleTimeCounter = 0;
 
             Type decoderType = Type.GetTypeFromCLSID(CLSID_CMSH264DecoderMFT)
@@ -221,13 +225,17 @@ namespace LanScreenShare.Media
                     try
                     {
                         IMFMediaType newOut = _decoder.GetOutputAvailableType(0, 0);
+                        MediaFactory.MFGetAttributeSize(newOut, MediaTypeAttributeKeys.FrameSize, out uint outW, out uint outH);
+                        if (outW > 0) _actualStride = (int)outW;
+                        if (outH > 0) _actualBufferHeight = (int)outH;
+
                         _decoder.SetOutputType(0, newOut, 0);
                         newOut.Dispose();
 
                         var streamInfo = _decoder.GetOutputStreamInfo(0);
                         uint flags = (uint)streamInfo.Flags;
                         _mftProvidesSamples = (flags & 0x00000100) != 0 || (flags & 0x00000200) != 0;
-                        _outputBufferSize = streamInfo.Size > 0 ? streamInfo.Size : (width * height * 3 / 2);
+                        _outputBufferSize = streamInfo.Size > 0 ? streamInfo.Size : (_actualStride * _actualBufferHeight * 3 / 2);
 
                         if (!_mftProvidesSamples)
                         {
@@ -259,12 +267,21 @@ namespace LanScreenShare.Media
                         sampleBuffer.Lock(out IntPtr pOutput, out _, out int curLen);
                         try
                         {
+                            int stride = _actualStride > 0 ? _actualStride : ((width + 15) & ~15);
+                            int bufH = _actualBufferHeight > 0 ? _actualBufferHeight : ((height + 15) & ~15);
+                            int neededSize = Math.Max(curLen, stride * bufH * 3 / 2);
+
+                            if (_nv12Buffer == null || _nv12Buffer.Length < neededSize)
+                            {
+                                _nv12Buffer = new byte[neededSize];
+                            }
+
                             int copyLen = Math.Min(curLen, _nv12Buffer.Length);
                             Marshal.Copy(pOutput, _nv12Buffer, 0, copyLen);
                             sampleBuffer.Unlock();
 
-                            // 3. Conversión paralela de alto rendimiento NV12 -> BGRA
-                            Nv12ToBgra(_nv12Buffer, _decodedBgraBuffer, width, height);
+                            // 3. Conversión paralela de alto rendimiento NV12 -> BGRA considerando stride y macroblock padding
+                            Nv12ToBgra(_nv12Buffer, _decodedBgraBuffer, width, height, stride, bufH);
                             bgraPixels = _decodedBgraBuffer;
                             return true;
                         }
@@ -305,17 +322,23 @@ namespace LanScreenShare.Media
         }
 
         /// <summary>
-        /// Convierte fotogramas NV12 (YUV 4:2:0 biplanar) a BGRA32 usando aritmética fija optimizada y paralelismo por filas.
+        /// Convierte fotogramas NV12 (YUV 4:2:0 biplanar) a BGRA32 usando aritmética fija optimizada y paralelismo por filas,
+        /// respetando el stride (pitch) y la altura con macroblock padding (p. ej. 544 líneas para 540p).
         /// </summary>
-        public static void Nv12ToBgra(byte[] nv12, byte[] bgra, int width, int height)
+        public static void Nv12ToBgra(byte[] nv12, byte[] bgra, int width, int height, int stride = 0, int bufferHeight = 0)
         {
-            int frameSize = width * height;
+            if (stride <= 0)
+                stride = (width + 15) & ~15;
+            if (bufferHeight <= 0)
+                bufferHeight = (height + 15) & ~15;
+
+            int yPlaneSize = stride * bufferHeight;
 
             Parallel.For(0, height, y =>
             {
-                int yLineOffset = y * width;
-                int uvLineOffset = frameSize + (y >> 1) * width;
-                int bgraLineOffset = yLineOffset * 4;
+                int yLineOffset = y * stride;
+                int uvLineOffset = yPlaneSize + (y >> 1) * stride;
+                int bgraLineOffset = y * width * 4;
 
                 for (int x = 0; x < width; x++)
                 {
