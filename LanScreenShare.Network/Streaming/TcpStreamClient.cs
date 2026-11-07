@@ -170,15 +170,19 @@ namespace LanScreenShare.Network.Streaming
                                 AvDriftMs = _currentAvDriftMs
                             };
 
-                            try
+                            var telemetryBytes = telemetryPacket.ToByteArray();
+                            _ = Task.Run(async () =>
                             {
-                                await stream.WriteAsync(telemetryPacket.ToByteArray().AsMemory(), token);
-                                await stream.FlushAsync(token);
-                            }
-                            catch
-                            {
-                                // Error de socket se capturará en el siguiente ciclo de lectura
-                            }
+                                try
+                                {
+                                    await stream.WriteAsync(telemetryBytes.AsMemory(), token);
+                                    await stream.FlushAsync(token);
+                                }
+                                catch
+                                {
+                                    // Error de socket se capturará en el siguiente ciclo de lectura
+                                }
+                            }, token);
 
                             CurrentTelemetry.HostFps = hostFps;
                             CurrentTelemetry.HostFrameTimeMs = hostFrameTimeMs;

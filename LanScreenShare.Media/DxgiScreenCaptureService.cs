@@ -366,6 +366,9 @@ namespace LanScreenShare.Media
 
                         stagingTexture = device.CreateTexture2D(stagingDesc);
                         bool hasCapturedAtLeastOneFrame = false;
+                        int lastCursorX = int.MinValue;
+                        int lastCursorY = int.MinValue;
+                        var keepAliveStopwatch = Stopwatch.StartNew();
 
                         while (!token.IsCancellationRequested)
                         {
@@ -403,12 +406,31 @@ namespace LanScreenShare.Media
                                 break; // Romper bucle interno para reinicializar
                             }
 
-                            // En H.264 o cuando se solicita keyframe, mantener cadencia constante aunque la pantalla sea estática
-                            bool shouldEncode = hasNewFrame || (_forceKeyframeRequested && hasCapturedAtLeastOneFrame) ||
-                                                (_codec == "h264" && hasCapturedAtLeastOneFrame);
+                            // Detectar movimiento del cursor para respuesta inmediata a 60 FPS incluso si el fondo es estático
+                            bool cursorMoved = false;
+                            try
+                            {
+                                CURSORINFO curInfo = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+                                if (GetCursorInfo(out curInfo) && curInfo.flags == CURSOR_SHOWING)
+                                {
+                                    if (curInfo.ptScreenPos.x != lastCursorX || curInfo.ptScreenPos.y != lastCursorY)
+                                    {
+                                        lastCursorX = curInfo.ptScreenPos.x;
+                                        lastCursorY = curInfo.ptScreenPos.y;
+                                        cursorMoved = true;
+                                    }
+                                }
+                            }
+                            catch { }
+
+                            // Codificar inmediatamente si hay cambio en pantalla, movimiento de mouse, solicitud de keyframe,
+                            // o como latido ligero cada 200ms (5 FPS en reposo) sin saturar la cola de red
+                            bool shouldEncode = hasNewFrame ||
+                                                (hasCapturedAtLeastOneFrame && (cursorMoved || _forceKeyframeRequested || (_codec == "h264" && keepAliveStopwatch.ElapsedMilliseconds >= 200)));
 
                             if (shouldEncode)
                             {
+                                keepAliveStopwatch.Restart();
                                 bool forceKeyframe = _forceKeyframeRequested;
                                 _forceKeyframeRequested = false;
 
@@ -516,9 +538,6 @@ namespace LanScreenShare.Media
                 using var skBitmap = new SKBitmap();
                 skBitmap.InstallPixels(imageInfo, pBits, rowPitch);
 
-                // Dibujar cursor del mouse sobre el fotograma antes de codificar
-                DrawCursorOnBitmap(skBitmap, screenLeft, screenTop);
-
                 SKBitmap bitmapToEncode = skBitmap;
                 SKBitmap? resizedBitmap = null;
 
@@ -536,6 +555,20 @@ namespace LanScreenShare.Media
                         finalHeight = targetH;
                     }
                 }
+                else
+                {
+                    // Clonar para no mutar stagingTexture in-situ al dibujar el cursor
+                    resizedBitmap = skBitmap.Copy();
+                    if (resizedBitmap != null)
+                    {
+                        bitmapToEncode = resizedBitmap;
+                    }
+                }
+
+                // Dibujar cursor del mouse sobre la copia/bitmap escalado sin alterar stagingTexture
+                float scaleX = (float)finalWidth / Math.Max(1, width);
+                float scaleY = (float)finalHeight / Math.Max(1, height);
+                DrawCursorOnBitmap(bitmapToEncode, screenLeft, screenTop, scaleX, scaleY);
 
                 byte[]? encodedBytes = null;
                 string currentCodec = _codec;
@@ -597,15 +630,15 @@ namespace LanScreenShare.Media
             }
         }
 
-        private static void DrawCursorOnBitmap(SKBitmap bitmap, int screenLeft, int screenTop)
+        private static void DrawCursorOnBitmap(SKBitmap bitmap, int screenLeft, int screenTop, float scaleX = 1f, float scaleY = 1f)
         {
             try
             {
                 CURSORINFO cursorInfo = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
                 if (GetCursorInfo(out cursorInfo) && cursorInfo.flags == CURSOR_SHOWING)
                 {
-                    float x = cursorInfo.ptScreenPos.x - screenLeft;
-                    float y = cursorInfo.ptScreenPos.y - screenTop;
+                    float x = (cursorInfo.ptScreenPos.x - screenLeft) * scaleX;
+                    float y = (cursorInfo.ptScreenPos.y - screenTop) * scaleY;
 
                     if (x >= 0 && x < bitmap.Width && y >= 0 && y < bitmap.Height)
                     {

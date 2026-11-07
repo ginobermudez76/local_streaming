@@ -11,13 +11,16 @@ namespace LanScreenShare.Media
     [SupportedOSPlatform("windows")]
     public class MediaFoundationH264EncoderService : IVideoEncoderService
     {
-        private static readonly Guid CODECAPI_AVLowLatencyMode = new("9c27891a-ed7a-40e1-88e8-b22727a0ec04");
-        private static readonly Guid CODECAPI_AVEncMPVGOPSize = new("95f74a0e-d934-4bc7-a7f1-2130e63f385c");
-        private static readonly Guid CODECAPI_AVEncMPVDefaultBPictureCount = new("8d30f4e6-0a5b-4345-8560-fc4934483c25");
-        private static readonly Guid CODECAPI_AVEncCommonRealTime = new("03879be8-78d8-4ba8-9d0f-4a30e3595246");
-        private static readonly Guid CODECAPI_AVEncCommonQualityVsSpeed = new("983fae74-e879-470b-861c-ac00c340ec88");
+        // Official Windows SDK GUIDs (codecapi.h / mfapi.h / icodecapi.h)
+        private static readonly Guid CODECAPI_AVLowLatencyMode = new("9c27891a-ed7a-40e1-88e8-b22727a024ee");
+        private static readonly Guid CODECAPI_AVEncMPVGOPSize = new("95f31b26-95a4-41aa-9303-246a7fc6eef1");
+        private static readonly Guid CODECAPI_AVEncMPVDefaultBPictureCount = new("8d390aac-dc5c-4200-b57f-814d04babab2");
+        private static readonly Guid CODECAPI_AVEncCommonRealTime = new("143a0ff6-a131-43da-b81e-98fbb8ec378e");
+        private static readonly Guid CODECAPI_AVEncCommonQualityVsSpeed = new("98332df8-03cd-476b-81bf-bb4f5309eb9d");
+        private static readonly Guid MF_MT_MPEG2_PROFILE = new("ad76a80b-2d5c-4e0b-b375-64e520137036");
         private static readonly Guid IID_IMFMediaEventGenerator = new("2CD0BD52-BCD5-4B89-B62C-EADC0C031E7D");
-        private static readonly Guid IID_ICodecAPI = new("901d850e-31a8-4b7d-a8d9-06e129f30171");
+        private static readonly Guid IID_ICodecAPI = new("901db4c7-31ce-41a2-85dc-8fa0bf41b8da");
+        private const int eAVEncH264VProfile_Base = 66;
 
         private IMFTransform? _encoder;
         private IMFMediaEventGenerator? _eventGen;
@@ -128,12 +131,13 @@ namespace LanScreenShare.Media
                     // Configurar parámetros de baja latencia antes y después de tipos de medios
                     ConfigureCodecApi(_encoder, _fps);
 
-                    // Configurar tipo de salida (H.264)
+                    // Configurar tipo de salida (H.264 Baseline Profile sin B-Frames para cero latencia de reordenamiento)
                     using (IMFMediaType outputType = MediaFactory.MFCreateMediaType())
                     {
                         outputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
                         outputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
                         outputType.Set(MediaTypeAttributeKeys.AvgBitrate, _bitrate);
+                        outputType.Set(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
                         MediaFactory.MFSetAttributeSize(outputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
                         MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.FrameRate, (uint)_fps, 1u);
                         MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
@@ -221,13 +225,13 @@ namespace LanScreenShare.Media
                     encoder.Attributes.Set(CODECAPI_AVLowLatencyMode, 1);
                     encoder.Attributes.Set(CODECAPI_AVEncMPVDefaultBPictureCount, 0);
                     encoder.Attributes.Set(CODECAPI_AVEncCommonRealTime, 1);
-                    encoder.Attributes.Set(CODECAPI_AVEncCommonQualityVsSpeed, 100);
+                    encoder.Attributes.Set(CODECAPI_AVEncCommonQualityVsSpeed, 0);
                     encoder.Attributes.Set(CODECAPI_AVEncMPVGOPSize, (uint)fps);
                 }
             }
             catch { }
 
-            // 2. Configurar vía ICodecAPI si el transform lo expone
+            // 2. Configurar vía ICodecAPI oficial de Windows SDK (IID: 901db4c7-31ce-41a2-85dc-8fa0bf41b8da)
             int hr = Marshal.QueryInterface(encoder.NativePointer, in IID_ICodecAPI, out IntPtr pCodecApi);
             if (hr == 0 && pCodecApi != IntPtr.Zero)
             {
@@ -235,20 +239,30 @@ namespace LanScreenShare.Media
                 {
                     var codecApi = (ICodecAPI)Marshal.GetObjectForIUnknown(pCodecApi);
 
-                    // 1. Modo de ultra baja latencia estricto (sin buffering previo)
-                    object lowLatency = 1;
-                    try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatency); } catch { }
+                    // 1. Modo de ultra baja latencia estricto (1 fotograma entra -> 1 fotograma sale inmediatamente, VT_BOOL y VT_UI4)
+                    object lowLatencyBool = true;
+                    try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatencyBool); }
+                    catch
+                    {
+                        object lowLatencyUint = (uint)1;
+                        try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatencyUint); } catch { }
+                    }
 
                     // 2. Cero B-Frames (indispensable para streaming en tiempo real sin desfase de reordenamiento)
                     object bFrames = (uint)0;
                     try { codecApi.SetValue(CODECAPI_AVEncMPVDefaultBPictureCount, ref bFrames); } catch { }
 
                     // 3. Modo tiempo real habilitado
-                    object realTime = 1;
-                    try { codecApi.SetValue(CODECAPI_AVEncCommonRealTime, ref realTime); } catch { }
+                    object realTimeBool = true;
+                    try { codecApi.SetValue(CODECAPI_AVEncCommonRealTime, ref realTimeBool); }
+                    catch
+                    {
+                        object realTimeUint = (uint)1;
+                        try { codecApi.SetValue(CODECAPI_AVEncCommonRealTime, ref realTimeUint); } catch { }
+                    }
 
-                    // 4. Velocidad máxima (mínima latencia de compresión)
-                    object qualityVsSpeed = (uint)100;
+                    // 4. Velocidad máxima de compresión (0 = más rápido / menor latencia en especificación Microsoft)
+                    object qualityVsSpeed = (uint)0;
                     try { codecApi.SetValue(CODECAPI_AVEncCommonQualityVsSpeed, ref qualityVsSpeed); } catch { }
 
                     // 5. Tamaño de GOP igual al FPS (1 keyframe por segundo máximo)
@@ -391,8 +405,8 @@ namespace LanScreenShare.Media
             // 2. Enviar el nuevo fotograma de entrada
             _encoder.ProcessInput(0, inputSample, 0);
 
-            // 3. Drenar eventos generados con breve margen de espera para la GPU
-            for (int retry = 0; retry < 8; retry++)
+            // 3. Drenar eventos generados con breve margen de espera para la GPU (sale en <2ms en cuanto está listo)
+            for (int retry = 0; retry < 15; retry++)
             {
                 DrainAsyncEvents(outputMs);
                 if (outputMs.Length > 0)
@@ -506,11 +520,14 @@ namespace LanScreenShare.Media
             _isAsync = false;
             _mftProvidesSamples = false;
 
+            ConfigureCodecApi(_encoder, _fps);
+
             using (IMFMediaType outputType = MediaFactory.MFCreateMediaType())
             {
                 outputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
                 outputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
                 outputType.Set(MediaTypeAttributeKeys.AvgBitrate, _bitrate);
+                outputType.Set(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
                 MediaFactory.MFSetAttributeSize(outputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
                 MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.FrameRate, (uint)_fps, 1u);
                 MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
@@ -622,7 +639,7 @@ namespace LanScreenShare.Media
     }
 
     [ComImport]
-    [Guid("901d850e-31a8-4b7d-a8d9-06e129f30171")]
+    [Guid("901db4c7-31ce-41a2-85dc-8fa0bf41b8da")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface ICodecAPI
     {

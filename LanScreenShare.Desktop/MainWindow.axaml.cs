@@ -94,7 +94,11 @@ namespace LanScreenShare.Desktop
         // Decodificador de video por hardware (H.264)
         private readonly IVideoDecoderService? _h264Decoder;
         private WriteableBitmap? _viewerWriteableBitmap;
+        private byte[]? _latestDecodedBgra;
+        private int _latestDecodedWidth;
+        private int _latestDecodedHeight;
         private readonly object _bitmapLock = new();
+        private int _isUiRenderPending;
 
         // Estadísticas de flujo en tiempo real y sincronización A/V
         private readonly AudioVideoSyncController _avSyncController = new();
@@ -191,6 +195,7 @@ namespace LanScreenShare.Desktop
             _streamServer.PairingApprovalCallback = (fingerprint, deviceName, sasFormatted) => RequestPairingApprovalAsync(deviceName, fingerprint, sasFormatted);
             _streamServer.ClientConnected += StreamServer_ClientConnected;
             _streamServer.ClientDisconnected += StreamServer_ClientDisconnected;
+            _streamServer.FrameDropped += (s, e) => _screenCaptureService.RequestKeyframe();
 
             _streamClient = new TcpStreamClient();
             _streamClient.FrameReceived += StreamClient_FrameReceived;
@@ -3115,56 +3120,77 @@ namespace LanScreenShare.Desktop
                 {
                     if (_h264Decoder != null && _h264Decoder.TryDecodeFrame(frame.Data, frame.Width, frame.Height, out byte[] bgraPixels, out int decW, out int decH))
                     {
-                        Dispatcher.UIThread.Post(() =>
+                        lock (_bitmapLock)
                         {
-                            try
+                            if (_latestDecodedBgra == null || _latestDecodedBgra.Length != bgraPixels.Length)
                             {
-                                lock (_bitmapLock)
+                                _latestDecodedBgra = new byte[bgraPixels.Length];
+                            }
+                            Buffer.BlockCopy(bgraPixels, 0, _latestDecodedBgra, 0, bgraPixels.Length);
+                            _latestDecodedWidth = decW;
+                            _latestDecodedHeight = decH;
+                        }
+
+                        if (Interlocked.Exchange(ref _isUiRenderPending, 1) == 0)
+                        {
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                Interlocked.Exchange(ref _isUiRenderPending, 0);
+                                try
                                 {
-                                    if (_viewerWriteableBitmap == null ||
-                                        _viewerWriteableBitmap.PixelSize.Width != decW ||
-                                        _viewerWriteableBitmap.PixelSize.Height != decH)
+                                    lock (_bitmapLock)
                                     {
-                                        _viewerWriteableBitmap?.Dispose();
-                                        _viewerWriteableBitmap = new WriteableBitmap(
-                                            new PixelSize(decW, decH),
-                                            new Vector(96, 96),
-                                            PixelFormat.Bgra8888,
-                                            AlphaFormat.Premul);
+                                        if (_latestDecodedBgra == null || _latestDecodedWidth <= 0 || _latestDecodedHeight <= 0)
+                                            return;
+
+                                        if (_viewerWriteableBitmap == null ||
+                                            _viewerWriteableBitmap.PixelSize.Width != _latestDecodedWidth ||
+                                            _viewerWriteableBitmap.PixelSize.Height != _latestDecodedHeight)
+                                        {
+                                            _viewerWriteableBitmap?.Dispose();
+                                            _viewerWriteableBitmap = new WriteableBitmap(
+                                                new PixelSize(_latestDecodedWidth, _latestDecodedHeight),
+                                                new Vector(96, 96),
+                                                PixelFormat.Bgra8888,
+                                                AlphaFormat.Premul);
+                                        }
+
+                                        using (var fb = _viewerWriteableBitmap.Lock())
+                                        {
+                                            int copyLength = Math.Min(_latestDecodedBgra.Length, fb.RowBytes * _latestDecodedHeight);
+                                            Marshal.Copy(_latestDecodedBgra, 0, fb.Address, copyLength);
+                                        }
                                     }
 
-                                    using (var fb = _viewerWriteableBitmap.Lock())
+                                    var screenImage = this.FindControl<Image>("ScreenImage");
+                                    if (screenImage != null)
                                     {
-                                        int copyLength = Math.Min(bgraPixels.Length, fb.RowBytes * decH);
-                                        Marshal.Copy(bgraPixels, 0, fb.Address, copyLength);
+                                        if (screenImage.Source != _viewerWriteableBitmap)
+                                        {
+                                            screenImage.Source = _viewerWriteableBitmap;
+                                        }
+                                        screenImage.InvalidateVisual();
                                     }
-                                }
 
-                                var screenImage = this.FindControl<Image>("ScreenImage");
-                                if (screenImage != null)
+                                    if (_isPopoutActive && _popoutWindow != null && _viewerWriteableBitmap != null)
+                                    {
+                                        _popoutWindow.UpdateFrame(_viewerWriteableBitmap);
+                                    }
+
+                                    var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
+                                    if (placeholder != null && placeholder.IsVisible)
+                                    {
+                                        placeholder.IsVisible = false;
+                                    }
+
+                                    UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName} (H.264 GPU)", "#22C55E");
+                                }
+                                catch (Exception ex)
                                 {
-                                    screenImage.Source = _viewerWriteableBitmap;
-                                    screenImage.InvalidateVisual();
+                                    Console.WriteLine($"[StreamViewer] Error renderizando frame H.264: {ex.Message}");
                                 }
-
-                                if (_isPopoutActive && _popoutWindow != null && _viewerWriteableBitmap != null)
-                                {
-                                    _popoutWindow.UpdateFrame(_viewerWriteableBitmap);
-                                }
-
-                                var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
-                                if (placeholder != null && placeholder.IsVisible)
-                                {
-                                    placeholder.IsVisible = false;
-                                }
-
-                                UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName} (H.264 GPU)", "#22C55E");
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[StreamViewer] Error renderizando frame H.264: {ex.Message}");
-                            }
-                        });
+                            }, DispatcherPriority.Render);
+                        }
                     }
                     // Si es formato H.264, jamás caer a decodificación Bitmap JPEG
                     return;

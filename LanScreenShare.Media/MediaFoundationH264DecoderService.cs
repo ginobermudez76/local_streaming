@@ -10,8 +10,10 @@ namespace LanScreenShare.Media
     public class MediaFoundationH264DecoderService : IVideoDecoderService
     {
         private static readonly Guid CLSID_CMSH264DecoderMFT = new("62ce7e72-4c71-4d20-b15d-452831a87d9d");
-        private static readonly Guid CODECAPI_AVLowLatencyMode = new("9c27891a-ed7a-40e1-88e8-b22727a0ec04");
-        private static readonly Guid IID_ICodecAPI = new("901d850e-31a8-4b7d-a8d9-06e129f30171");
+        private static readonly Guid CODECAPI_AVLowLatencyMode = new("9c27891a-ed7a-40e1-88e8-b22727a024ee");
+        private static readonly Guid MF_MT_MPEG2_PROFILE = new("ad76a80b-2d5c-4e0b-b375-64e520137036");
+        private static readonly Guid IID_ICodecAPI = new("901db4c7-31ce-41a2-85dc-8fa0bf41b8da");
+        private const int eAVEncH264VProfile_Base = 66;
 
         private IMFTransform? _decoder;
         private int _width;
@@ -55,37 +57,14 @@ namespace LanScreenShare.Media
             IntPtr pUnk = Marshal.GetIUnknownForObject(rawObj);
             _decoder = new IMFTransform(pUnk);
 
-            // Desbloquear MFT asíncrono y configurar baja latencia si está disponible
-            try
-            {
-                _decoder.Attributes.Set(CODECAPI_AVLowLatencyMode, 1);
-            }
-            catch { }
+            // Configurar baja latencia estricta en atributos MFT y vía ICodecAPI oficial (cero buffering de DPB)
+            ApplyDecoderLowLatency(_decoder);
 
-            int hrCodecApi = Marshal.QueryInterface(_decoder.NativePointer, in IID_ICodecAPI, out IntPtr pCodecApi);
-            if (hrCodecApi == 0 && pCodecApi != IntPtr.Zero)
-            {
-                try
-                {
-                    var codecApi = (ICodecAPI)Marshal.GetObjectForIUnknown(pCodecApi);
-                    object lowLatency = 1;
-                    codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatency);
-                    Console.WriteLine("[H264Decoder] CODECAPI_AVLowLatencyMode configurado en decodificador.");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[H264Decoder] Error configurando ICodecAPI: {ex.Message}");
-                }
-                finally
-                {
-                    Marshal.Release(pCodecApi);
-                }
-            }
-
-            // 1. Configurar Tipo de Entrada (H.264)
+            // 1. Configurar Tipo de Entrada (H.264 Baseline Profile)
             IMFMediaType inputType = MediaFactory.MFCreateMediaType();
             inputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
             inputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
+            inputType.Set(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
             MediaFactory.MFSetAttributeSize(inputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
             MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
             inputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
@@ -116,6 +95,8 @@ namespace LanScreenShare.Media
                 outputType.Dispose();
             }
 
+            ApplyDecoderLowLatency(_decoder);
+
             try
             {
                 var streamInfo = _decoder.GetOutputStreamInfo(0);
@@ -133,6 +114,39 @@ namespace LanScreenShare.Media
             _decoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
 
             Console.WriteLine($"[H264Decoder] Decodificador H.264 inicializado ({width}x{height} -> NV12 -> BGRA, ProvidesSamples: {_mftProvidesSamples})");
+        }
+
+        private static void ApplyDecoderLowLatency(IMFTransform decoder)
+        {
+            try
+            {
+                decoder.Attributes?.Set(CODECAPI_AVLowLatencyMode, 1);
+            }
+            catch { }
+
+            int hrCodecApi = Marshal.QueryInterface(decoder.NativePointer, in IID_ICodecAPI, out IntPtr pCodecApi);
+            if (hrCodecApi == 0 && pCodecApi != IntPtr.Zero)
+            {
+                try
+                {
+                    var codecApi = (ICodecAPI)Marshal.GetObjectForIUnknown(pCodecApi);
+                    object lowLatencyUint = (uint)1;
+                    try
+                    {
+                        codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatencyUint);
+                    }
+                    catch
+                    {
+                        object lowLatencyBool = true;
+                        try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatencyBool); } catch { }
+                    }
+                }
+                catch { }
+                finally
+                {
+                    Marshal.Release(pCodecApi);
+                }
+            }
         }
 
         public bool TryDecodeFrame(byte[] encodedData, int width, int height, out byte[] bgraPixels, out int decodedWidth, out int decodedHeight)

@@ -190,6 +190,7 @@ namespace LanScreenShare.Tests
             Array.Fill(dummyBgra, (byte)128);
 
             int decodedCount = 0;
+            int firstDecodedFrameIndex = -1;
             for (int i = 0; i < 90; i++)
             {
                 byte[] encoded = encoder.EncodeFrame(dummyBgra, width, height, forceKeyframe: i == 0);
@@ -198,12 +199,15 @@ namespace LanScreenShare.Tests
                     bool ok = decoder.TryDecodeFrame(encoded, width, height, out byte[] bgraPixels, out int decW, out int decH);
                     if (ok)
                     {
+                        if (firstDecodedFrameIndex < 0) firstDecodedFrameIndex = i;
                         decodedCount++;
                     }
                 }
             }
 
-            Assert.IsTrue(decodedCount > 50, $"El decodificador H.264 debió decodificar la mayoría de los fotogramas continuos, pero solo decodificó {decodedCount}.");
+            Console.WriteLine($"[Test] Primer fotograma decodificado en índice: {firstDecodedFrameIndex}, Total decodificados: {decodedCount}/90");
+            Assert.IsTrue(firstDecodedFrameIndex >= 0 && firstDecodedFrameIndex <= 2, $"El primer fotograma debe decodificarse inmediatamente en baja latencia (índice <= 2), pero tardó hasta el índice {firstDecodedFrameIndex}.");
+            Assert.IsTrue(decodedCount > 80, $"El decodificador H.264 debió decodificar casi todos los fotogramas continuos (>80/90), pero solo decodificó {decodedCount}.");
         }
     }
 }

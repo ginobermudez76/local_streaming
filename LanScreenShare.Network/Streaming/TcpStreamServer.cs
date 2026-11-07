@@ -47,6 +47,7 @@ namespace LanScreenShare.Network.Streaming
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
         public event EventHandler<StreamTelemetry>? TelemetryUpdated;
+        public event EventHandler? FrameDropped;
         public Func<string, Task<bool>>? ClientApprovalCallback { get; set; }
         public Func<string, string, string, Task<bool>>? PairingApprovalCallback { get; set; }
 
@@ -396,14 +397,21 @@ namespace LanScreenShare.Network.Streaming
             CurrentTelemetry.HostFps = frame.HostFps;
             CurrentTelemetry.HostFrameTimeMs = frame.HostFrameTimeMs;
 
+            bool anyDropped = false;
             foreach (var kvp in _clients)
             {
                 // Si la cola acotada ya contiene un fotograma en espera, se incrementa el contador de descartes
                 if (kvp.Value.Channel.Reader.Count > 0)
                 {
                     Interlocked.Increment(ref _droppedFramesCount);
+                    anyDropped = true;
                 }
                 kvp.Value.Channel.Writer.TryWrite(frame);
+            }
+
+            if (anyDropped)
+            {
+                FrameDropped?.Invoke(this, EventArgs.Empty);
             }
 
             CurrentTelemetry.DroppedFrames = DroppedFramesCount;

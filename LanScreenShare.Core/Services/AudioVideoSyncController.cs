@@ -18,6 +18,7 @@ namespace LanScreenShare.Core.Services
     public sealed class AudioVideoSyncController
     {
         private long _latestVideoTimestamp;
+        private long _latestVideoReceiveTime;
         private long _latestAudioTimestamp;
         private int _smoothedDriftMs;
         private readonly object _lock = new();
@@ -54,7 +55,9 @@ namespace LanScreenShare.Core.Services
             if (videoTimestamp <= 0)
                 return;
 
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             Interlocked.Exchange(ref _latestVideoTimestamp, videoTimestamp);
+            Interlocked.Exchange(ref _latestVideoReceiveTime, now);
 
             lock (_lock)
             {
@@ -80,20 +83,26 @@ namespace LanScreenShare.Core.Services
                 return AvSyncAction.PlayImmediately;
             }
 
-            int drift = (int)(audioTimestamp - vidTs);
+            // Compensar periodos de pantalla estática donde DXGI no emite fotogramas redundantes
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long vidRecv = Interlocked.Read(ref _latestVideoReceiveTime);
+            long elapsedSinceVideo = vidRecv > 0 ? Math.Max(0, now - vidRecv) : 0;
+            long effectiveVidTs = vidTs + elapsedSinceVideo;
+
+            int drift = (int)(audioTimestamp - effectiveVidTs);
 
             lock (_lock)
             {
                 UpdateSmoothedDrift(drift);
             }
 
-            // Audio con más de 80ms de retraso respecto al video -> Descartar para recuperar sincronía
+            // Audio con más de MaxLagThresholdMs de retraso respecto al video -> Descartar para recuperar sincronía
             if (drift < -MaxLagThresholdMs)
             {
                 return AvSyncAction.DropStaleAudio;
             }
 
-            // Audio con más de 60ms de adelanto -> Indicar micro-demora
+            // Audio con más de MaxLeadThresholdMs de adelanto -> Indicar micro-demora
             if (drift > MaxLeadThresholdMs)
             {
                 delayMs = Math.Min(drift, 100);
@@ -114,6 +123,7 @@ namespace LanScreenShare.Core.Services
         public void Reset()
         {
             Interlocked.Exchange(ref _latestVideoTimestamp, 0);
+            Interlocked.Exchange(ref _latestVideoReceiveTime, 0);
             Interlocked.Exchange(ref _latestAudioTimestamp, 0);
             lock (_lock)
             {
