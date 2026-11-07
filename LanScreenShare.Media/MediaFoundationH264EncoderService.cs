@@ -13,6 +13,9 @@ namespace LanScreenShare.Media
     {
         private static readonly Guid CODECAPI_AVLowLatencyMode = new("9c27891a-ed7a-40e1-88e8-b22727a0ec04");
         private static readonly Guid CODECAPI_AVEncMPVGOPSize = new("95f74a0e-d934-4bc7-a7f1-2130e63f385c");
+        private static readonly Guid CODECAPI_AVEncMPVDefaultBPictureCount = new("8d30f4e6-0a5b-4345-8560-fc4934483c25");
+        private static readonly Guid CODECAPI_AVEncCommonRealTime = new("03879be8-78d8-4ba8-9d0f-4a30e3595246");
+        private static readonly Guid CODECAPI_AVEncCommonQualityVsSpeed = new("983fae74-e879-470b-861c-ac00c340ec88");
         private static readonly Guid IID_IMFMediaEventGenerator = new("2CD0BD52-BCD5-4B89-B62C-EADC0C031E7D");
         private static readonly Guid IID_ICodecAPI = new("901d850e-31a8-4b7d-a8d9-06e129f30171");
 
@@ -122,6 +125,9 @@ namespace LanScreenShare.Media
                         // Transformadores puramente síncronos no requieren ni soportan ASYNC_UNLOCK
                     }
 
+                    // Configurar parámetros de baja latencia antes y después de tipos de medios
+                    ConfigureCodecApi(_encoder, _fps);
+
                     // Configurar tipo de salida (H.264)
                     using (IMFMediaType outputType = MediaFactory.MFCreateMediaType())
                     {
@@ -149,7 +155,7 @@ namespace LanScreenShare.Media
                         _encoder.SetInputType(0, inputType, 0);
                     }
 
-                    // Configurar parámetros de baja latencia vía ICodecAPI si está soportado
+                    // Re-aplicar parámetros de baja latencia vía ICodecAPI si está soportado
                     ConfigureCodecApi(_encoder, _fps);
 
                     // Mensajes de inicio de transmisión
@@ -207,17 +213,47 @@ namespace LanScreenShare.Media
 
         private static void ConfigureCodecApi(IMFTransform encoder, int fps)
         {
+            // 1. Configurar atributos directos de la MFT (Hardware AMD, Intel, NVIDIA)
+            try
+            {
+                if (encoder.Attributes != null)
+                {
+                    encoder.Attributes.Set(CODECAPI_AVLowLatencyMode, 1);
+                    encoder.Attributes.Set(CODECAPI_AVEncMPVDefaultBPictureCount, 0);
+                    encoder.Attributes.Set(CODECAPI_AVEncCommonRealTime, 1);
+                    encoder.Attributes.Set(CODECAPI_AVEncCommonQualityVsSpeed, 100);
+                    encoder.Attributes.Set(CODECAPI_AVEncMPVGOPSize, (uint)fps);
+                }
+            }
+            catch { }
+
+            // 2. Configurar vía ICodecAPI si el transform lo expone
             int hr = Marshal.QueryInterface(encoder.NativePointer, in IID_ICodecAPI, out IntPtr pCodecApi);
             if (hr == 0 && pCodecApi != IntPtr.Zero)
             {
                 try
                 {
                     var codecApi = (ICodecAPI)Marshal.GetObjectForIUnknown(pCodecApi);
-                    object lowLatency = 1;
-                    codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatency);
 
+                    // 1. Modo de ultra baja latencia estricto (sin buffering previo)
+                    object lowLatency = 1;
+                    try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatency); } catch { }
+
+                    // 2. Cero B-Frames (indispensable para streaming en tiempo real sin desfase de reordenamiento)
+                    object bFrames = (uint)0;
+                    try { codecApi.SetValue(CODECAPI_AVEncMPVDefaultBPictureCount, ref bFrames); } catch { }
+
+                    // 3. Modo tiempo real habilitado
+                    object realTime = 1;
+                    try { codecApi.SetValue(CODECAPI_AVEncCommonRealTime, ref realTime); } catch { }
+
+                    // 4. Velocidad máxima (mínima latencia de compresión)
+                    object qualityVsSpeed = (uint)100;
+                    try { codecApi.SetValue(CODECAPI_AVEncCommonQualityVsSpeed, ref qualityVsSpeed); } catch { }
+
+                    // 5. Tamaño de GOP igual al FPS (1 keyframe por segundo máximo)
                     object gopSize = (uint)fps;
-                    codecApi.SetValue(CODECAPI_AVEncMPVGOPSize, ref gopSize);
+                    try { codecApi.SetValue(CODECAPI_AVEncMPVGOPSize, ref gopSize); } catch { }
                 }
                 catch { }
                 finally

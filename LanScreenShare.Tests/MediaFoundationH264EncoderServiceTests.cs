@@ -189,8 +189,8 @@ namespace LanScreenShare.Tests
             byte[] dummyBgra = new byte[width * height * 4];
             Array.Fill(dummyBgra, (byte)128);
 
-            bool decodedAny = false;
-            for (int i = 0; i < 30; i++)
+            int decodedCount = 0;
+            for (int i = 0; i < 90; i++)
             {
                 byte[] encoded = encoder.EncodeFrame(dummyBgra, width, height, forceKeyframe: i == 0);
                 if (encoded.Length > 0)
@@ -198,14 +198,12 @@ namespace LanScreenShare.Tests
                     bool ok = decoder.TryDecodeFrame(encoded, width, height, out byte[] bgraPixels, out int decW, out int decH);
                     if (ok)
                     {
-                        decodedAny = true;
-                        Console.WriteLine($"[Test 540p] Decoded: {decW}x{decH}, bgraPixels: {bgraPixels.Length}");
-                        break;
+                        decodedCount++;
                     }
                 }
             }
 
-            Assert.IsTrue(decodedAny, "El decodificador H.264 debió decodificar exitosamente 960x540.");
+            Assert.IsTrue(decodedCount > 50, $"El decodificador H.264 debió decodificar la mayoría de los fotogramas continuos, pero solo decodificó {decodedCount}.");
         }
     }
 }
