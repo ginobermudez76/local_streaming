@@ -221,7 +221,14 @@ namespace LanScreenShare.Desktop
                 {
                     if (_isHosting && _audioServer.IsRunning)
                     {
-                        await _audioServer.BroadcastAudioAsync(chunk);
+                        try
+                        {
+                            await _audioServer.BroadcastAudioAsync(chunk);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Host] Error emitiendo audio: {ex.Message}");
+                        }
                     }
                 };
 
@@ -229,7 +236,14 @@ namespace LanScreenShare.Desktop
                 {
                     if (_isHosting && _audioServer.IsRunning)
                     {
-                        await _audioServer.BroadcastAudioAsync(chunk);
+                        try
+                        {
+                            await _audioServer.BroadcastAudioAsync(chunk);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Host] Error emitiendo micrófono: {ex.Message}");
+                        }
                     }
                 };
 

@@ -118,9 +118,15 @@ namespace LanScreenShare.Media
 
         private static void ApplyDecoderLowLatency(IMFTransform decoder)
         {
+            if (decoder == null) return;
+
             try
             {
-                decoder.Attributes?.Set(CODECAPI_AVLowLatencyMode, 1);
+                var attrs = decoder.Attributes;
+                if (attrs != null)
+                {
+                    attrs.Set(CODECAPI_AVLowLatencyMode, 1);
+                }
             }
             catch { }
 

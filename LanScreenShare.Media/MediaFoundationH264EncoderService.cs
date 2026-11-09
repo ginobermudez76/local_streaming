@@ -217,19 +217,25 @@ namespace LanScreenShare.Media
 
         private static void ConfigureCodecApi(IMFTransform encoder, int fps)
         {
-            // 1. Configurar atributos directos de la MFT (Hardware AMD, Intel, NVIDIA)
+            if (encoder == null) return;
+
+            // 1. Configurar atributos directos de la MFT si los soporta (Hardware AMD, Intel, NVIDIA)
             try
             {
-                if (encoder.Attributes != null)
+                var attrs = encoder.Attributes;
+                if (attrs != null)
                 {
-                    encoder.Attributes.Set(CODECAPI_AVLowLatencyMode, 1);
-                    encoder.Attributes.Set(CODECAPI_AVEncMPVDefaultBPictureCount, 0);
-                    encoder.Attributes.Set(CODECAPI_AVEncCommonRealTime, 1);
-                    encoder.Attributes.Set(CODECAPI_AVEncCommonQualityVsSpeed, 0);
-                    encoder.Attributes.Set(CODECAPI_AVEncMPVGOPSize, (uint)fps);
+                    try { attrs.Set(CODECAPI_AVLowLatencyMode, 1); } catch { }
+                    try { attrs.Set(CODECAPI_AVEncMPVDefaultBPictureCount, 0); } catch { }
+                    try { attrs.Set(CODECAPI_AVEncCommonRealTime, 1); } catch { }
+                    try { attrs.Set(CODECAPI_AVEncCommonQualityVsSpeed, 0); } catch { }
+                    try { attrs.Set(CODECAPI_AVEncMPVGOPSize, (uint)fps); } catch { }
                 }
             }
-            catch { }
+            catch
+            {
+                // Algunas MFTs por software (como CMSH264EncoderMFT) lanzan E_NOTIMPL / COMException al acceder a Attributes
+            }
 
             // 2. Configurar vía ICodecAPI oficial de Windows SDK (IID: 901db4c7-31ce-41a2-85dc-8fa0bf41b8da)
             int hr = Marshal.QueryInterface(encoder.NativePointer, in IID_ICodecAPI, out IntPtr pCodecApi);

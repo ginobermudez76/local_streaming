@@ -277,7 +277,14 @@ namespace LanScreenShare.Network.Streaming
                 {
                     if (lockTaken)
                     {
-                        clientCtx.SendLock.Release();
+                        try
+                        {
+                            clientCtx.SendLock.Release();
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            // Ignorar si el contexto del cliente fue liberado concurrentemente por desconexión
+                        }
                     }
                 }
             });
