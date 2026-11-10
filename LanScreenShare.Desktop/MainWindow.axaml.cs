@@ -54,6 +54,8 @@ namespace LanScreenShare.Desktop
         private readonly IAudioPlayerService? _micAudioPlayerService;
         private readonly TcpAudioServer _audioServer;
         private readonly TcpAudioClient _audioClient;
+        private volatile bool _isViewerVoiceChatActive;
+        private volatile bool _allowViewerVoiceChat = true;
 
         // Servicios de control remoto (Mouse y Teclado)
         private readonly IInputSimulatorService? _inputSimulatorService;
@@ -245,10 +247,39 @@ namespace LanScreenShare.Desktop
                             Console.WriteLine($"[Host] Error emitiendo micrófono: {ex.Message}");
                         }
                     }
+                    else if (_isViewing && _audioClient.IsConnected && _isViewerVoiceChatActive)
+                    {
+                        try
+                        {
+                            chunk.Source = AudioSourceType.ViewerMicrophone;
+                            await _audioClient.SendAudioChunkAsync(chunk);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Viewer] Error enviando voz del espectador: {ex.Message}");
+                        }
+                    }
+                };
+
+                _audioServer.ClientAudioReceived += (s, chunk) =>
+                {
+                    // El anfitrión recibe el micrófono del espectador (Intercomunicador bidireccional)
+                    // IMPORTANTE: Usar bandera volatile en memoria; jamás acceder a controles de UI desde el hilo de red
+                    if (_allowViewerVoiceChat && _micAudioPlayerService != null)
+                    {
+                        _micAudioPlayerService.PlayChunk(chunk);
+                    }
                 };
 
                 _audioClient.AudioReceived += (s, chunk) =>
                 {
+                    // La voz/micrófono del intercomunicador nunca se descarta por desfase de video
+                    if (chunk.Source == AudioSourceType.Microphone || chunk.Source == AudioSourceType.ViewerMicrophone)
+                    {
+                        _micAudioPlayerService?.PlayChunk(chunk);
+                        return;
+                    }
+
                     var syncAction = _avSyncController.ProcessAudioChunk(chunk.Timestamp, out int delayMs);
                     if (syncAction == AvSyncAction.DropStaleAudio)
                     {
@@ -256,15 +287,7 @@ namespace LanScreenShare.Desktop
                     }
 
                     _streamClient?.UpdateAvDrift(_avSyncController.CurrentDriftMs);
-
-                    if (chunk.Source == AudioSourceType.Microphone)
-                    {
-                        _micAudioPlayerService?.PlayChunk(chunk);
-                    }
-                    else
-                    {
-                        _audioPlayerService?.PlayChunk(chunk);
-                    }
+                    _audioPlayerService?.PlayChunk(chunk);
                 };
             }
 
@@ -471,6 +494,51 @@ namespace LanScreenShare.Desktop
                         {
                             _micCaptureService?.StopCapture();
                             Console.WriteLine("[Host] Captura de micrófono detenida dinámicamente.");
+                        }
+                    }
+                };
+            }
+
+            var viewerVoiceCb = this.FindControl<CheckBox>("ViewerVoiceChatCheckBox");
+            if (viewerVoiceCb != null)
+            {
+                viewerVoiceCb.IsChecked = _appSettings.ViewerVoiceChatEnabled;
+                _allowViewerVoiceChat = _appSettings.ViewerVoiceChatEnabled;
+                viewerVoiceCb.IsCheckedChanged += (s, e) =>
+                {
+                    bool allowed = viewerVoiceCb.IsChecked == true;
+                    _allowViewerVoiceChat = allowed;
+                    _appSettings.ViewerVoiceChatEnabled = allowed;
+                    if (!allowed)
+                    {
+                        _micAudioPlayerService?.ClearBuffer();
+                    }
+                    SaveCurrentSettings();
+                };
+            }
+
+            var viewerVoiceChatToggle = this.FindControl<ToggleButton>("ViewerVoiceChatToggle");
+            if (viewerVoiceChatToggle != null)
+            {
+                viewerVoiceChatToggle.IsChecked = true;
+                _isViewerVoiceChatActive = true;
+                viewerVoiceChatToggle.IsCheckedChanged += (s, e) =>
+                {
+                    bool active = viewerVoiceChatToggle.IsChecked == true;
+                    _isViewerVoiceChatActive = active;
+                    UpdateViewerVoiceChatUI(active);
+
+                    if (_isViewing && _audioClient.IsConnected)
+                    {
+                        if (active)
+                        {
+                            _micCaptureService?.StartCapture();
+                            Console.WriteLine("[Viewer] Micrófono activado hacia el anfitrión.");
+                        }
+                        else
+                        {
+                            _micCaptureService?.StopCapture();
+                            Console.WriteLine("[Viewer] Micrófono silenciado hacia el anfitrión.");
                         }
                     }
                 };
@@ -1264,6 +1332,28 @@ namespace LanScreenShare.Desktop
             if (volumeText != null)
             {
                 volumeText.Text = $"{percent}%";
+            }
+        }
+
+        private void UpdateViewerVoiceChatUI(bool active)
+        {
+            var icon = this.FindControl<PathIcon>("ViewerVoiceChatIcon");
+            var text = this.FindControl<TextBlock>("ViewerVoiceChatText");
+            var toggle = this.FindControl<ToggleButton>("ViewerVoiceChatToggle");
+
+            if (icon != null)
+            {
+                icon.Data = (this.FindResource(active ? "IconMic" : "IconMicOff") as StreamGeometry)!;
+                icon.Foreground = new SolidColorBrush(active ? Color.Parse("#22C55E") : Color.Parse("#EF4444"));
+            }
+            if (text != null)
+            {
+                text.Text = active ? "Hablando" : "Silenciado";
+                text.Foreground = new SolidColorBrush(active ? Color.Parse("#22C55E") : Color.Parse("#94A3B8"));
+            }
+            if (toggle != null)
+            {
+                toggle.IsChecked = active;
             }
         }
 
@@ -2745,28 +2835,25 @@ namespace LanScreenShare.Desktop
                     SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
                     _inputSimulatorService?.SetTargetSource(_currentSource);
 
-                    // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
+                    // 2. Iniciar servidor y captura de audio (Puerto 5002)
                     bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
                     bool shareMic = this.FindControl<CheckBox>("MicShareCheckBox")?.IsChecked ?? false;
-                    if (shareAudio || shareMic)
+                    try
                     {
-                        try
+                        await _audioServer.StartAsync(5002);
+                        if (shareAudio)
                         {
-                            await _audioServer.StartAsync(5002);
-                            if (shareAudio)
-                            {
-                                int targetPid = GetTargetAudioProcessId();
-                                _audioCaptureService?.StartCapture(targetPid);
-                            }
-                            if (shareMic)
-                            {
-                                _micCaptureService?.StartCapture();
-                            }
+                            int targetPid = GetTargetAudioProcessId();
+                            _audioCaptureService?.StartCapture(targetPid);
                         }
-                        catch (Exception ex)
+                        if (shareMic)
                         {
-                            Console.WriteLine($"[Audio] Advertencia iniciando audio: {ex.Message}");
+                            _micCaptureService?.StartCapture();
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Audio] Advertencia iniciando audio: {ex.Message}");
                     }
 
                     // 3. Iniciar servidor de control remoto (Puerto 5003) si está habilitado
@@ -3076,6 +3163,13 @@ namespace LanScreenShare.Desktop
                 }
                 UpdateMicUI();
 
+                var viewerVoicePanel = this.FindControl<Border>("ViewerVoiceChatPanel");
+                if (viewerVoicePanel != null)
+                {
+                    viewerVoicePanel.IsVisible = true;
+                }
+                UpdateViewerVoiceChatUI(_isViewerVoiceChatActive);
+
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
                 if (remoteControlBtn != null)
                 {
@@ -3100,8 +3194,13 @@ namespace LanScreenShare.Desktop
                 {
                     try
                     {
-                        using var audioCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                        using var audioCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                         await _audioClient.ConnectAsync(device.IPAddress, 5002, _sslClientOptions, handshake?.SessionId, handshake?.AudioToken, audioCts.Token);
+                        if (_isViewerVoiceChatActive)
+                        {
+                            _micCaptureService?.StartCapture();
+                            Console.WriteLine("[Viewer] Micrófono de retorno conectado e iniciado.");
+                        }
                         Dispatcher.UIThread.Post(UpdateAudioUI);
                     }
                     catch (Exception ex)
@@ -3287,6 +3386,13 @@ namespace LanScreenShare.Desktop
                 }
                 UpdateMicUI();
 
+                var viewerVoicePanel = this.FindControl<Border>("ViewerVoiceChatPanel");
+                if (viewerVoicePanel != null)
+                {
+                    viewerVoicePanel.IsVisible = true;
+                }
+                UpdateViewerVoiceChatUI(_isViewerVoiceChatActive);
+
                 var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
                 if (remoteControlBtn != null)
                 {
@@ -3333,6 +3439,11 @@ namespace LanScreenShare.Desktop
             try { await _streamClient.DisconnectAsync(); } catch { }
             try { await _audioClient.DisconnectAsync(); } catch { }
             try { await _controlClient.DisconnectAsync(); } catch { }
+
+            if (!_isHosting)
+            {
+                _micCaptureService?.StopCapture();
+            }
 
             _audioPlayerService?.Stop();
             _micAudioPlayerService?.Stop();
@@ -3407,6 +3518,9 @@ namespace LanScreenShare.Desktop
 
             var disconnectBtn = this.FindControl<Button>("DisconnectButton");
             if (disconnectBtn != null) disconnectBtn.IsVisible = false;
+
+            var viewerVoicePanel = this.FindControl<Border>("ViewerVoiceChatPanel");
+            if (viewerVoicePanel != null) viewerVoicePanel.IsVisible = false;
 
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
             if (remoteControlBtn != null)

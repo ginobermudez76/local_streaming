@@ -41,7 +41,7 @@ namespace LanScreenShare.Media
                     }
                     else
                     {
-                        Console.WriteLine("[WASAPI Loopback] Captura de audio de sistema completo iniciada (ProcessLoopback).");
+                        Console.WriteLine("[WASAPI Loopback] Captura de audio de sistema completo iniciada (ProcessLoopback, excluyendo propio proceso).");
                     }
                     return;
                 }

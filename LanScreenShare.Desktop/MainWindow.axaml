@@ -532,6 +532,12 @@
                                             <TextBlock Grid.Column="1" Text="Mi micrófono" FontSize="12.5" Foreground="#E2E8F0" VerticalAlignment="Center"/>
                                             <CheckBox Grid.Column="2" x:Name="MicShareCheckBox" Classes="pillSwitch" IsChecked="True" VerticalAlignment="Center"/>
                                         </Grid>
+
+                                        <Grid ColumnDefinitions="Auto,*,Auto">
+                                            <PathIcon Grid.Column="0" Data="{StaticResource IconHeadphones}" Width="14" Height="14" Foreground="#8B9BB0" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="Voz del espectador (Intercom)" FontSize="12.5" Foreground="#E2E8F0" VerticalAlignment="Center"/>
+                                            <CheckBox Grid.Column="2" x:Name="ViewerVoiceChatCheckBox" Classes="pillSwitch" IsChecked="True" VerticalAlignment="Center" ToolTip.Tip="Permitir escuchar el micrófono que envíe el espectador"/>
+                                        </Grid>
                                     </StackPanel>
                                 </Expander>
 
@@ -1024,6 +1030,31 @@
                                                            Foreground="#94A3B8"
                                                            VerticalAlignment="Center"
                                                            Margin="0,0,4,0"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Viewer Voice Chat / Mic Transmission Control -->
+                                        <Border x:Name="ViewerVoiceChatPanel"
+                                                Background="#1A2230"
+                                                BorderBrush="#263246"
+                                                BorderThickness="1"
+                                                CornerRadius="8"
+                                                Padding="6,2"
+                                                IsVisible="False">
+                                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                <ToggleButton x:Name="ViewerVoiceChatToggle"
+                                                              Background="Transparent"
+                                                              Foreground="#E2E8F0"
+                                                              Padding="4"
+                                                              BorderThickness="0"
+                                                              Cursor="Hand"
+                                                              IsChecked="True"
+                                                              ToolTip.Tip="Activar / Desactivar mi micrófono hacia el anfitrión">
+                                                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                                        <PathIcon x:Name="ViewerVoiceChatIcon" Data="{StaticResource IconMic}" Width="13" Height="13" Foreground="#22C55E"/>
+                                                        <TextBlock x:Name="ViewerVoiceChatText" Text="Hablar" FontSize="11" FontWeight="SemiBold" Foreground="#E2E8F0"/>
+                                                    </StackPanel>
+                                                </ToggleButton>
                                             </StackPanel>
                                         </Border>
                                     </StackPanel>
