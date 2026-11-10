@@ -272,6 +272,13 @@ namespace LanScreenShare.Desktop
 
                 _audioClient.AudioReceived += (s, chunk) =>
                 {
+                    // La voz/micrófono del intercomunicador nunca se descarta por desfase de video
+                    if (chunk.Source == AudioSourceType.Microphone || chunk.Source == AudioSourceType.ViewerMicrophone)
+                    {
+                        _micAudioPlayerService?.PlayChunk(chunk);
+                        return;
+                    }
+
                     var syncAction = _avSyncController.ProcessAudioChunk(chunk.Timestamp, out int delayMs);
                     if (syncAction == AvSyncAction.DropStaleAudio)
                     {
@@ -279,15 +286,7 @@ namespace LanScreenShare.Desktop
                     }
 
                     _streamClient?.UpdateAvDrift(_avSyncController.CurrentDriftMs);
-
-                    if (chunk.Source == AudioSourceType.Microphone || chunk.Source == AudioSourceType.ViewerMicrophone)
-                    {
-                        _micAudioPlayerService?.PlayChunk(chunk);
-                    }
-                    else
-                    {
-                        _audioPlayerService?.PlayChunk(chunk);
-                    }
+                    _audioPlayerService?.PlayChunk(chunk);
                 };
             }
 
@@ -3190,7 +3189,7 @@ namespace LanScreenShare.Desktop
                 {
                     try
                     {
-                        using var audioCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                        using var audioCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                         await _audioClient.ConnectAsync(device.IPAddress, 5002, _sslClientOptions, handshake?.SessionId, handshake?.AudioToken, audioCts.Token);
                         Dispatcher.UIThread.Post(() =>
                         {

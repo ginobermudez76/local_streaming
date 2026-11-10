@@ -27,12 +27,12 @@ namespace LanScreenShare.Core.Services
         /// Umbral máximo en ms para considerar que el audio está retrasado respecto al video.
         /// Audio con desfase mayor a este umbral se descarta para evitar retraso acumulativo.
         /// </summary>
-        public int MaxLagThresholdMs { get; set; } = 80;
+        public int MaxLagThresholdMs { get; set; } = 400;
 
         /// <summary>
         /// Umbral en ms para considerar que el audio va adelantado respecto al video.
         /// </summary>
-        public int MaxLeadThresholdMs { get; set; } = 60;
+        public int MaxLeadThresholdMs { get; set; } = 250;
 
         /// <summary>
         /// Desfase actual en milisegundos: (AudioTimestamp - VideoTimestamp).
@@ -96,9 +96,13 @@ namespace LanScreenShare.Core.Services
                 UpdateSmoothedDrift(drift);
             }
 
-            // Audio con más de MaxLagThresholdMs de retraso respecto al video -> Descartar para recuperar sincronía
+            // Audio con retraso severo (> MaxLagThresholdMs) respecto al video -> Descartar muestra para resincronizar
             if (drift < -MaxLagThresholdMs)
             {
+                lock (_lock)
+                {
+                    _smoothedDriftMs = 0;
+                }
                 return AvSyncAction.DropStaleAudio;
             }
 

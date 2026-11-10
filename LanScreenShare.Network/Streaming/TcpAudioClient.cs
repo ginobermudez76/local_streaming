@@ -38,8 +38,14 @@ namespace LanScreenShare.Network.Streaming
             if (IsConnected)
                 await DisconnectAsync();
 
-            _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var token = _cts.Token;
+            _cts?.Cancel();
+            _cts?.Dispose();
+            _cts = new CancellationTokenSource();
+            var sessionToken = _cts.Token;
+
+            // El token de cancelación de ConnectAsync solo aplica al handshake inicial de conexión
+            using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(sessionToken, cancellationToken);
+            var handshakeToken = handshakeCts.Token;
 
             StatusChanged?.Invoke(this, $"Conectando audio a {hostIp}:{port}...");
 
@@ -48,14 +54,14 @@ namespace LanScreenShare.Network.Streaming
             _client.ReceiveBufferSize = 64 * 1024;
             _client.SendBufferSize = 64 * 1024;
 
-            await _client.ConnectAsync(hostIp, port, token);
+            await _client.ConnectAsync(hostIp, port, handshakeToken);
             Stream stream = _client.GetStream();
 
             if (sslOptions != null)
             {
                 var sslStream = new SslStream(stream, false);
                 using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(handshakeToken, authCts.Token);
 
                 await sslStream.AuthenticateAsClientAsync(sslOptions, linkedCts.Token);
 
@@ -87,10 +93,10 @@ namespace LanScreenShare.Network.Streaming
 
                 try
                 {
-                    while (!token.IsCancellationRequested && _client.Connected)
+                    while (!sessionToken.IsCancellationRequested && _client.Connected)
                     {
                         // 1. Leer encabezado de 28 bytes
-                        await ReadExactBytesAsync(stream, headerBuffer, 0, 28, token);
+                        await ReadExactBytesAsync(stream, headerBuffer, 0, 28, sessionToken);
 
                         uint magic;
                         int dataLength;
@@ -116,13 +122,13 @@ namespace LanScreenShare.Network.Streaming
 
                         if (magic != AudioHeaderMagic || dataLength <= 0 || dataLength > 10 * 1024 * 1024)
                         {
-                            Console.WriteLine($"[AudioClient] Encabezado de audio inválido (Magic: {magic:X}, Length: {dataLength})");
-                            continue;
+                            Console.WriteLine($"[AudioClient] Encabezado de audio desincronizado (Magic: {magic:X}, Length: {dataLength})");
+                            break;
                         }
 
                         // 2. Leer fragmento de audio PCM
                         byte[] audioBuffer = new byte[dataLength];
-                        await ReadExactBytesAsync(stream, audioBuffer, 0, dataLength, token);
+                        await ReadExactBytesAsync(stream, audioBuffer, 0, dataLength, sessionToken);
 
                         Interlocked.Exchange(ref _latestAudioTimestamp, timestamp);
 
@@ -152,7 +158,7 @@ namespace LanScreenShare.Network.Streaming
                 {
                     await DisconnectAsync();
                 }
-            }, token);
+            }, sessionToken);
         }
 
         public async Task SendAudioChunkAsync(CapturedAudioChunk chunk)

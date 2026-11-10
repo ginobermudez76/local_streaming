@@ -259,9 +259,13 @@ namespace LanScreenShare.Network.Streaming
             {
                 // Cancelación normal
             }
-            catch
+            catch (EndOfStreamException)
             {
-                // Conexión cerrada
+                Console.WriteLine($"[AudioServer] Cliente {clientId} cerró la conexión de audio.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AudioServer] Conexión de audio con cliente {clientId} finalizada: {ex.Message}");
             }
             finally
             {

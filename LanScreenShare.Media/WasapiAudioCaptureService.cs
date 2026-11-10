@@ -27,37 +27,31 @@ namespace LanScreenShare.Media
             StopCapture();
             _currentProcessId = processId;
 
-            try
-            {
-                var procCap = new ProcessLoopbackAudioCapture();
-                procCap.AudioCaptured += (s, chunk) => AudioCaptured?.Invoke(this, chunk);
-                bool started = procCap.StartAsync(processId).GetAwaiter().GetResult();
-                if (started)
-                {
-                    _processCapture = procCap;
-                    if (processId > 0)
-                    {
-                        Console.WriteLine($"[WASAPI Loopback] Captura de audio aislada para PID {processId} iniciada.");
-                    }
-                    else
-                    {
-                        Console.WriteLine("[WASAPI Loopback] Captura de audio de sistema completo iniciada (ProcessLoopback).");
-                    }
-                    return;
-                }
-                procCap.Dispose();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[WASAPI Loopback] Fallo ProcessLoopback (PID {processId}), recurriendo a WasapiLoopbackCapture: {ex.Message}");
-            }
-
+            // 1. Si se solicita capturar una ventana/proceso específico (PID > 0), intentar aislamiento por proceso
             if (processId > 0)
             {
-                Console.WriteLine($"[WASAPI Loopback] No se pudo iniciar la captura aislada para PID {processId}; se omite fallback global para no mezclar audio del escritorio.");
-                return;
+                try
+                {
+                    var procCap = new ProcessLoopbackAudioCapture();
+                    procCap.AudioCaptured += (s, chunk) => AudioCaptured?.Invoke(this, chunk);
+                    bool started = procCap.StartAsync(processId).GetAwaiter().GetResult();
+                    if (started)
+                    {
+                        _processCapture = procCap;
+                        Console.WriteLine($"[WASAPI Loopback] Captura de audio aislada para PID {processId} iniciada exitosamente.");
+                        return;
+                    }
+                    procCap.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[WASAPI Loopback] Fallo ProcessLoopback (PID {processId}): {ex.Message}. Recurriendo a captura global.");
+                }
+
+                Console.WriteLine($"[WASAPI Loopback] Aislamiento PID {processId} no disponible. Activando captura de audio de escritorio como fallback.");
             }
 
+            // 2. Captura de audio de escritorio (sistema completo / fallback confiable para PID 0)
             try
             {
                 Task.Run(() =>
