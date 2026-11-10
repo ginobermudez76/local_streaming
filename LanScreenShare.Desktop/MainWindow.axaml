@@ -562,6 +562,13 @@
                                             <CheckBox Grid.Column="2" x:Name="AllowRemoteControlCheckBox" Classes="pillSwitch" IsChecked="True" VerticalAlignment="Center"/>
                                         </Grid>
 
+                                        <!-- Clipboard Sync Toggle -->
+                                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,2">
+                                            <PathIcon Grid.Column="0" Data="{StaticResource IconCopy}" Width="14" Height="14" Foreground="#8B9BB0" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="Sincronizar portapapeles" FontSize="12.5" Foreground="#E2E8F0" VerticalAlignment="Center"/>
+                                            <CheckBox Grid.Column="2" x:Name="ClipboardSyncCheckBox" Classes="pillSwitch" IsChecked="True" VerticalAlignment="Center" ToolTip.Tip="Sincronizar texto copiado entre anfitrión y espectador cuando el control remoto está activo"/>
+                                        </Grid>
+
                                         <!-- Stream Access Approval Mode -->
                                         <StackPanel Spacing="4">
                                             <TextBlock Text="Acceso a la transmisión" FontSize="11" Foreground="#7C8B9E"/>

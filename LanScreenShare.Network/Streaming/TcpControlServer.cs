@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using LanScreenShare.Core.Interfaces;
@@ -23,10 +24,12 @@ namespace LanScreenShare.Network.Streaming
 
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
-        private readonly ConcurrentDictionary<string, (Stream Stream, TcpClient Client, string? SessionId)> _clients = new();
+        private readonly ConcurrentDictionary<string, (Stream Stream, TcpClient Client, string? SessionId, SemaphoreSlim SendLock)> _clients = new();
+        private ulong _serverSequenceNumber;
         private bool _disposed;
 
         public event EventHandler<RemoteInputMessage>? InputReceived;
+        public event EventHandler<string>? ClipboardTextReceived;
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
         public Func<string, Task<bool>>? ClientApprovalCallback { get; set; }
@@ -180,7 +183,7 @@ namespace LanScreenShare.Network.Streaming
                                     }
                                 }
 
-                                _clients[clientId] = (stream, client, assignedSessionId);
+                                _clients[clientId] = (stream, client, assignedSessionId, new SemaphoreSlim(1, 1));
                                 Console.WriteLine($"[ControlServer] Controlador LSI2 conectado: {clientId}");
                                 ClientConnected?.Invoke(this, clientId);
 
@@ -239,6 +242,51 @@ namespace LanScreenShare.Network.Streaming
 
                     if (input == null) continue;
 
+                    if (input.Type == InputEventType.ClipboardText)
+                    {
+                        int payloadLength = input.KeyCode;
+                        if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
+                        {
+                            Console.WriteLine($"[ControlServer] Longitud de portapapeles inválida ({payloadLength}) de {clientId}. Desconectando.");
+                            break;
+                        }
+
+                        byte[] textBytes = new byte[payloadLength];
+                        await ReadExactBytesAsync(stream, textBytes, 0, payloadLength, token);
+
+                        if (_sessionAuthority != null && sessionId != null)
+                        {
+                            string? activeCtrl = _sessionAuthority.ActiveControllerSessionId;
+                            if (activeCtrl != sessionId)
+                            {
+                                continue;
+                            }
+                        }
+
+                        string text = Encoding.UTF8.GetString(textBytes);
+                        input.ClipboardText = text;
+
+                        try
+                        {
+                            InputReceived?.Invoke(this, input);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[ControlServer] Error en InputReceived (portapapeles): {ex.Message}");
+                        }
+
+                        try
+                        {
+                            ClipboardTextReceived?.Invoke(this, text);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[ControlServer] Error en ClipboardTextReceived: {ex.Message}");
+                        }
+
+                        continue;
+                    }
+
                     // Si hay SessionAuthority configurada, comprobar que la sesión es el controlador activo
                     if (_sessionAuthority != null && sessionId != null)
                     {
@@ -250,8 +298,23 @@ namespace LanScreenShare.Network.Streaming
                         }
                     }
 
-                    InputReceived?.Invoke(this, input);
-                    _inputSimulator?.SimulateInput(input);
+                    try
+                    {
+                        InputReceived?.Invoke(this, input);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ControlServer] Error en InputReceived: {ex.Message}");
+                    }
+
+                    try
+                    {
+                        _inputSimulator?.SimulateInput(input);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ControlServer] Error simulando entrada: {ex.Message}");
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -265,6 +328,62 @@ namespace LanScreenShare.Network.Streaming
             finally
             {
                 RemoveClient(clientId);
+            }
+        }
+
+        public async Task BroadcastClipboardTextAsync(string text)
+        {
+            if (!IsRunning || _clients.IsEmpty || string.IsNullOrEmpty(text))
+                return;
+
+            byte[] utf8Bytes = Encoding.UTF8.GetBytes(text);
+            if (utf8Bytes.Length == 0 || utf8Bytes.Length > Lsi2ControlPacket.MaxClipboardPayloadBytes)
+                return;
+
+            byte[] packet = new byte[Lsi2ControlPacket.PacketSize + utf8Bytes.Length];
+            ulong seq = Interlocked.Increment(ref _serverSequenceNumber);
+            ulong ts = (ulong)Stopwatch.GetTimestamp();
+
+            var msg = new RemoteInputMessage
+            {
+                Type = InputEventType.ClipboardText,
+                KeyCode = utf8Bytes.Length,
+                ClipboardText = text
+            };
+
+            Lsi2ControlPacket.WritePacket(packet.AsSpan(0, Lsi2ControlPacket.PacketSize), seq, ts, msg);
+            Buffer.BlockCopy(utf8Bytes, 0, packet, Lsi2ControlPacket.PacketSize, utf8Bytes.Length);
+
+            foreach (var kvp in _clients)
+            {
+                var clientId = kvp.Key;
+                var ctx = kvp.Value;
+
+                if (_sessionAuthority != null && ctx.SessionId != null)
+                {
+                    if (_sessionAuthority.ActiveControllerSessionId != ctx.SessionId)
+                        continue;
+                }
+
+                try
+                {
+                    await ctx.SendLock.WaitAsync();
+                    try
+                    {
+                        if (ctx.Client.Connected)
+                        {
+                            await ctx.Stream.WriteAsync(packet.AsMemory(0, packet.Length));
+                        }
+                    }
+                    finally
+                    {
+                        ctx.SendLock.Release();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ControlServer] Error enviando portapapeles a {clientId}: {ex.Message}");
+                }
             }
         }
 

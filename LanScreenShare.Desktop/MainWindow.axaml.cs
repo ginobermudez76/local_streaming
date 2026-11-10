@@ -12,6 +12,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -57,12 +58,17 @@ namespace LanScreenShare.Desktop
         private volatile bool _isViewerVoiceChatActive;
         private volatile bool _allowViewerVoiceChat = true;
 
-        // Servicios de control remoto (Mouse y Teclado)
+        // Servicios de control remoto (Mouse, Teclado y Portapapeles)
         private readonly IInputSimulatorService? _inputSimulatorService;
         private readonly TcpControlServer _controlServer;
         private readonly TcpControlClient _controlClient;
         private bool _remoteControlEnabled;
         private volatile bool _allowRemoteControl = true;
+        private volatile bool _allowClipboardSync = true;
+        private readonly DispatcherTimer _clipboardSyncTimer;
+        private string? _lastLocalClipboardText;
+        private string? _lastNetworkClipboardText;
+        private bool _isPollingClipboard;
         private bool _isGameMode;
         private bool _isRecenteringMouse;
         private DispatcherTimer? _gameModeBannerTimer;
@@ -340,6 +346,43 @@ namespace LanScreenShare.Desktop
                     // _inputSimulatorService?.SimulateInput(input);
                 }
             };
+
+            var clipboardSyncCb = this.FindControl<CheckBox>("ClipboardSyncCheckBox");
+            if (clipboardSyncCb != null)
+            {
+                clipboardSyncCb.IsChecked = _appSettings.ClipboardSyncEnabled;
+                _allowClipboardSync = _appSettings.ClipboardSyncEnabled;
+                clipboardSyncCb.IsCheckedChanged += (s, e) =>
+                {
+                    bool enabled = clipboardSyncCb.IsChecked == true;
+                    _allowClipboardSync = enabled;
+                    _appSettings.ClipboardSyncEnabled = enabled;
+                    SaveCurrentSettings();
+                };
+            }
+
+            _controlServer.ClipboardTextReceived += (s, text) =>
+            {
+                if (_isHosting && _allowRemoteControl && _allowClipboardSync)
+                {
+                    ApplyRemoteClipboardText(text);
+                }
+            };
+
+            _controlClient.ClipboardTextReceived += (s, text) =>
+            {
+                if (_isViewing && _remoteControlEnabled && _allowClipboardSync)
+                {
+                    ApplyRemoteClipboardText(text);
+                }
+            };
+
+            _clipboardSyncTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(750)
+            };
+            _clipboardSyncTimer.Tick += ClipboardSyncTimer_Tick;
+            _clipboardSyncTimer.Start();
 
             var devicesList = this.FindControl<ListBox>("DevicesList");
             if (devicesList != null)
@@ -2600,7 +2643,9 @@ namespace LanScreenShare.Desktop
 
                 _appSettings.ShareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
                 _appSettings.ShareMicrophone = this.FindControl<CheckBox>("MicShareCheckBox")?.IsChecked ?? false;
+                _appSettings.ViewerVoiceChatEnabled = this.FindControl<CheckBox>("ViewerVoiceChatCheckBox")?.IsChecked ?? true;
                 _appSettings.AllowRemoteControl = this.FindControl<CheckBox>("AllowRemoteControlCheckBox")?.IsChecked ?? true;
+                _appSettings.ClipboardSyncEnabled = this.FindControl<CheckBox>("ClipboardSyncCheckBox")?.IsChecked ?? true;
 
                 var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
                 if (streamAccessCombo?.SelectedItem is ComboBoxItem streamItem && streamItem.Tag is string streamTag)
@@ -3624,6 +3669,90 @@ namespace LanScreenShare.Desktop
 
         #endregion
 
+        private void ApplyRemoteClipboardText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return;
+
+            Dispatcher.UIThread.Post(async () =>
+            {
+                try
+                {
+                    if (text == _lastLocalClipboardText)
+                        return;
+
+                    _lastNetworkClipboardText = text;
+                    _lastLocalClipboardText = text;
+
+                    var topLevel = TopLevel.GetTopLevel(this);
+                    if (topLevel?.Clipboard != null)
+                    {
+                        await topLevel.Clipboard.SetTextAsync(text);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ClipboardSync] Error aplicando texto remoto al portapapeles: {ex.Message}");
+                }
+            });
+        }
+
+        private async void ClipboardSyncTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_isPollingClipboard || !_allowClipboardSync)
+                return;
+
+            bool canSyncAsHost = _isHosting && _allowRemoteControl && _controlServer.IsRunning;
+            bool canSyncAsViewer = _isViewing && _remoteControlEnabled && _controlClient.IsConnected;
+
+            if (!canSyncAsHost && !canSyncAsViewer)
+                return;
+
+            _isPollingClipboard = true;
+            try
+            {
+                var topLevel = TopLevel.GetTopLevel(this);
+                if (topLevel?.Clipboard == null)
+                    return;
+
+                string? currentText = await topLevel.Clipboard.TryGetTextAsync();
+                if (string.IsNullOrEmpty(currentText))
+                    return;
+
+                if (_lastLocalClipboardText == null)
+                {
+                    _lastLocalClipboardText = currentText;
+                    return;
+                }
+
+                if (currentText == _lastLocalClipboardText || currentText == _lastNetworkClipboardText)
+                {
+                    _lastLocalClipboardText = currentText;
+                    return;
+                }
+
+                _lastLocalClipboardText = currentText;
+                _lastNetworkClipboardText = null;
+
+                if (canSyncAsHost)
+                {
+                    await _controlServer.BroadcastClipboardTextAsync(currentText);
+                }
+                else if (canSyncAsViewer)
+                {
+                    await _controlClient.SendClipboardTextAsync(currentText);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ClipboardSync] Error leyendo/sincronizando portapapeles: {ex.Message}");
+            }
+            finally
+            {
+                _isPollingClipboard = false;
+            }
+        }
+
         private void MainWindow_Closing(object? sender, WindowClosingEventArgs e)
         {
             SaveCurrentSettings();
@@ -3632,6 +3761,7 @@ namespace LanScreenShare.Desktop
             StopDeviceSearch();
             _headerAutoHideTimer.Stop();
             _metricsTimer.Stop();
+            _clipboardSyncTimer.Stop();
 
             _h264Decoder?.Dispose();
             _viewerWriteableBitmap?.Dispose();

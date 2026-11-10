@@ -102,8 +102,12 @@ namespace LanScreenShare.Tests
             await client.ConnectAsync("127.0.0.1", port);
             Assert.IsTrue(client.IsConnected);
 
-            // Breve espera para que el servidor registre el cliente
-            await Task.Delay(100);
+            // Esperar determinísticamente a que el servidor registre el cliente
+            for (int i = 0; i < 40 && server.ConnectedClientsCount == 0; i++)
+            {
+                await Task.Delay(25);
+            }
+            Assert.AreEqual(1, server.ConnectedClientsCount, "El servidor de audio debió registrar al cliente.");
 
             byte[] dummyAudio = new byte[256];
             Array.Fill(dummyAudio, (byte)0x33);
