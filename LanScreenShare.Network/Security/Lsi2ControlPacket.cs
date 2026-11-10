@@ -69,10 +69,13 @@ public sealed class Lsi2ControlPacket
         // Offset 22..23: WheelDelta (2B)
         BinaryPrimitives.WriteInt16BigEndian(destination.Slice(22, 2), input.WheelDelta);
 
-        // Offset 24..27: KeyCode / Longitud de payload de portapapeles / Coordenadas empaquetadas (4B)
+        // Offset 24..27: KeyCode / Longitud de payload / Índice de monitor / Coordenadas empaquetadas (4B)
         if (input.Type == InputEventType.KeyDown ||
             input.Type == InputEventType.KeyUp ||
-            input.Type == InputEventType.ClipboardText)
+            input.Type == InputEventType.ClipboardText ||
+            input.Type == InputEventType.SwitchMonitor ||
+            input.Type == InputEventType.MonitorInfo ||
+            input.Type == InputEventType.SelectSource)
         {
             BinaryPrimitives.WriteInt32BigEndian(destination.Slice(24, 4), input.KeyCode);
         }
@@ -156,7 +159,10 @@ public sealed class Lsi2ControlPacket
 
         if (eventType == InputEventType.KeyDown ||
             eventType == InputEventType.KeyUp ||
-            eventType == InputEventType.ClipboardText)
+            eventType == InputEventType.ClipboardText ||
+            eventType == InputEventType.SwitchMonitor ||
+            eventType == InputEventType.MonitorInfo ||
+            eventType == InputEventType.SelectSource)
         {
             keyCode = BinaryPrimitives.ReadInt32BigEndian(source.Slice(24, 4));
         }

@@ -34,7 +34,7 @@ public class StreamTerminationTests
     [TestMethod]
     public async Task WhenHostStops_ClientReceivesTerminationStatus()
     {
-        int port = GetAvailablePort();
+        int port = 15301;
         using var server = new TcpStreamServer();
         using var client = new TcpStreamClient();
 

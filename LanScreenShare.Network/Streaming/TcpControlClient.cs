@@ -23,6 +23,7 @@ namespace LanScreenShare.Network.Streaming
 
         public event EventHandler<string>? StatusChanged;
         public event EventHandler<string>? ClipboardTextReceived;
+        public event EventHandler<string>? MonitorInfoReceived;
         public bool IsConnected => _client != null && _client.Connected && _stream != null;
 
         public async Task ConnectAsync(
@@ -52,7 +53,7 @@ namespace LanScreenShare.Network.Streaming
             if (sslOptions != null)
             {
                 var sslStream = new SslStream(stream, false);
-                using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(handshakeToken, authCts.Token);
 
                 await sslStream.AuthenticateAsClientAsync(sslOptions, linkedCts.Token);
@@ -105,12 +106,13 @@ namespace LanScreenShare.Network.Streaming
                     if (message == null)
                         continue;
 
-                    if (message.Type == InputEventType.ClipboardText)
+                    if (message.Type == InputEventType.ClipboardText ||
+                        message.Type == InputEventType.MonitorInfo)
                     {
                         int payloadLength = message.KeyCode;
                         if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
                         {
-                            Console.WriteLine($"[ControlClient] Longitud de portapapeles inválida desde anfitrión: {payloadLength}");
+                            Console.WriteLine($"[ControlClient] Longitud de payload inválida desde anfitrión: {payloadLength}");
                             break;
                         }
 
@@ -120,11 +122,18 @@ namespace LanScreenShare.Network.Streaming
 
                         try
                         {
-                            ClipboardTextReceived?.Invoke(this, text);
+                            if (message.Type == InputEventType.ClipboardText)
+                            {
+                                ClipboardTextReceived?.Invoke(this, text);
+                            }
+                            else
+                            {
+                                MonitorInfoReceived?.Invoke(this, text);
+                            }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[ControlClient] Error en ClipboardTextReceived: {ex.Message}");
+                            Console.WriteLine($"[ControlClient] Error procesando evento {message.Type}: {ex.Message}");
                         }
                     }
                 }
@@ -182,6 +191,66 @@ namespace LanScreenShare.Network.Streaming
             catch (Exception ex)
             {
                 Console.WriteLine($"[ControlClient] Error enviando entrada LSI2: {ex.Message}");
+                await DisconnectAsync();
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        public Task SendSwitchMonitorAsync(int targetIndex = -1)
+        {
+            return SendInputAsync(new RemoteInputMessage
+            {
+                Type = InputEventType.SwitchMonitor,
+                KeyCode = targetIndex
+            });
+        }
+
+        public Task RequestSourceCatalogAsync()
+        {
+            return SendInputAsync(new RemoteInputMessage
+            {
+                Type = InputEventType.SwitchMonitor,
+                KeyCode = -2
+            });
+        }
+
+        public async Task SendSelectSourceAsync(string sourceId)
+        {
+            if (!IsConnected || _stream == null || string.IsNullOrEmpty(sourceId))
+                return;
+
+            byte[] utf8Bytes = Encoding.UTF8.GetBytes(sourceId);
+            if (utf8Bytes.Length == 0 || utf8Bytes.Length > Lsi2ControlPacket.MaxClipboardPayloadBytes)
+                return;
+
+            byte[] packet = new byte[Lsi2ControlPacket.PacketSize + utf8Bytes.Length];
+            ulong seq = Interlocked.Increment(ref _sequenceNumber);
+            ulong ts = (ulong)Stopwatch.GetTimestamp();
+
+            var input = new RemoteInputMessage
+            {
+                Type = InputEventType.SelectSource,
+                KeyCode = utf8Bytes.Length,
+                ClipboardText = sourceId
+            };
+
+            Lsi2ControlPacket.WritePacket(packet.AsSpan(0, Lsi2ControlPacket.PacketSize), seq, ts, input);
+            Buffer.BlockCopy(utf8Bytes, 0, packet, Lsi2ControlPacket.PacketSize, utf8Bytes.Length);
+
+            await _sendLock.WaitAsync();
+            try
+            {
+                if (IsConnected && _stream != null)
+                {
+                    await _stream.WriteAsync(packet.AsMemory(0, packet.Length));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlClient] Error enviando selección de fuente LSI2: {ex.Message}");
                 await DisconnectAsync();
             }
             finally

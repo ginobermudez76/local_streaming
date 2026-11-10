@@ -18,6 +18,8 @@ namespace LanScreenShare.Desktop
         public event Action? DisconnectRequested;
         public event Action<bool>? RemoteControlToggled;
         public event Action? GameModeToggled;
+        public event Action? SwitchMonitorRequested;
+        public event Action? CycleMonitorRequested;
         public event Action? MuteToggled;
         public event Action<float>? VolumeChanged;
         public event Action? MicMuteToggled;
@@ -116,6 +118,12 @@ namespace LanScreenShare.Desktop
                 {
                     GameModeToggled?.Invoke();
                 };
+            }
+
+            var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
+            if (switchMonitorBtn != null)
+            {
+                switchMonitorBtn.Click += (s, e) => SwitchMonitorRequested?.Invoke();
             }
 
             var muteBtn = this.FindControl<Button>("AudioMuteButton");
@@ -242,9 +250,22 @@ namespace LanScreenShare.Desktop
         {
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
             var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
+            var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
             if (remoteControlBtn != null) remoteControlBtn.IsVisible = allowed;
             if (gameModeBtn != null) gameModeBtn.IsVisible = allowed;
+            if (switchMonitorBtn != null) switchMonitorBtn.IsVisible = allowed;
         }
+
+        public void SetActiveMonitorLabel(string label)
+        {
+            var text = this.FindControl<TextBlock>("SwitchMonitorButtonText");
+            if (text != null)
+            {
+                text.Text = string.IsNullOrWhiteSpace(label) ? "Pantalla" : label;
+            }
+        }
+
+        public Button? GetSwitchMonitorButton() => this.FindControl<Button>("SwitchMonitorButton");
 
         public void SetRemoteControlState(bool enabled)
         {
@@ -749,6 +770,15 @@ namespace LanScreenShare.Desktop
                 e.KeyModifiers.HasFlag(KeyModifiers.Alt))
             {
                 GameModeToggled?.Invoke();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.M &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            {
+                CycleMonitorRequested?.Invoke();
                 e.Handled = true;
                 return;
             }

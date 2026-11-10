@@ -22,6 +22,7 @@ using Avalonia.VisualTree;
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using LanScreenShare.Core.Security;
 using LanScreenShare.Network.Security;
 using LanScreenShare.Core.Interfaces;
@@ -69,6 +70,9 @@ namespace LanScreenShare.Desktop
         private string? _lastLocalClipboardText;
         private string? _lastNetworkClipboardText;
         private bool _isPollingClipboard;
+        private string _currentRemoteMonitorLabel = "Pantalla";
+        private RemoteMonitorCatalogDto? _remoteMonitorCatalog;
+        private ContextMenu? _remoteSourceMenu;
         private bool _isGameMode;
         private bool _isRecenteringMouse;
         private DispatcherTimer? _gameModeBannerTimer;
@@ -377,6 +381,46 @@ namespace LanScreenShare.Desktop
                 }
             };
 
+            _controlServer.ClientConnected += (s, clientId) =>
+            {
+                if (_isHosting && _allowRemoteControl)
+                {
+                    BroadcastHostSourceCatalog();
+                }
+            };
+
+            _controlServer.SourceCatalogRequested += (s, e) =>
+            {
+                if (_isHosting && _allowRemoteControl)
+                {
+                    BroadcastHostSourceCatalog();
+                }
+            };
+
+            _controlServer.SwitchMonitorRequested += (s, requestedIndex) =>
+            {
+                if (_isHosting && _allowRemoteControl)
+                {
+                    HandleRemoteMonitorSwitchOnHost(requestedIndex);
+                }
+            };
+
+            _controlServer.SelectSourceRequested += (s, sourceId) =>
+            {
+                if (_isHosting && _allowRemoteControl)
+                {
+                    HandleRemoteSelectSourceOnHost(sourceId);
+                }
+            };
+
+            _controlClient.MonitorInfoReceived += (s, monitorLabel) =>
+            {
+                if (_isViewing)
+                {
+                    ApplyRemoteMonitorInfo(monitorLabel);
+                }
+            };
+
             _clipboardSyncTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromMilliseconds(750)
@@ -632,6 +676,12 @@ namespace LanScreenShare.Desktop
                         ToggleGameMode();
                     }
                 };
+            }
+
+            var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
+            if (switchMonitorBtn != null)
+            {
+                switchMonitorBtn.Click += async (s, e) => await OpenRemoteSourceMenuAsync(switchMonitorBtn);
             }
 
             this.KeyDown += MainWindow_KeyDown;
@@ -1069,6 +1119,15 @@ namespace LanScreenShare.Desktop
                 return;
             }
 
+            if (e.Key == Key.M &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            {
+                _ = RequestRemoteMonitorSwitchAsync();
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.F11)
             {
                 ToggleFullscreen();
@@ -1421,6 +1480,7 @@ namespace LanScreenShare.Desktop
             _popoutWindow.SetRemoteControlAllowed(_currentDeviceAllowsRemoteControl);
             _popoutWindow.SetRemoteControlState(_remoteControlEnabled);
             _popoutWindow.SetGameModeState(_isGameMode);
+            _popoutWindow.SetActiveMonitorLabel(_currentRemoteMonitorLabel);
             _popoutWindow.SetVolume(_audioPlayerService?.Volume ?? 1.0f, _audioPlayerService?.IsMuted ?? false);
             _popoutWindow.SetMicVolume(_micAudioPlayerService?.Volume ?? 1.0f, _micAudioPlayerService?.IsMuted ?? false);
             _popoutWindow.SetStretchMode(_currentStretchMode);
@@ -1476,6 +1536,16 @@ namespace LanScreenShare.Desktop
             {
                 ToggleGameMode();
                 _popoutWindow?.SetGameModeState(_isGameMode);
+            };
+
+            _popoutWindow.SwitchMonitorRequested += async () =>
+            {
+                await OpenRemoteSourceMenuAsync(_popoutWindow?.GetSwitchMonitorButton());
+            };
+
+            _popoutWindow.CycleMonitorRequested += async () =>
+            {
+                await RequestRemoteMonitorSwitchAsync();
             };
 
             _popoutWindow.MuteToggled += () =>
@@ -1662,7 +1732,16 @@ namespace LanScreenShare.Desktop
                 var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
                 await _controlClient.ConnectAsync(_currentConnectedDeviceIp, 5003, _sslClientOptions, handshake?.SessionId, handshake?.ControlToken);
                 Console.WriteLine($"[ControlViewer] Conectado a canal de control remoto en {_currentConnectedDeviceIp}:5003");
-                UpdateStatus($"Conectado a {_currentConnectedDeviceName} â€¢ Control remoto activo", "#22C55E");
+                _remoteControlEnabled = true;
+                var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
+                if (remoteControlBtn != null && remoteControlBtn.IsChecked != true)
+                {
+                    remoteControlBtn.IsChecked = true;
+                    remoteControlBtn.Background = new SolidColorBrush(Color.Parse("#2563EB"));
+                }
+                _popoutWindow?.SetRemoteControlState(true);
+                _ = _controlClient.RequestSourceCatalogAsync();
+                UpdateStatus($"Conectado a {_currentConnectedDeviceName} • Control remoto activo", "#22C55E");
                 return true;
             }
             catch (Exception ex)
@@ -2008,6 +2087,15 @@ namespace LanScreenShare.Desktop
                 return;
             }
 
+            if (e.Key == Key.M &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            {
+                _ = RequestRemoteMonitorSwitchAsync();
+                e.Handled = true;
+                return;
+            }
+
             if (_remoteControlEnabled && _controlClient.IsConnected)
             {
                 int vk = ConvertAvaloniaKeyToWin32Vk(e.Key);
@@ -2025,7 +2113,7 @@ namespace LanScreenShare.Desktop
 
         private void ScreenImage_KeyUp(object? sender, KeyEventArgs e)
         {
-            if (e.Key == Key.L &&
+            if ((e.Key == Key.L || e.Key == Key.M) &&
                 e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
                 e.KeyModifiers.HasFlag(KeyModifiers.Alt))
             {
@@ -2355,6 +2443,11 @@ namespace LanScreenShare.Desktop
                 {
                     int targetPid = GetTargetAudioProcessId();
                     _audioCaptureService.StartCapture(targetPid);
+                }
+
+                if (_controlServer.IsRunning && _allowRemoteControl)
+                {
+                    BroadcastHostSourceCatalog();
                 }
 
                 UpdateStatus($"Transmitiendo: {source.Name}", "#22C55E");
@@ -3119,6 +3212,14 @@ namespace LanScreenShare.Desktop
                         gameModeBtn.IsVisible = _currentDeviceAllowsRemoteControl;
                         if (!_currentDeviceAllowsRemoteControl) gameModeBtn.IsChecked = false;
                     }
+
+                    var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
+                    if (switchMonitorBtn != null)
+                    {
+                        switchMonitorBtn.IsVisible = _currentDeviceAllowsRemoteControl;
+                    }
+
+                    _popoutWindow?.SetRemoteControlAllowed(_currentDeviceAllowsRemoteControl);
                 }
             });
         }
@@ -3230,6 +3331,13 @@ namespace LanScreenShare.Desktop
                     gameModeBtn.IsVisible = _currentDeviceAllowsRemoteControl;
                     gameModeBtn.IsChecked = false;
                     gameModeBtn.IsEnabled = true;
+                }
+
+                var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
+                if (switchMonitorBtn != null)
+                {
+                    switchMonitorBtn.IsVisible = _currentDeviceAllowsRemoteControl;
+                    switchMonitorBtn.IsEnabled = true;
                 }
 
                 var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
@@ -3451,6 +3559,12 @@ namespace LanScreenShare.Desktop
                     gameModeBtn.IsVisible = _currentDeviceAllowsRemoteControl;
                     if (!_currentDeviceAllowsRemoteControl) gameModeBtn.IsChecked = false;
                 }
+
+                var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
+                if (switchMonitorBtn != null)
+                {
+                    switchMonitorBtn.IsVisible = _currentDeviceAllowsRemoteControl;
+                }
             });
         }
 
@@ -3580,6 +3694,20 @@ namespace LanScreenShare.Desktop
                 gameModeBtn.IsVisible = false;
                 gameModeBtn.IsChecked = false;
             }
+
+            _currentRemoteMonitorLabel = "Pantalla";
+            _remoteMonitorCatalog = null;
+            _remoteSourceMenu?.Close();
+            var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
+            if (switchMonitorBtn != null)
+            {
+                switchMonitorBtn.IsVisible = false;
+            }
+            var switchMonitorText = this.FindControl<TextBlock>("SwitchMonitorButtonText");
+            if (switchMonitorText != null)
+            {
+                switchMonitorText.Text = "Pantalla";
+            }
         }
 
         #endregion
@@ -3668,6 +3796,381 @@ namespace LanScreenShare.Desktop
         }
 
         #endregion
+
+        private async Task OpenRemoteSourceMenuAsync(Button? anchorButton)
+        {
+            if (!_isViewing || !_currentDeviceAllowsRemoteControl)
+                return;
+
+            anchorButton ??= this.FindControl<Button>("SwitchMonitorButton");
+            if (anchorButton == null)
+                return;
+
+            if (_remoteSourceMenu == null)
+            {
+                _remoteSourceMenu = new ContextMenu
+                {
+                    Background = new SolidColorBrush(Color.Parse("#181D27")),
+                    BorderBrush = new SolidColorBrush(Color.Parse("#334155")),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(10),
+                    Padding = new Thickness(6),
+                    Placement = PlacementMode.BottomEdgeAlignedLeft
+                };
+            }
+
+            PopulateRemoteSourceMenu();
+            _remoteSourceMenu.Open(anchorButton);
+
+            bool connected = await EnsureControlConnectedAsync();
+            if (connected)
+            {
+                await _controlClient.RequestSourceCatalogAsync();
+            }
+        }
+
+        private void PopulateRemoteSourceMenu()
+        {
+            if (_remoteSourceMenu == null)
+                return;
+
+            var items = new List<object>();
+
+            var catalog = _remoteMonitorCatalog;
+            if (catalog != null && catalog.Sources != null && catalog.Sources.Count > 0)
+            {
+                var screens = catalog.Sources.Where(s => s.Category == "screen").ToList();
+                var windows = catalog.Sources.Where(s => s.Category == "window").ToList();
+
+                if (screens.Count > 0)
+                {
+                    items.Add(new MenuItem
+                    {
+                        Header = "PANTALLAS DEL ANFITRIÓN",
+                        IsEnabled = false,
+                        FontSize = 10,
+                        FontWeight = FontWeight.Bold,
+                        Foreground = new SolidColorBrush(Color.Parse("#38BDF8"))
+                    });
+
+                    foreach (var s in screens)
+                    {
+                        bool isActive = s.Id == catalog.ActiveSourceId ||
+                                        (!string.IsNullOrEmpty(s.Name) && s.Name == _currentRemoteMonitorLabel);
+                        string prefix = isActive ? "✓ 🖥️ " : "    🖥️ ";
+                        string subtitle = !string.IsNullOrWhiteSpace(s.Subtitle) ? $" ({s.Subtitle})" : string.Empty;
+
+                        var menuItem = new MenuItem
+                        {
+                            Header = $"{prefix}{s.Name}{subtitle}",
+                            FontWeight = isActive ? FontWeight.Bold : FontWeight.Normal,
+                            Foreground = new SolidColorBrush(Color.Parse(isActive ? "#38BDF8" : "#F1F5F9")),
+                            Tag = s.Id
+                        };
+                        string capturedId = s.Id;
+                        menuItem.Click += async (_, _) => await SelectRemoteSourceAsync(capturedId);
+                        items.Add(menuItem);
+                    }
+                }
+
+                if (windows.Count > 0)
+                {
+                    if (items.Count > 0)
+                    {
+                        items.Add(new Separator { Background = new SolidColorBrush(Color.Parse("#263042")), Margin = new Thickness(0, 4) });
+                    }
+
+                    items.Add(new MenuItem
+                    {
+                        Header = "VENTANAS / APLICACIONES",
+                        IsEnabled = false,
+                        FontSize = 10,
+                        FontWeight = FontWeight.Bold,
+                        Foreground = new SolidColorBrush(Color.Parse("#A78BFA"))
+                    });
+
+                    foreach (var w in windows)
+                    {
+                        bool isActive = w.Id == catalog.ActiveSourceId ||
+                                        (!string.IsNullOrEmpty(w.Name) && w.Name == _currentRemoteMonitorLabel);
+                        string prefix = isActive ? "✓ 🪟 " : "    🪟 ";
+                        string displayName = w.Name.Length > 45 ? w.Name[..42] + "..." : w.Name;
+
+                        var menuItem = new MenuItem
+                        {
+                            Header = $"{prefix}{displayName}",
+                            FontWeight = isActive ? FontWeight.Bold : FontWeight.Normal,
+                            Foreground = new SolidColorBrush(Color.Parse(isActive ? "#A78BFA" : "#E2E8F0")),
+                            Tag = w.Id
+                        };
+                        string capturedId = w.Id;
+                        menuItem.Click += async (_, _) => await SelectRemoteSourceAsync(capturedId);
+                        items.Add(menuItem);
+                    }
+                }
+            }
+            else
+            {
+                items.Add(new MenuItem
+                {
+                    Header = _controlClient.IsConnected
+                        ? "⏳ Consultando pantallas y ventanas del anfitrión..."
+                        : "⏳ Conectando control remoto para listar fuentes...",
+                    IsEnabled = false,
+                    Foreground = new SolidColorBrush(Color.Parse("#94A3B8"))
+                });
+            }
+
+            items.Add(new Separator { Background = new SolidColorBrush(Color.Parse("#263042")), Margin = new Thickness(0, 4) });
+
+            var cycleItem = new MenuItem
+            {
+                Header = "⏭ Alternar siguiente fuente (Ctrl+Alt+M)",
+                Foreground = new SolidColorBrush(Color.Parse("#38BDF8")),
+                FontWeight = FontWeight.SemiBold
+            };
+            cycleItem.Click += async (_, _) => await RequestRemoteMonitorSwitchAsync();
+            items.Add(cycleItem);
+
+            var refreshItem = new MenuItem
+            {
+                Header = "🔄 Actualizar lista de fuentes",
+                Foreground = new SolidColorBrush(Color.Parse("#CBD5E1"))
+            };
+            refreshItem.Click += async (_, _) =>
+            {
+                if (await EnsureControlConnectedAsync())
+                {
+                    await _controlClient.RequestSourceCatalogAsync();
+                }
+            };
+            items.Add(refreshItem);
+
+            _remoteSourceMenu.ItemsSource = items;
+        }
+
+        private async Task SelectRemoteSourceAsync(string sourceId)
+        {
+            if (string.IsNullOrWhiteSpace(sourceId) || !_isViewing || !_currentDeviceAllowsRemoteControl)
+                return;
+
+            bool connected = await EnsureControlConnectedAsync();
+            if (!connected)
+                return;
+
+            await _controlClient.SendSelectSourceAsync(sourceId);
+        }
+
+        private async Task RequestRemoteMonitorSwitchAsync()
+        {
+            if (!_isViewing || !_currentDeviceAllowsRemoteControl)
+                return;
+
+            bool connected = await EnsureControlConnectedAsync();
+            if (!connected)
+                return;
+
+            await _controlClient.SendSwitchMonitorAsync(-1);
+        }
+
+        private void BroadcastHostSourceCatalog()
+        {
+            if (!OperatingSystem.IsWindows())
+                return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!OperatingSystem.IsWindows() || !_isHosting || !_allowRemoteControl)
+                    return;
+
+                try
+                {
+                    var rawScreens = CaptureSourceDiscoveryService.GetScreenSources();
+                    var orderedScreens = rawScreens
+                        .Where(s => s.Type == CaptureSourceType.Screen)
+                        .Concat(rawScreens.Where(s => s.Type == CaptureSourceType.AllScreens))
+                        .ToList();
+
+                    int currentPid = Environment.ProcessId;
+                    var windows = CaptureSourceDiscoveryService.GetWindowSources()
+                        .Where(w => w.ProcessId != currentPid)
+                        .Take(15)
+                        .ToList();
+
+                    var dto = new RemoteMonitorCatalogDto
+                    {
+                        ActiveSourceId = _currentSource.Id,
+                        ActiveSourceName = _currentSource.Name,
+                        Sources = new List<RemoteSourceItemDto>()
+                    };
+
+                    foreach (var s in orderedScreens)
+                    {
+                        dto.Sources.Add(new RemoteSourceItemDto
+                        {
+                            Id = s.Id,
+                            Name = s.Name,
+                            Subtitle = s.Subtitle,
+                            Category = "screen"
+                        });
+                    }
+
+                    foreach (var w in windows)
+                    {
+                        dto.Sources.Add(new RemoteSourceItemDto
+                        {
+                            Id = w.Id,
+                            Name = w.Name,
+                            Subtitle = w.Subtitle,
+                            Category = "window"
+                        });
+                    }
+
+                    string json = JsonSerializer.Serialize(dto);
+                    _ = _controlServer.BroadcastMonitorInfoAsync(json);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ControlHost] Error enviando catálogo de fuentes: {ex.Message}");
+                    _ = _controlServer.BroadcastMonitorInfoAsync(_currentSource.Name);
+                }
+            });
+        }
+
+        private void HandleRemoteSelectSourceOnHost(string sourceId)
+        {
+            if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(sourceId))
+                return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!OperatingSystem.IsWindows() || !_isHosting || !_allowRemoteControl)
+                    return;
+
+                var allSources = CaptureSourceDiscoveryService.GetScreenSources()
+                    .Concat(CaptureSourceDiscoveryService.GetWindowSources())
+                    .ToList();
+
+                var matched = allSources.FirstOrDefault(s => s.Id == sourceId);
+                if (matched == null)
+                    return;
+
+                SetCaptureSource(matched);
+                Console.WriteLine($"[ControlHost] Fuente seleccionada remotamente: {matched.Name} ({matched.Id})");
+            });
+        }
+
+        private void HandleRemoteMonitorSwitchOnHost(int requestedIndex)
+        {
+            if (!OperatingSystem.IsWindows())
+                return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!OperatingSystem.IsWindows() || !_isHosting || !_allowRemoteControl)
+                    return;
+
+                var rawSources = CaptureSourceDiscoveryService.GetScreenSources();
+                if (rawSources.Count == 0)
+                    return;
+
+                // Ordenar primero monitores individuales (Pantalla 1, Pantalla 2...) y al final "Todas las pantallas"
+                var candidateSources = rawSources
+                    .Where(s => s.Type == CaptureSourceType.Screen)
+                    .Concat(rawSources.Where(s => s.Type == CaptureSourceType.AllScreens))
+                    .ToList();
+
+                // Si el anfitrión solo tiene 1 pantalla física, incluir también las ventanas abiertas
+                // para que el botón/atajo permita alternar entre Pantalla 1 y las aplicaciones abiertas
+                if (candidateSources.Count <= 1)
+                {
+                    int currentPid = Environment.ProcessId;
+                    var openWindows = CaptureSourceDiscoveryService.GetWindowSources()
+                        .Where(w => w.ProcessId != currentPid)
+                        .Take(12)
+                        .ToList();
+                    candidateSources.AddRange(openWindows);
+                }
+
+                if (candidateSources.Count == 0)
+                    return;
+
+                int nextIndex = 0;
+                if (requestedIndex >= 0 && requestedIndex < candidateSources.Count)
+                {
+                    nextIndex = requestedIndex;
+                }
+                else
+                {
+                    int currentIdx = candidateSources.FindIndex(s => s.Id == _currentSource.Id);
+                    nextIndex = currentIdx >= 0 ? (currentIdx + 1) % candidateSources.Count : 0;
+                }
+
+                var targetSource = candidateSources[nextIndex];
+                SetCaptureSource(targetSource);
+                Console.WriteLine($"[ControlHost] Fuente alternada remotamente a: {targetSource.Name} ({targetSource.Id})");
+            });
+        }
+
+        private void ApplyRemoteMonitorInfo(string monitorPayload)
+        {
+            if (string.IsNullOrWhiteSpace(monitorPayload))
+                return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                string monitorLabel = monitorPayload;
+
+                if (monitorPayload.TrimStart().StartsWith("{", StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        var catalog = JsonSerializer.Deserialize<RemoteMonitorCatalogDto>(monitorPayload);
+                        if (catalog != null)
+                        {
+                            _remoteMonitorCatalog = catalog;
+                            if (!string.IsNullOrWhiteSpace(catalog.ActiveSourceName))
+                            {
+                                monitorLabel = catalog.ActiveSourceName;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ControlViewer] Error parseando catálogo de monitores: {ex.Message}");
+                    }
+                }
+
+                _currentRemoteMonitorLabel = monitorLabel;
+
+                string shortLabel = monitorLabel.Length > 22 ? monitorLabel[..19] + "..." : monitorLabel;
+                var switchBtnText = this.FindControl<TextBlock>("SwitchMonitorButtonText");
+                if (switchBtnText != null)
+                {
+                    switchBtnText.Text = shortLabel;
+                }
+
+                _popoutWindow?.SetActiveMonitorLabel(shortLabel);
+
+                if (_remoteSourceMenu != null && _remoteSourceMenu.IsOpen)
+                {
+                    PopulateRemoteSourceMenu();
+                }
+
+                if (_isViewing)
+                {
+                    var canvasTitle = this.FindControl<TextBlock>("CanvasSourceTitleText");
+                    if (canvasTitle != null)
+                    {
+                        canvasTitle.Text = !string.IsNullOrEmpty(_currentConnectedDeviceName)
+                            ? $"{_currentConnectedDeviceName} · {monitorLabel}"
+                            : monitorLabel;
+                    }
+
+                    UpdateStatus($"Viendo {monitorLabel} de {_currentConnectedDeviceName}", "#22C55E");
+                }
+            });
+        }
 
         private void ApplyRemoteClipboardText(string text)
         {
