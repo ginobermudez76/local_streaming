@@ -11,7 +11,9 @@ namespace LanScreenShare.Core.Models
         KeyDown = 5,
         KeyUp = 6,
         MouseMoveRelative = 7,
-        ClipboardText = 8
+        ClipboardText = 8,
+        SwitchMonitor = 9,
+        MonitorInfo = 10
     }
 
     public enum RemoteMouseButton : byte

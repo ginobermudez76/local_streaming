@@ -81,6 +81,19 @@
                         </StackPanel>
                     </ToggleButton>
 
+                    <!-- Cambiar Monitor Remoto -->
+                    <Button x:Name="SwitchMonitorButton"
+                            Background="#27272A"
+                            Foreground="White"
+                            Padding="10,6"
+                            CornerRadius="4"
+                            ToolTip.Tip="Cambiar de pantalla/monitor en el anfitrión (Ctrl+Alt+M)">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource IconAllScreens}" Width="14" Height="14" Foreground="#38BDF8" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SwitchMonitorButtonText" Text="Pantalla" FontSize="12" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
                     <!-- Control de Audio (Silenciar y Control de Volumen) -->
                     <Border x:Name="AudioControlPanel"
                             Background="#27272A"

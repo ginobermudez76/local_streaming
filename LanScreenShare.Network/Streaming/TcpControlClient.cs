@@ -23,6 +23,7 @@ namespace LanScreenShare.Network.Streaming
 
         public event EventHandler<string>? StatusChanged;
         public event EventHandler<string>? ClipboardTextReceived;
+        public event EventHandler<string>? MonitorInfoReceived;
         public bool IsConnected => _client != null && _client.Connected && _stream != null;
 
         public async Task ConnectAsync(
@@ -105,12 +106,13 @@ namespace LanScreenShare.Network.Streaming
                     if (message == null)
                         continue;
 
-                    if (message.Type == InputEventType.ClipboardText)
+                    if (message.Type == InputEventType.ClipboardText ||
+                        message.Type == InputEventType.MonitorInfo)
                     {
                         int payloadLength = message.KeyCode;
                         if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
                         {
-                            Console.WriteLine($"[ControlClient] Longitud de portapapeles inválida desde anfitrión: {payloadLength}");
+                            Console.WriteLine($"[ControlClient] Longitud de payload inválida desde anfitrión: {payloadLength}");
                             break;
                         }
 
@@ -120,11 +122,18 @@ namespace LanScreenShare.Network.Streaming
 
                         try
                         {
-                            ClipboardTextReceived?.Invoke(this, text);
+                            if (message.Type == InputEventType.ClipboardText)
+                            {
+                                ClipboardTextReceived?.Invoke(this, text);
+                            }
+                            else
+                            {
+                                MonitorInfoReceived?.Invoke(this, text);
+                            }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[ControlClient] Error en ClipboardTextReceived: {ex.Message}");
+                            Console.WriteLine($"[ControlClient] Error procesando evento {message.Type}: {ex.Message}");
                         }
                     }
                 }
@@ -188,6 +197,15 @@ namespace LanScreenShare.Network.Streaming
             {
                 _sendLock.Release();
             }
+        }
+
+        public Task SendSwitchMonitorAsync(int targetIndex = -1)
+        {
+            return SendInputAsync(new RemoteInputMessage
+            {
+                Type = InputEventType.SwitchMonitor,
+                KeyCode = targetIndex
+            });
         }
 
         public async Task SendClipboardTextAsync(string text)

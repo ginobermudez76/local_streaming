@@ -30,6 +30,7 @@ namespace LanScreenShare.Network.Streaming
 
         public event EventHandler<RemoteInputMessage>? InputReceived;
         public event EventHandler<string>? ClipboardTextReceived;
+        public event EventHandler<int>? SwitchMonitorRequested;
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
         public Func<string, Task<bool>>? ClientApprovalCallback { get; set; }
@@ -287,6 +288,38 @@ namespace LanScreenShare.Network.Streaming
                         continue;
                     }
 
+                    if (input.Type == InputEventType.SwitchMonitor)
+                    {
+                        if (_sessionAuthority != null && sessionId != null)
+                        {
+                            string? activeCtrl = _sessionAuthority.ActiveControllerSessionId;
+                            if (activeCtrl != sessionId)
+                            {
+                                continue;
+                            }
+                        }
+
+                        try
+                        {
+                            InputReceived?.Invoke(this, input);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[ControlServer] Error en InputReceived (cambio de monitor): {ex.Message}");
+                        }
+
+                        try
+                        {
+                            SwitchMonitorRequested?.Invoke(this, input.KeyCode);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[ControlServer] Error en SwitchMonitorRequested: {ex.Message}");
+                        }
+
+                        continue;
+                    }
+
                     // Si hay SessionAuthority configurada, comprobar que la sesión es el controlador activo
                     if (_sessionAuthority != null && sessionId != null)
                     {
@@ -331,7 +364,17 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
-        public async Task BroadcastClipboardTextAsync(string text)
+        public Task BroadcastClipboardTextAsync(string text)
+        {
+            return BroadcastTextPayloadAsync(InputEventType.ClipboardText, text);
+        }
+
+        public Task BroadcastMonitorInfoAsync(string monitorLabel)
+        {
+            return BroadcastTextPayloadAsync(InputEventType.MonitorInfo, monitorLabel);
+        }
+
+        private async Task BroadcastTextPayloadAsync(InputEventType payloadType, string text)
         {
             if (!IsRunning || _clients.IsEmpty || string.IsNullOrEmpty(text))
                 return;
@@ -346,7 +389,7 @@ namespace LanScreenShare.Network.Streaming
 
             var msg = new RemoteInputMessage
             {
-                Type = InputEventType.ClipboardText,
+                Type = payloadType,
                 KeyCode = utf8Bytes.Length,
                 ClipboardText = text
             };
@@ -382,7 +425,7 @@ namespace LanScreenShare.Network.Streaming
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[ControlServer] Error enviando portapapeles a {clientId}: {ex.Message}");
+                    Console.WriteLine($"[ControlServer] Error enviando payload {payloadType} a {clientId}: {ex.Message}");
                 }
             }
         }

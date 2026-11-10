@@ -1103,6 +1103,22 @@
                                                 <TextBlock Text="Modo 3D" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                             </StackPanel>
                                         </ToggleButton>
+
+                                        <Button x:Name="SwitchMonitorButton"
+                                                IsVisible="False"
+                                                Background="#1A2230"
+                                                BorderBrush="#263246"
+                                                BorderThickness="1"
+                                                Foreground="#E2E8F0"
+                                                Padding="12,6"
+                                                CornerRadius="8"
+                                                Cursor="Hand"
+                                                ToolTip.Tip="Cambiar de pantalla/monitor en el anfitrión (Ctrl+Alt+M)">
+                                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                <PathIcon Data="{StaticResource IconAllScreens}" Width="14" Height="14" Foreground="#60A5FA" VerticalAlignment="Center"/>
+                                                <TextBlock x:Name="SwitchMonitorButtonText" Text="Pantalla" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Button>
                                     </StackPanel>
 
                                     <!-- RIGHT: Resolution & FPS -->
