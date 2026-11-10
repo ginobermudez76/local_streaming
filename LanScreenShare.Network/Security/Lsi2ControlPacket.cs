@@ -15,6 +15,7 @@ public sealed class Lsi2ControlPacket
     public const uint MagicLsi1Legacy = 0x4C534931; // "LSI1"
     public const int PacketSize = 28;
     public const int LegacyPacketSize = 20;
+    public const int MaxClipboardPayloadBytes = 256 * 1024; // 256 KB
 
     public ulong SequenceNumber { get; set; }
     public ulong Timestamp { get; set; }
@@ -68,8 +69,10 @@ public sealed class Lsi2ControlPacket
         // Offset 22..23: WheelDelta (2B)
         BinaryPrimitives.WriteInt16BigEndian(destination.Slice(22, 2), input.WheelDelta);
 
-        // Offset 24..27: KeyCode / Coordenadas empaquetadas (4B)
-        if (input.Type == InputEventType.KeyDown || input.Type == InputEventType.KeyUp)
+        // Offset 24..27: KeyCode / Longitud de payload de portapapeles / Coordenadas empaquetadas (4B)
+        if (input.Type == InputEventType.KeyDown ||
+            input.Type == InputEventType.KeyUp ||
+            input.Type == InputEventType.ClipboardText)
         {
             BinaryPrimitives.WriteInt32BigEndian(destination.Slice(24, 4), input.KeyCode);
         }
@@ -151,7 +154,9 @@ public sealed class Lsi2ControlPacket
         float normX = 0f;
         float normY = 0f;
 
-        if (eventType == InputEventType.KeyDown || eventType == InputEventType.KeyUp)
+        if (eventType == InputEventType.KeyDown ||
+            eventType == InputEventType.KeyUp ||
+            eventType == InputEventType.ClipboardText)
         {
             keyCode = BinaryPrimitives.ReadInt32BigEndian(source.Slice(24, 4));
         }

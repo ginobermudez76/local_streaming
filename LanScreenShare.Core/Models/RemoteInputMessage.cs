@@ -10,7 +10,8 @@ namespace LanScreenShare.Core.Models
         MouseWheel = 4,
         KeyDown = 5,
         KeyUp = 6,
-        MouseMoveRelative = 7
+        MouseMoveRelative = 7,
+        ClipboardText = 8
     }
 
     public enum RemoteMouseButton : byte
@@ -29,5 +30,6 @@ namespace LanScreenShare.Core.Models
         public RemoteMouseButton Button { get; set; }
         public short WheelDelta { get; set; }
         public int KeyCode { get; set; }
+        public string? ClipboardText { get; set; }
     }
 }
