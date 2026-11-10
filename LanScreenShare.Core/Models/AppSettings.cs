@@ -21,6 +21,7 @@ namespace LanScreenShare.Core.Models
         public bool AudioMuted { get; set; } = false;
         public float MicVolume { get; set; } = 1.0f;
         public bool MicMuted { get; set; } = false;
+        public bool ViewerVoiceChatEnabled { get; set; } = true;
         public string StretchMode { get; set; } = "Uniform";
     }
 }

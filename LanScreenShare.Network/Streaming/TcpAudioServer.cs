@@ -42,6 +42,7 @@ namespace LanScreenShare.Network.Streaming
 
         public event EventHandler<string>? ClientConnected;
         public event EventHandler<string>? ClientDisconnected;
+        public event EventHandler<CapturedAudioChunk>? ClientAudioReceived;
 
         public bool IsRunning => _listener != null && _cts != null && !_cts.IsCancellationRequested;
         public int ConnectedClientsCount => _clients.Count;
@@ -201,15 +202,62 @@ namespace LanScreenShare.Network.Streaming
 
         private async Task MonitorClientLifecycleAsync(string clientId, TcpClient client, Stream stream, CancellationToken token)
         {
-            var buffer = new byte[1];
+            byte[] headerBuffer = new byte[28];
             try
             {
                 while (!token.IsCancellationRequested && client.Connected)
                 {
-                    int read = await stream.ReadAsync(buffer.AsMemory(0, 1), token);
-                    if (read == 0)
+                    // Leer encabezado de audio recibido del cliente (ej: micrófono del visor)
+                    await ReadExactBytesAsync(stream, headerBuffer, 0, 28, token);
+
+                    uint magic;
+                    int dataLength;
+                    int sampleRate;
+                    short channels;
+                    short bitsPerSample;
+                    short audioFormat;
+                    short sourceTypeVal;
+                    long timestamp;
+
+                    using (var ms = new MemoryStream(headerBuffer))
+                    using (var reader = new BinaryReader(ms))
+                    {
+                        magic = reader.ReadUInt32();
+                        dataLength = reader.ReadInt32();
+                        sampleRate = reader.ReadInt32();
+                        channels = reader.ReadInt16();
+                        bitsPerSample = reader.ReadInt16();
+                        audioFormat = reader.ReadInt16();
+                        sourceTypeVal = reader.ReadInt16();
+                        timestamp = reader.ReadInt64();
+                    }
+
+                    if (magic != AudioHeaderMagic || dataLength <= 0 || dataLength > 10 * 1024 * 1024)
+                    {
+                        Console.WriteLine($"[AudioServer] Paquete de audio inválido recibido del cliente {clientId} (Magic: {magic:X}, Length: {dataLength})");
                         break;
+                    }
+
+                    byte[] audioData = new byte[dataLength];
+                    await ReadExactBytesAsync(stream, audioData, 0, dataLength, token);
+
+                    var chunk = new CapturedAudioChunk
+                    {
+                        Data = audioData,
+                        SampleRate = sampleRate,
+                        Channels = channels,
+                        BitsPerSample = bitsPerSample,
+                        AudioFormat = audioFormat,
+                        Source = (AudioSourceType)sourceTypeVal,
+                        Timestamp = timestamp
+                    };
+
+                    ClientAudioReceived?.Invoke(this, chunk);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancelación normal
             }
             catch
             {

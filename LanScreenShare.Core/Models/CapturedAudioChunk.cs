@@ -5,7 +5,8 @@ namespace LanScreenShare.Core.Models
     public enum AudioSourceType : short
     {
         Desktop = 0,
-        Microphone = 1
+        Microphone = 1,
+        ViewerMicrophone = 2
     }
 
     public class CapturedAudioChunk

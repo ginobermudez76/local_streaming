@@ -22,6 +22,8 @@ namespace LanScreenShare.Network.Streaming
         public event EventHandler<CapturedAudioChunk>? AudioReceived;
         public event EventHandler<string>? StatusChanged;
 
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
+
         public bool IsConnected => _client != null && _client.Connected && _stream != null;
         public long LatestAudioTimestamp => Interlocked.Read(ref _latestAudioTimestamp);
 
@@ -151,6 +153,49 @@ namespace LanScreenShare.Network.Streaming
                     await DisconnectAsync();
                 }
             }, token);
+        }
+
+        public async Task SendAudioChunkAsync(CapturedAudioChunk chunk)
+        {
+            if (!IsConnected || _stream == null || chunk.Data == null || chunk.Data.Length == 0)
+                return;
+
+            byte[] packet;
+            using (var ms = new MemoryStream(28 + chunk.Data.Length))
+            using (var writer = new BinaryWriter(ms))
+            {
+                writer.Write(AudioHeaderMagic);
+                writer.Write(chunk.Data.Length);
+                writer.Write(chunk.SampleRate);
+                writer.Write((short)chunk.Channels);
+                writer.Write((short)chunk.BitsPerSample);
+                writer.Write(chunk.AudioFormat);
+                writer.Write((short)AudioSourceType.ViewerMicrophone); // Marcar como micrófono del visor
+                writer.Write(chunk.Timestamp);
+                writer.Write(chunk.Data);
+                packet = ms.ToArray();
+            }
+
+            bool lockTaken = false;
+            try
+            {
+                lockTaken = await _sendLock.WaitAsync(100);
+                if (lockTaken && _stream != null)
+                {
+                    await _stream.WriteAsync(packet.AsMemory(0, packet.Length));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AudioClient] Error enviando audio del visor: {ex.Message}");
+            }
+            finally
+            {
+                if (lockTaken)
+                {
+                    try { _sendLock.Release(); } catch { }
+                }
+            }
         }
 
         private static async Task ReadExactBytesAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken token)
