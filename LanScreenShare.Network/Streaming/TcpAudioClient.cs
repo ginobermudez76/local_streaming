@@ -143,7 +143,14 @@ namespace LanScreenShare.Network.Streaming
                             Timestamp = timestamp
                         };
 
-                        AudioReceived?.Invoke(this, chunk);
+                        try
+                        {
+                            AudioReceived?.Invoke(this, chunk);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[AudioClient] Error en suscriptor AudioReceived: {ex.Message}");
+                        }
                     }
                 }
                 catch (OperationCanceledException)

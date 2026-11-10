@@ -1,11 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using LanScreenShare.Core.Models;
+using LanScreenShare.Core.Security;
 using LanScreenShare.Core.Services;
+using LanScreenShare.Network.Security;
 using LanScreenShare.Network.Streaming;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -14,6 +19,22 @@ namespace LanScreenShare.Tests
     [TestClass]
     public class BidirectionalAudioTests
     {
+        private static X509Certificate2 CreateEcdsaCert(string cn, string ekuOid)
+        {
+            using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var req = new CertificateRequest($"CN={cn}", ecdsa, HashAlgorithmName.SHA256);
+            req.CertificateExtensions.Add(
+                new X509KeyUsageExtension(
+                    X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment,
+                    critical: true));
+            var eku = new OidCollection { new Oid(ekuOid) };
+            req.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(eku, critical: true));
+
+            var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddYears(1));
+            byte[] pfx = cert.Export(X509ContentType.Pfx);
+            return X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.Exportable);
+        }
+
         [TestMethod]
         public async Task ViewerMicrophone_TransmitsFromClientToServerSuccessfully()
         {
@@ -134,6 +155,181 @@ namespace LanScreenShare.Tests
 
             // Verificar que la sesión larga de audio NO se desconectó
             Assert.IsTrue(client.IsConnected, "El cliente de audio debe permanecer conectado aunque el token del handshake haya finalizado.");
+
+            await client.DisconnectAsync();
+            server.Stop();
+        }
+
+        [TestMethod]
+        public async Task AudioServer_SurvivesSubscriberExceptionInClientAudioReceived_AndContinuesBroadcasting()
+        {
+            using var server = new TcpAudioServer();
+            int port = 15005;
+            await server.StartAsync(port);
+
+            server.ClientAudioReceived += (s, chunk) =>
+            {
+                throw new InvalidOperationException("Simulated UI thread cross-access exception");
+            };
+
+            using var client = new TcpAudioClient();
+            var tcsClientReceivedDesktop = new TaskCompletionSource<CapturedAudioChunk>();
+            client.AudioReceived += (s, chunk) =>
+            {
+                tcsClientReceivedDesktop.TrySetResult(chunk);
+            };
+
+            await client.ConnectAsync("127.0.0.1", port);
+            await Task.Delay(100);
+
+            // 1. El visor envía un paquete de micrófono cuyo handler lanza excepción en el servidor
+            await client.SendAudioChunkAsync(new CapturedAudioChunk
+            {
+                Data = new byte[] { 1, 2, 3, 4 },
+                SampleRate = 48000,
+                Channels = 2,
+                BitsPerSample = 16,
+                AudioFormat = 1,
+                Source = AudioSourceType.ViewerMicrophone,
+                Timestamp = 100L
+            });
+
+            await Task.Delay(150);
+
+            // 2. El servidor NO debe haber desconectado al cliente y debe poder emitir audio de escritorio
+            Assert.AreEqual(1, server.ConnectedClientsCount, "El servidor no debe desconectar al cliente si un suscriptor lanza excepción.");
+            Assert.IsTrue(client.IsConnected, "El cliente debe seguir conectado.");
+
+            await server.BroadcastAudioAsync(new CapturedAudioChunk
+            {
+                Data = new byte[] { 9, 8, 7, 6 },
+                SampleRate = 48000,
+                Channels = 2,
+                BitsPerSample = 16,
+                AudioFormat = 1,
+                Source = AudioSourceType.Desktop,
+                Timestamp = 200L
+            });
+
+            var completed = await Task.WhenAny(tcsClientReceivedDesktop.Task, Task.Delay(2000));
+            Assert.AreEqual(tcsClientReceivedDesktop.Task, completed, "El cliente debe seguir recibiendo audio del servidor.");
+
+            await client.DisconnectAsync();
+            server.Stop();
+        }
+
+        [TestMethod]
+        public async Task BidirectionalAudio_OverMtlsSslStream_SimultaneousFullDuplex_Succeeds()
+        {
+            using var hostCert = CreateEcdsaCert("AudioHost", TlsConfigurationHelper.ServerAuthOid);
+            using var viewerCert = CreateEcdsaCert("AudioViewer", TlsConfigurationHelper.ClientAuthOid);
+
+            string hostFp = TlsConfigurationHelper.ComputeFingerprint(hostCert);
+            string viewerFp = TlsConfigurationHelper.ComputeFingerprint(viewerCert);
+
+            var store = new InMemoryPairedDeviceStore();
+            await store.AddPairedDeviceAsync(new PairedDevice("h1", "Host", hostFp, DateTime.UtcNow, DateTime.UtcNow, false));
+            await store.AddPairedDeviceAsync(new PairedDevice("v1", "Viewer", viewerFp, DateTime.UtcNow, DateTime.UtcNow, false));
+
+            var authority = new SessionAuthority(store);
+            var (created, session, _) = await authority.TryCreateSessionAsync(viewerFp);
+            Assert.IsTrue(created);
+            Assert.IsNotNull(session);
+
+            var audioToken = authority.IssueChannelToken(session.SessionId, ChannelType.Audio);
+            Assert.IsNotNull(audioToken);
+
+            var serverSslOpts = TlsConfigurationHelper.CreateServerOptions(hostCert, store);
+            var clientSslOpts = TlsConfigurationHelper.CreateClientOptions(viewerCert, "localhost", store);
+
+            using var server = new TcpAudioServer(authority, serverSslOpts);
+            int port = 15006;
+            await server.StartAsync(port);
+
+            int viewerChunksOnHost = 0;
+            int hostDesktopChunksOnViewer = 0;
+            int hostMicChunksOnViewer = 0;
+
+            var tcsAllReceived = new TaskCompletionSource<bool>();
+
+            void CheckCompletion()
+            {
+                if (Volatile.Read(ref viewerChunksOnHost) >= 5 &&
+                    Volatile.Read(ref hostDesktopChunksOnViewer) >= 5 &&
+                    Volatile.Read(ref hostMicChunksOnViewer) >= 5)
+                {
+                    tcsAllReceived.TrySetResult(true);
+                }
+            }
+
+            server.ClientAudioReceived += (s, chunk) =>
+            {
+                if (chunk.Source == AudioSourceType.ViewerMicrophone)
+                {
+                    Interlocked.Increment(ref viewerChunksOnHost);
+                    CheckCompletion();
+                }
+            };
+
+            using var client = new TcpAudioClient();
+            client.AudioReceived += (s, chunk) =>
+            {
+                if (chunk.Source == AudioSourceType.Desktop)
+                    Interlocked.Increment(ref hostDesktopChunksOnViewer);
+                else if (chunk.Source == AudioSourceType.Microphone)
+                    Interlocked.Increment(ref hostMicChunksOnViewer);
+
+                CheckCompletion();
+            };
+
+            await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, audioToken.TokenId);
+            await Task.Delay(100);
+
+            Assert.AreEqual(1, server.ConnectedClientsCount, "El cliente mTLS debe estar registrado en el servidor.");
+
+            // Enviar simultáneamente en ambas direcciones sobre el mismo SslStream
+            var tasks = new List<Task>();
+            for (int i = 0; i < 5; i++)
+            {
+                tasks.Add(server.BroadcastAudioAsync(new CapturedAudioChunk
+                {
+                    Data = new byte[512],
+                    SampleRate = 48000,
+                    Channels = 2,
+                    BitsPerSample = 32,
+                    AudioFormat = 3,
+                    Source = AudioSourceType.Desktop,
+                    Timestamp = 1000 + i
+                }));
+
+                tasks.Add(server.BroadcastAudioAsync(new CapturedAudioChunk
+                {
+                    Data = new byte[256],
+                    SampleRate = 48000,
+                    Channels = 1,
+                    BitsPerSample = 16,
+                    AudioFormat = 1,
+                    Source = AudioSourceType.Microphone,
+                    Timestamp = 2000 + i
+                }));
+
+                tasks.Add(client.SendAudioChunkAsync(new CapturedAudioChunk
+                {
+                    Data = new byte[256],
+                    SampleRate = 48000,
+                    Channels = 1,
+                    BitsPerSample = 16,
+                    AudioFormat = 1,
+                    Source = AudioSourceType.ViewerMicrophone,
+                    Timestamp = 3000 + i
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+
+            var done = await Task.WhenAny(tcsAllReceived.Task, Task.Delay(3000));
+            Assert.AreEqual(tcsAllReceived.Task, done,
+                $"Fallo recepción full-duplex mTLS (ViewerOnHost={viewerChunksOnHost}, DesktopOnViewer={hostDesktopChunksOnViewer}, MicOnViewer={hostMicChunksOnViewer})");
 
             await client.DisconnectAsync();
             server.Stop();

@@ -54,7 +54,8 @@ namespace LanScreenShare.Desktop
         private readonly IAudioPlayerService? _micAudioPlayerService;
         private readonly TcpAudioServer _audioServer;
         private readonly TcpAudioClient _audioClient;
-        private bool _isViewerVoiceChatActive;
+        private volatile bool _isViewerVoiceChatActive;
+        private volatile bool _allowViewerVoiceChat = true;
 
         // Servicios de control remoto (Mouse y Teclado)
         private readonly IInputSimulatorService? _inputSimulatorService;
@@ -263,8 +264,8 @@ namespace LanScreenShare.Desktop
                 _audioServer.ClientAudioReceived += (s, chunk) =>
                 {
                     // El anfitrión recibe el micrófono del espectador (Intercomunicador bidireccional)
-                    bool allowViewerVoice = this.FindControl<CheckBox>("ViewerVoiceChatCheckBox")?.IsChecked ?? true;
-                    if (allowViewerVoice && _micAudioPlayerService != null)
+                    // IMPORTANTE: Usar bandera volatile en memoria; jamás acceder a controles de UI desde el hilo de red
+                    if (_allowViewerVoiceChat && _micAudioPlayerService != null)
                     {
                         _micAudioPlayerService.PlayChunk(chunk);
                     }
@@ -502,9 +503,16 @@ namespace LanScreenShare.Desktop
             if (viewerVoiceCb != null)
             {
                 viewerVoiceCb.IsChecked = _appSettings.ViewerVoiceChatEnabled;
+                _allowViewerVoiceChat = _appSettings.ViewerVoiceChatEnabled;
                 viewerVoiceCb.IsCheckedChanged += (s, e) =>
                 {
-                    _appSettings.ViewerVoiceChatEnabled = viewerVoiceCb.IsChecked == true;
+                    bool allowed = viewerVoiceCb.IsChecked == true;
+                    _allowViewerVoiceChat = allowed;
+                    _appSettings.ViewerVoiceChatEnabled = allowed;
+                    if (!allowed)
+                    {
+                        _micAudioPlayerService?.ClearBuffer();
+                    }
                     SaveCurrentSettings();
                 };
             }
@@ -2827,28 +2835,25 @@ namespace LanScreenShare.Desktop
                     SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
                     _inputSimulatorService?.SetTargetSource(_currentSource);
 
-                    // 2. Iniciar servidor y captura de audio (Puerto 5002) si está habilitado
+                    // 2. Iniciar servidor y captura de audio (Puerto 5002)
                     bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
                     bool shareMic = this.FindControl<CheckBox>("MicShareCheckBox")?.IsChecked ?? false;
-                    if (shareAudio || shareMic)
+                    try
                     {
-                        try
+                        await _audioServer.StartAsync(5002);
+                        if (shareAudio)
                         {
-                            await _audioServer.StartAsync(5002);
-                            if (shareAudio)
-                            {
-                                int targetPid = GetTargetAudioProcessId();
-                                _audioCaptureService?.StartCapture(targetPid);
-                            }
-                            if (shareMic)
-                            {
-                                _micCaptureService?.StartCapture();
-                            }
+                            int targetPid = GetTargetAudioProcessId();
+                            _audioCaptureService?.StartCapture(targetPid);
                         }
-                        catch (Exception ex)
+                        if (shareMic)
                         {
-                            Console.WriteLine($"[Audio] Advertencia iniciando audio: {ex.Message}");
+                            _micCaptureService?.StartCapture();
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Audio] Advertencia iniciando audio: {ex.Message}");
                     }
 
                     // 3. Iniciar servidor de control remoto (Puerto 5003) si está habilitado
@@ -3191,15 +3196,12 @@ namespace LanScreenShare.Desktop
                     {
                         using var audioCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                         await _audioClient.ConnectAsync(device.IPAddress, 5002, _sslClientOptions, handshake?.SessionId, handshake?.AudioToken, audioCts.Token);
-                        Dispatcher.UIThread.Post(() =>
+                        if (_isViewerVoiceChatActive)
                         {
-                            UpdateAudioUI();
-                            if (_isViewerVoiceChatActive)
-                            {
-                                _micCaptureService?.StartCapture();
-                                Console.WriteLine("[Viewer] Micrófono de retorno conectado e iniciado.");
-                            }
-                        });
+                            _micCaptureService?.StartCapture();
+                            Console.WriteLine("[Viewer] Micrófono de retorno conectado e iniciado.");
+                        }
+                        Dispatcher.UIThread.Post(UpdateAudioUI);
                     }
                     catch (Exception ex)
                     {
@@ -3437,6 +3439,11 @@ namespace LanScreenShare.Desktop
             try { await _streamClient.DisconnectAsync(); } catch { }
             try { await _audioClient.DisconnectAsync(); } catch { }
             try { await _controlClient.DisconnectAsync(); } catch { }
+
+            if (!_isHosting)
+            {
+                _micCaptureService?.StopCapture();
+            }
 
             _audioPlayerService?.Stop();
             _micAudioPlayerService?.Stop();
