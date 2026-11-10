@@ -28,4 +28,19 @@ namespace LanScreenShare.Core.Models
         public bool IsAllScreens => Type == CaptureSourceType.AllScreens;
         public bool IsSingleScreen => Type == CaptureSourceType.Screen;
     }
+
+    public class RemoteSourceItemDto
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string? Subtitle { get; set; }
+        public string Category { get; set; } = "screen"; // "screen" | "all" | "window"
+    }
+
+    public class RemoteMonitorCatalogDto
+    {
+        public string ActiveSourceId { get; set; } = string.Empty;
+        public string ActiveSourceName { get; set; } = string.Empty;
+        public System.Collections.Generic.List<RemoteSourceItemDto> Sources { get; set; } = new();
+    }
 }

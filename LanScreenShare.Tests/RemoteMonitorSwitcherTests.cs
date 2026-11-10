@@ -207,5 +207,54 @@ namespace LanScreenShare.Tests
             await client.DisconnectAsync();
             server.Stop();
         }
+
+        [TestMethod]
+        public async Task SelectSource_ViewerRequestsCatalogAndSelectsWindowSourceById()
+        {
+            using var server = new TcpControlServer();
+            int port = 15205;
+            await server.StartAsync(port);
+
+            var catalogRequestedTcs = new TaskCompletionSource<bool>();
+            var selectSourceTcs = new TaskCompletionSource<string>();
+            var catalogReceivedTcs = new TaskCompletionSource<string>();
+
+            server.SourceCatalogRequested += (s, e) =>
+            {
+                catalogRequestedTcs.TrySetResult(true);
+            };
+
+            server.SelectSourceRequested += (s, sourceId) =>
+            {
+                selectSourceTcs.TrySetResult(sourceId);
+                _ = server.BroadcastMonitorInfoAsync("{\"ActiveSourceId\":\"" + sourceId + "\",\"ActiveSourceName\":\"Visual Studio Code\",\"Sources\":[]}");
+            };
+
+            using var client = new TcpControlClient();
+            client.MonitorInfoReceived += (s, payload) =>
+            {
+                catalogReceivedTcs.TrySetResult(payload);
+            };
+
+            await client.ConnectAsync("127.0.0.1", port);
+            await client.RequestSourceCatalogAsync();
+
+            var catReqDone = await Task.WhenAny(catalogRequestedTcs.Task, Task.Delay(3000));
+            Assert.AreEqual(catalogRequestedTcs.Task, catReqDone, "El servidor debió recibir la solicitud de catálogo de fuentes.");
+
+            await client.SendSelectSourceAsync("window:98765");
+
+            var selDone = await Task.WhenAny(selectSourceTcs.Task, Task.Delay(3000));
+            Assert.AreEqual(selectSourceTcs.Task, selDone, "El servidor debió recibir el ID de la fuente seleccionada.");
+            Assert.AreEqual("window:98765", await selectSourceTcs.Task);
+
+            var infoDone = await Task.WhenAny(catalogReceivedTcs.Task, Task.Delay(3000));
+            Assert.AreEqual(catalogReceivedTcs.Task, infoDone);
+            StringAssert.Contains(await catalogReceivedTcs.Task, "Visual Studio Code");
+
+            await client.DisconnectAsync();
+            server.Stop();
+        }
     }
 }
+

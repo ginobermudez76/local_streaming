@@ -87,10 +87,11 @@
                             Foreground="White"
                             Padding="10,6"
                             CornerRadius="4"
-                            ToolTip.Tip="Cambiar de pantalla/monitor en el anfitrión (Ctrl+Alt+M)">
+                            ToolTip.Tip="Elegir o cambiar pantalla/ventana del anfitrión (Ctrl+Alt+M)">
                         <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                             <PathIcon Data="{StaticResource IconAllScreens}" Width="14" Height="14" Foreground="#38BDF8" VerticalAlignment="Center"/>
                             <TextBlock x:Name="SwitchMonitorButtonText" Text="Pantalla" FontSize="12" VerticalAlignment="Center"/>
+                            <PathIcon Data="{StaticResource IconChevronDown}" Width="10" Height="10" Foreground="#A1A1AA" VerticalAlignment="Center" Margin="2,1,0,0"/>
                         </StackPanel>
                     </Button>
 

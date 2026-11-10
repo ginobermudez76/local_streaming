@@ -25,7 +25,7 @@ namespace LanScreenShare.Tests
         [TestMethod]
         public async Task StreamServer_CalculatesRtt_WhenClientSendsTelemetry()
         {
-            int port = GetAvailablePort();
+            int port = 15302;
             using var server = new TcpStreamServer();
             using var client = new TcpStreamClient();
 
@@ -90,7 +90,7 @@ namespace LanScreenShare.Tests
         [TestMethod]
         public async Task CongestionDrop_IncrementsDroppedFramesCount_WhenChannelOverflows()
         {
-            int port = GetAvailablePort();
+            int port = 15303;
             using var server = new TcpStreamServer();
             using var client = new TcpStreamClient();
 

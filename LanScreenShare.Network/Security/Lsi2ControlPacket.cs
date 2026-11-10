@@ -74,7 +74,8 @@ public sealed class Lsi2ControlPacket
             input.Type == InputEventType.KeyUp ||
             input.Type == InputEventType.ClipboardText ||
             input.Type == InputEventType.SwitchMonitor ||
-            input.Type == InputEventType.MonitorInfo)
+            input.Type == InputEventType.MonitorInfo ||
+            input.Type == InputEventType.SelectSource)
         {
             BinaryPrimitives.WriteInt32BigEndian(destination.Slice(24, 4), input.KeyCode);
         }
@@ -160,7 +161,8 @@ public sealed class Lsi2ControlPacket
             eventType == InputEventType.KeyUp ||
             eventType == InputEventType.ClipboardText ||
             eventType == InputEventType.SwitchMonitor ||
-            eventType == InputEventType.MonitorInfo)
+            eventType == InputEventType.MonitorInfo ||
+            eventType == InputEventType.SelectSource)
         {
             keyCode = BinaryPrimitives.ReadInt32BigEndian(source.Slice(24, 4));
         }

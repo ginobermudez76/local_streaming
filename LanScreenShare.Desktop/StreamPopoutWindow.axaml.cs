@@ -19,6 +19,7 @@ namespace LanScreenShare.Desktop
         public event Action<bool>? RemoteControlToggled;
         public event Action? GameModeToggled;
         public event Action? SwitchMonitorRequested;
+        public event Action? CycleMonitorRequested;
         public event Action? MuteToggled;
         public event Action<float>? VolumeChanged;
         public event Action? MicMuteToggled;
@@ -263,6 +264,8 @@ namespace LanScreenShare.Desktop
                 text.Text = string.IsNullOrWhiteSpace(label) ? "Pantalla" : label;
             }
         }
+
+        public Button? GetSwitchMonitorButton() => this.FindControl<Button>("SwitchMonitorButton");
 
         public void SetRemoteControlState(bool enabled)
         {
@@ -775,7 +778,7 @@ namespace LanScreenShare.Desktop
                 e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
                 e.KeyModifiers.HasFlag(KeyModifiers.Alt))
             {
-                SwitchMonitorRequested?.Invoke();
+                CycleMonitorRequested?.Invoke();
                 e.Handled = true;
                 return;
             }
