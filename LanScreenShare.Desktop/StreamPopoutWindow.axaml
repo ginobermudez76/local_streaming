@@ -16,6 +16,7 @@
                HorizontalAlignment="Stretch"
                VerticalAlignment="Stretch"
                Focusable="True"
+               DragDrop.AllowDrop="True"
                RenderOptions.BitmapInterpolationMode="HighQuality"/>
 
         <!-- Auto-hiding Top Header Overlay -->
@@ -92,6 +93,19 @@
                             <PathIcon Data="{StaticResource IconAllScreens}" Width="14" Height="14" Foreground="#38BDF8" VerticalAlignment="Center"/>
                             <TextBlock x:Name="SwitchMonitorButtonText" Text="Pantalla" FontSize="12" VerticalAlignment="Center"/>
                             <PathIcon Data="{StaticResource IconChevronDown}" Width="10" Height="10" Foreground="#A1A1AA" VerticalAlignment="Center" Margin="2,1,0,0"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Enviar Archivo -->
+                    <Button x:Name="SendFileButton"
+                            Background="#27272A"
+                            Foreground="White"
+                            Padding="10,6"
+                            CornerRadius="4"
+                            ToolTip.Tip="Enviar archivo al anfitrión (o arrastra y suelta aquí)">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource IconSendFile}" Width="14" Height="14" Foreground="#10B981" VerticalAlignment="Center"/>
+                            <TextBlock Text="Enviar archivo" FontSize="12" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
 

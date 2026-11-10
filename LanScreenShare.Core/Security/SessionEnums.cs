@@ -24,7 +24,8 @@ namespace LanScreenShare.Core.Security
     {
         Video,
         Audio,
-        RemoteControl
+        RemoteControl,
+        FileTransfer
     }
 
     public enum AttachmentStatus

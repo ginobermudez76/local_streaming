@@ -20,6 +20,7 @@ public sealed class SessionHandshakeMessage
     public string SessionId { get; set; } = string.Empty;
     public string AudioToken { get; set; } = string.Empty;
     public string ControlToken { get; set; } = string.Empty;
+    public string FileTransferToken { get; set; } = string.Empty;
     public string HostFingerprint { get; set; } = string.Empty;
     public string ErrorMessage { get; set; } = string.Empty;
 

@@ -189,9 +189,10 @@ namespace LanScreenShare.Network.Streaming
 
                                         assignedSessionId = session.SessionId;
 
-                                        // Emitir tokens de asociación para Audio (5002) y Control (5003)
+                                        // Emitir tokens de asociación para Audio (5002), Control (5003) y FileTransfer (5004)
                                         var audioToken = _sessionAuthority.IssueChannelToken(session.SessionId, ChannelType.Audio);
                                         var controlToken = _sessionAuthority.IssueChannelToken(session.SessionId, ChannelType.RemoteControl);
+                                        var fileToken = _sessionAuthority.IssueChannelToken(session.SessionId, ChannelType.FileTransfer);
 
                                         var okHandshake = new SessionHandshakeMessage
                                         {
@@ -199,6 +200,7 @@ namespace LanScreenShare.Network.Streaming
                                             SessionId = session.SessionId,
                                             AudioToken = audioToken.TokenId,
                                             ControlToken = controlToken.TokenId,
+                                            FileTransferToken = fileToken.TokenId,
                                             HostFingerprint = _sslServerOptions.ServerCertificate is X509Certificate2 hostCert
                                                 ? TlsConfigurationHelper.ComputeFingerprint(hostCert)
                                                 : string.Empty

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -17,6 +18,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using System.Net.Security;
@@ -76,6 +78,11 @@ namespace LanScreenShare.Desktop
         private bool _isGameMode;
         private bool _isRecenteringMouse;
         private DispatcherTimer? _gameModeBannerTimer;
+        private readonly TcpFileTransferServer _fileTransferServer;
+        private readonly TcpFileTransferClient _fileTransferClient;
+        private CancellationTokenSource? _activeTransferCts;
+        private string? _lastReceivedFilePath;
+        private DispatcherTimer? _fileTransferBannerTimer;
 
         private bool _isHosting;
         private bool _isViewing;
@@ -220,6 +227,18 @@ namespace LanScreenShare.Desktop
             // InicializaciÃ³n de subsistema de Control Remoto
             _controlServer = new TcpControlServer(_sessionAuthority, _inputSimulatorService, _sslServerOptions);
             _controlClient = new TcpControlClient();
+
+            // Inicialización de subsistema de Transferencia de Archivos (Puerto 5004)
+            _fileTransferServer = new TcpFileTransferServer(_sessionAuthority, _sslServerOptions);
+            _fileTransferClient = new TcpFileTransferClient();
+
+            _fileTransferServer.TransferProgress += (s, p) => Dispatcher.UIThread.Post(() => ShowFileTransferProgress(p));
+            _fileTransferServer.TransferCompleted += (s, c) => Dispatcher.UIThread.Post(() => ShowFileTransferCompleted(c));
+            _fileTransferServer.TransferError += (s, err) => Dispatcher.UIThread.Post(() => ShowFileTransferError(err));
+
+            _fileTransferClient.TransferProgress += (s, p) => Dispatcher.UIThread.Post(() => ShowFileTransferProgress(p));
+            _fileTransferClient.TransferCompleted += (s, c) => Dispatcher.UIThread.Post(() => ShowFileTransferCompleted(c));
+            _fileTransferClient.TransferError += (s, err) => Dispatcher.UIThread.Post(() => ShowFileTransferError(err));
 
             if (OperatingSystem.IsWindows())
             {
@@ -683,6 +702,33 @@ namespace LanScreenShare.Desktop
             {
                 switchMonitorBtn.Click += async (s, e) => await OpenRemoteSourceMenuAsync(switchMonitorBtn);
             }
+
+            var sendFileBtn = this.FindControl<Button>("SendFileButton");
+            if (sendFileBtn != null)
+            {
+                sendFileBtn.Click += async (s, e) => await PickAndSendFilesAsync();
+            }
+
+            var cancelTransferBtn = this.FindControl<Button>("FileTransferCancelButton");
+            if (cancelTransferBtn != null)
+            {
+                cancelTransferBtn.Click += (s, e) => CancelActiveFileTransfer();
+            }
+
+            var openFolderBtn = this.FindControl<Button>("FileTransferOpenFolderButton");
+            if (openFolderBtn != null)
+            {
+                openFolderBtn.Click += (s, e) => OpenDownloadsFolder();
+            }
+
+            var dismissBannerBtn = this.FindControl<Button>("FileTransferDismissButton");
+            if (dismissBannerBtn != null)
+            {
+                dismissBannerBtn.Click += (s, e) => HideFileTransferBanner();
+            }
+
+            this.AddHandler(DragDrop.DropEvent, MainWindow_Drop);
+            this.AddHandler(DragDrop.DragOverEvent, MainWindow_DragOver);
 
             this.KeyDown += MainWindow_KeyDown;
 
@@ -1546,6 +1592,19 @@ namespace LanScreenShare.Desktop
             _popoutWindow.CycleMonitorRequested += async () =>
             {
                 await RequestRemoteMonitorSwitchAsync();
+            };
+
+            _popoutWindow.SendFileRequested += async () =>
+            {
+                await PickAndSendFilesAsync();
+            };
+
+            _popoutWindow.FilesDropped += async (paths) =>
+            {
+                foreach (var p in paths)
+                {
+                    await SendFileToPeerAsync(p);
+                }
             };
 
             _popoutWindow.MuteToggled += () =>
@@ -3000,6 +3059,16 @@ namespace LanScreenShare.Desktop
                         await _controlServer.StartAsync(5003);
                     }
 
+                    // 4. Iniciar servidor de transferencia de archivos (Puerto 5004)
+                    try
+                    {
+                        await _fileTransferServer.StartAsync(5004);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[FileTransfer] Advertencia iniciando servidor de archivos: {ex.Message}");
+                    }
+
                     _discoveryService.StartHostingBroadcast();
 
                     ResetMetrics();
@@ -3032,6 +3101,10 @@ namespace LanScreenShare.Desktop
                 _audioServer.Stop();
 
                 _controlServer.Stop();
+                _fileTransferServer.Stop();
+
+                var sendFileBtn = this.FindControl<Button>("SendFileButton");
+                if (sendFileBtn != null) sendFileBtn.IsVisible = false;
 
                 _discoveryService.StopHosting();
 
@@ -3069,6 +3142,11 @@ namespace LanScreenShare.Desktop
             Dispatcher.UIThread.Post(() =>
             {
                 int count = _streamServer.ConnectedClientsCount;
+                var sendFileBtn = this.FindControl<Button>("SendFileButton");
+                if (sendFileBtn != null && _isHosting)
+                {
+                    sendFileBtn.IsVisible = count > 0;
+                }
                 UpdateStatus($"Transmitiendo pantalla · {count} espectador(es) conectado(s)", "#22C55E");
             });
         }
@@ -3080,7 +3158,20 @@ namespace LanScreenShare.Desktop
                 int count = _streamServer.ConnectedClientsCount;
                 if (_isHosting)
                 {
-                    UpdateStatus($"Transmitiendo pantalla · {count} espectador(es) conectado(s)", "#22C55E");
+                    var sendFileBtn = this.FindControl<Button>("SendFileButton");
+                    if (sendFileBtn != null)
+                    {
+                        sendFileBtn.IsVisible = count > 0;
+                    }
+
+                    if (count > 0)
+                    {
+                        UpdateStatus($"Transmitiendo pantalla · {count} espectador(es) conectado(s)", "#22C55E");
+                    }
+                    else
+                    {
+                        UpdateStatus("Transmitiendo pantalla · Esperando visores", "#22C55E");
+                    }
                 }
             });
         }
@@ -3340,6 +3431,13 @@ namespace LanScreenShare.Desktop
                     switchMonitorBtn.IsEnabled = true;
                 }
 
+                var sendFileBtn = this.FindControl<Button>("SendFileButton");
+                if (sendFileBtn != null)
+                {
+                    sendFileBtn.IsVisible = true;
+                    sendFileBtn.IsEnabled = true;
+                }
+
                 var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
 
                 // 2. Conectar flujo de audio en segundo plano sin demorar la visualización de video
@@ -3359,6 +3457,21 @@ namespace LanScreenShare.Desktop
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[AudioClient] Audio no disponible en el host: {ex.Message}");
+                    }
+                });
+
+                // 3. Conectar canal de transferencia de archivos en segundo plano
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var fileCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        await _fileTransferClient.ConnectAsync(device.IPAddress, 5004, _sslClientOptions, handshake?.SessionId, handshake?.FileTransferToken, fileCts.Token);
+                        Console.WriteLine($"[Viewer] Canal de transferencia de archivos conectado a {device.IPAddress}:5004.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[FileTransferClient] Canal de archivos no disponible en el host: {ex.Message}");
                     }
                 });
             }
@@ -3598,6 +3711,7 @@ namespace LanScreenShare.Desktop
             try { await _streamClient.DisconnectAsync(); } catch { }
             try { await _audioClient.DisconnectAsync(); } catch { }
             try { await _controlClient.DisconnectAsync(); } catch { }
+            try { await _fileTransferClient.DisconnectAsync(); } catch { }
 
             if (!_isHosting)
             {
@@ -3707,6 +3821,12 @@ namespace LanScreenShare.Desktop
             if (switchMonitorText != null)
             {
                 switchMonitorText.Text = "Pantalla";
+            }
+
+            var sendFileBtn = this.FindControl<Button>("SendFileButton");
+            if (sendFileBtn != null)
+            {
+                sendFileBtn.IsVisible = false;
             }
         }
 
@@ -4284,9 +4404,329 @@ namespace LanScreenShare.Desktop
             _controlClient.Dispose();
             _inputSimulatorService?.Dispose();
 
+            _fileTransferBannerTimer?.Stop();
+            _activeTransferCts?.Cancel();
+            _activeTransferCts?.Dispose();
+            _fileTransferServer.Dispose();
+            _fileTransferClient.Dispose();
+
             _discoveryService.StopHosting();
             _discoveryService.StopListening();
         }
+
+        #region File Transfer Methods
+
+        private void MainWindow_DragOver(object? sender, DragEventArgs e)
+        {
+            if ((_isHosting && _streamServer.ConnectedClientsCount > 0) || (_isViewing && _streamClient.IsConnected))
+            {
+                if (e.DataTransfer.Contains(DataFormat.File))
+                {
+                    e.DragEffects = DragDropEffects.Copy;
+                    return;
+                }
+            }
+            e.DragEffects = DragDropEffects.None;
+        }
+
+        private async void MainWindow_Drop(object? sender, DragEventArgs e)
+        {
+            if (!((_isHosting && _streamServer.ConnectedClientsCount > 0) || (_isViewing && _streamClient.IsConnected)))
+            {
+                return;
+            }
+
+            if (e.DataTransfer.TryGetFiles() is { } files)
+            {
+                foreach (var f in files)
+                {
+                    var path = f.Path.LocalPath;
+                    if (File.Exists(path))
+                    {
+                        await SendFileToPeerAsync(path);
+                    }
+                }
+            }
+        }
+
+        private async Task PickAndSendFilesAsync()
+        {
+            bool canSend = (_isHosting && _streamServer.ConnectedClientsCount > 0) || (_isViewing && _streamClient.IsConnected);
+            if (!canSend)
+            {
+                return;
+            }
+
+            try
+            {
+                var topLevel = TopLevel.GetTopLevel(this);
+                if (topLevel?.StorageProvider != null)
+                {
+                    var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+                    {
+                        Title = "Seleccionar archivo(s) para enviar",
+                        AllowMultiple = true
+                    });
+
+                    if (files != null && files.Count > 0)
+                    {
+                        foreach (var file in files)
+                        {
+                            var localPath = file.Path.LocalPath;
+                            if (File.Exists(localPath))
+                            {
+                                await SendFileToPeerAsync(localPath);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FileTransfer] Error abriendo selector de archivos: {ex.Message}");
+            }
+        }
+
+        private async Task SendFileToPeerAsync(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                return;
+
+            _activeTransferCts?.Cancel();
+            _activeTransferCts?.Dispose();
+            _activeTransferCts = new CancellationTokenSource();
+
+            try
+            {
+                if (_isHosting && _fileTransferServer.IsRunning)
+                {
+                    await _fileTransferServer.SendFileAsync(filePath, _activeTransferCts.Token);
+                }
+                else if (_isViewing && _fileTransferClient.IsConnected)
+                {
+                    await _fileTransferClient.SendFileAsync(filePath, _activeTransferCts.Token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("[FileTransfer] Envío de archivo cancelado por el usuario.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FileTransfer] Error enviando archivo '{filePath}': {ex.Message}");
+                ShowFileTransferError(new FileTransferError
+                {
+                    TransferId = Guid.NewGuid().ToString(),
+                    FileName = System.IO.Path.GetFileName(filePath),
+                    ErrorMessage = ex.Message,
+                    IsUpload = true
+                });
+            }
+        }
+
+        private void ShowFileTransferProgress(FileTransferProgress p)
+        {
+            _fileTransferBannerTimer?.Stop();
+
+            var banner = this.FindControl<Border>("FileTransferBanner");
+            if (banner != null) banner.IsVisible = true;
+
+            var title = this.FindControl<TextBlock>("FileTransferBannerTitle");
+            if (title != null)
+            {
+                title.Text = p.IsUpload ? "Enviando archivo..." : "Recibiendo archivo...";
+                title.Foreground = Brushes.White;
+            }
+
+            var subtitle = this.FindControl<TextBlock>("FileTransferBannerSubtitle");
+            if (subtitle != null)
+            {
+                double speedMb = p.SpeedBytesPerSec / (1024.0 * 1024.0);
+                subtitle.Text = $"{p.FileName} — {p.Percent:0}% ({speedMb:0.1} MB/s)";
+            }
+
+            var progressBar = this.FindControl<ProgressBar>("FileTransferProgressBar");
+            if (progressBar != null)
+            {
+                progressBar.IsVisible = true;
+                progressBar.Value = p.Percent;
+                progressBar.Foreground = new SolidColorBrush(Color.Parse("#10B981"));
+            }
+
+            var openFolderBtn = this.FindControl<Button>("FileTransferOpenFolderButton");
+            if (openFolderBtn != null) openFolderBtn.IsVisible = false;
+
+            var cancelBtn = this.FindControl<Button>("FileTransferCancelButton");
+            if (cancelBtn != null) cancelBtn.IsVisible = true;
+
+            var dismissBtn = this.FindControl<Button>("FileTransferDismissButton");
+            if (dismissBtn != null) dismissBtn.IsVisible = false;
+        }
+
+        private void ShowFileTransferCompleted(FileTransferCompleted c)
+        {
+            _fileTransferBannerTimer?.Stop();
+            _lastReceivedFilePath = c.FilePath;
+
+            var banner = this.FindControl<Border>("FileTransferBanner");
+            if (banner != null) banner.IsVisible = true;
+
+            var title = this.FindControl<TextBlock>("FileTransferBannerTitle");
+            if (title != null)
+            {
+                title.Text = c.IsUpload ? "Archivo enviado con éxito" : "Archivo recibido";
+                title.Foreground = new SolidColorBrush(Color.Parse("#34D399"));
+            }
+
+            var subtitle = this.FindControl<TextBlock>("FileTransferBannerSubtitle");
+            if (subtitle != null)
+            {
+                double mb = c.FileSize / (1024.0 * 1024.0);
+                subtitle.Text = $"{c.FileName} ({mb:0.1} MB) — Completado";
+            }
+
+            var progressBar = this.FindControl<ProgressBar>("FileTransferProgressBar");
+            if (progressBar != null)
+            {
+                progressBar.IsVisible = true;
+                progressBar.Value = 100;
+                progressBar.Foreground = new SolidColorBrush(Color.Parse("#10B981"));
+            }
+
+            var openFolderBtn = this.FindControl<Button>("FileTransferOpenFolderButton");
+            if (openFolderBtn != null)
+            {
+                openFolderBtn.IsVisible = !string.IsNullOrEmpty(c.FilePath) && File.Exists(c.FilePath);
+            }
+
+            var cancelBtn = this.FindControl<Button>("FileTransferCancelButton");
+            if (cancelBtn != null) cancelBtn.IsVisible = false;
+
+            var dismissBtn = this.FindControl<Button>("FileTransferDismissButton");
+            if (dismissBtn != null) dismissBtn.IsVisible = true;
+
+            _fileTransferBannerTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(6)
+            };
+            _fileTransferBannerTimer.Tick += (s, e) =>
+            {
+                _fileTransferBannerTimer.Stop();
+                HideFileTransferBanner();
+            };
+            _fileTransferBannerTimer.Start();
+        }
+
+        private void ShowFileTransferError(FileTransferError err)
+        {
+            _fileTransferBannerTimer?.Stop();
+
+            var banner = this.FindControl<Border>("FileTransferBanner");
+            if (banner != null) banner.IsVisible = true;
+
+            var title = this.FindControl<TextBlock>("FileTransferBannerTitle");
+            if (title != null)
+            {
+                title.Text = "Error en transferencia";
+                title.Foreground = new SolidColorBrush(Color.Parse("#F87171"));
+            }
+
+            var subtitle = this.FindControl<TextBlock>("FileTransferBannerSubtitle");
+            if (subtitle != null)
+            {
+                subtitle.Text = $"{err.FileName}: {err.ErrorMessage}";
+            }
+
+            var progressBar = this.FindControl<ProgressBar>("FileTransferProgressBar");
+            if (progressBar != null)
+            {
+                progressBar.IsVisible = false;
+            }
+
+            var openFolderBtn = this.FindControl<Button>("FileTransferOpenFolderButton");
+            if (openFolderBtn != null) openFolderBtn.IsVisible = false;
+
+            var cancelBtn = this.FindControl<Button>("FileTransferCancelButton");
+            if (cancelBtn != null) cancelBtn.IsVisible = false;
+
+            var dismissBtn = this.FindControl<Button>("FileTransferDismissButton");
+            if (dismissBtn != null) dismissBtn.IsVisible = true;
+
+            _fileTransferBannerTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(6)
+            };
+            _fileTransferBannerTimer.Tick += (s, e) =>
+            {
+                _fileTransferBannerTimer.Stop();
+                HideFileTransferBanner();
+            };
+            _fileTransferBannerTimer.Start();
+        }
+
+        private void CancelActiveFileTransfer()
+        {
+            try
+            {
+                _activeTransferCts?.Cancel();
+            }
+            catch { }
+            HideFileTransferBanner();
+        }
+
+        private void HideFileTransferBanner()
+        {
+            _fileTransferBannerTimer?.Stop();
+            var banner = this.FindControl<Border>("FileTransferBanner");
+            if (banner != null)
+            {
+                banner.IsVisible = false;
+            }
+        }
+
+        private void OpenDownloadsFolder()
+        {
+            try
+            {
+                string? targetPath = _lastReceivedFilePath;
+                if (!string.IsNullOrEmpty(targetPath) && File.Exists(targetPath))
+                {
+                    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    {
+                        Process.Start("explorer.exe", $"/select,\"{targetPath}\"");
+                        return;
+                    }
+                    string? dir = System.IO.Path.GetDirectoryName(targetPath);
+                    if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = dir,
+                            UseShellExecute = true
+                        });
+                        return;
+                    }
+                }
+                else
+                {
+                    string downloads = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "LanScreenShare");
+                    if (Directory.Exists(downloads))
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = downloads,
+                            UseShellExecute = true
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FileTransfer] Error abriendo carpeta: {ex.Message}");
+            }
+        }
+
+        #endregion
 
         #endregion
     }

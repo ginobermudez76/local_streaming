@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -20,6 +22,8 @@ namespace LanScreenShare.Desktop
         public event Action? GameModeToggled;
         public event Action? SwitchMonitorRequested;
         public event Action? CycleMonitorRequested;
+        public event Action? SendFileRequested;
+        public event Action<string[]>? FilesDropped;
         public event Action? MuteToggled;
         public event Action<float>? VolumeChanged;
         public event Action? MicMuteToggled;
@@ -126,6 +130,15 @@ namespace LanScreenShare.Desktop
                 switchMonitorBtn.Click += (s, e) => SwitchMonitorRequested?.Invoke();
             }
 
+            var sendFileBtn = this.FindControl<Button>("SendFileButton");
+            if (sendFileBtn != null)
+            {
+                sendFileBtn.Click += (s, e) => SendFileRequested?.Invoke();
+            }
+
+            this.AddHandler(DragDrop.DropEvent, Popout_Drop);
+            this.AddHandler(DragDrop.DragOverEvent, Popout_DragOver);
+
             var muteBtn = this.FindControl<Button>("AudioMuteButton");
             if (muteBtn != null)
             {
@@ -213,6 +226,30 @@ namespace LanScreenShare.Desktop
 
             this.KeyDown += PopoutWindow_KeyDown;
             this.Closing += PopoutWindow_Closing;
+        }
+
+        private void Popout_DragOver(object? sender, DragEventArgs e)
+        {
+            if (e.DataTransfer.Contains(DataFormat.File))
+            {
+                e.DragEffects = DragDropEffects.Copy;
+            }
+            else
+            {
+                e.DragEffects = DragDropEffects.None;
+            }
+        }
+
+        private void Popout_Drop(object? sender, DragEventArgs e)
+        {
+            if (e.DataTransfer.TryGetFiles() is { } files)
+            {
+                var paths = files.Select(f => f.Path.LocalPath).Where(File.Exists).ToArray();
+                if (paths.Length > 0)
+                {
+                    FilesDropped?.Invoke(paths);
+                }
+            }
         }
 
         public void UpdateFrame(IImage image)

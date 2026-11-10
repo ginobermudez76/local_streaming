@@ -47,6 +47,7 @@ public static class ChannelAttachmentMessage
             ChannelType.Video => 1,
             ChannelType.Audio => 2,
             ChannelType.RemoteControl => 3,
+            ChannelType.FileTransfer => 4,
             _ => throw new ArgumentOutOfRangeException(nameof(channel))
         };
 
@@ -90,6 +91,7 @@ public static class ChannelAttachmentMessage
             1 => ChannelType.Video,
             2 => ChannelType.Audio,
             3 => ChannelType.RemoteControl,
+            4 => ChannelType.FileTransfer,
             _ => (ChannelType)255
         };
 

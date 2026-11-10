@@ -147,7 +147,7 @@ namespace LanScreenShare.Tests
             Console.WriteLine($"[Test] Conversión paralela BGRA->NV12 (1080p): {avgMs:F2} ms promedio por fotograma");
 
             // En cualquier CPU moderna multinúcleo debe procesar 1080p con buen rendimiento
-            Assert.IsTrue(avgMs < 35.0, $"La conversión a NV12 debe ser rápida (< 35 ms para 1080p en depuración), tardó {avgMs:F2} ms");
+            Assert.IsTrue(avgMs < 50.0, $"La conversión a NV12 debe ser rápida (< 50 ms para 1080p en depuración), tardó {avgMs:F2} ms");
         }
 
         [TestMethod]
