@@ -188,15 +188,17 @@ namespace LanScreenShare.Desktop
 
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
 
-            IInputSimulatorService? inputSimulator = null;
             if (OperatingSystem.IsWindows())
             {
-                inputSimulator = new WindowsInputSimulatorService();
-                _inputSimulatorService = inputSimulator;
+                _inputSimulatorService = new WindowsInputSimulatorService();
+            }
+            else
+            {
+                _inputSimulatorService = new NullInputSimulatorService();
             }
 
-            // InicializaciÃ³n de subsistema de Seguridad, Autoridad de Sesiones y mTLS
-            _identityKeyStorage = new WindowsDpapiIdentityKeyStorage();
+            // Inicialización de subsistema de Seguridad, Autoridad de Sesiones y mTLS
+            _identityKeyStorage = IdentityKeyStorageFactory.Create();
             _pairedDeviceStore = new JsonPairedDeviceStore();
             _sessionAuthority = new SessionAuthority(_pairedDeviceStore);
 
@@ -277,15 +279,12 @@ namespace LanScreenShare.Desktop
             _fileTransferClient.TransferCompleted += (s, c) => Dispatcher.UIThread.Post(() => ShowFileTransferCompleted(c));
             _fileTransferClient.TransferError += (s, err) => Dispatcher.UIThread.Post(() => ShowFileTransferError(err));
 
-            if (OperatingSystem.IsWindows())
-            {
-                _audioCaptureService = new WasapiAudioCaptureService();
-                _audioPlayerService = new WasapiAudioPlayerService();
-                _micCaptureService = new WasapiMicrophoneCaptureService();
-                _micAudioPlayerService = new WasapiAudioPlayerService();
-                // Input simulator ya inicializado previamente para TcpControlServer
+            _audioCaptureService = AudioServiceFactory.CreateAudioCapture();
+            _audioPlayerService = AudioServiceFactory.CreateAudioPlayer();
+            _micCaptureService = AudioServiceFactory.CreateMicCapture();
+            _micAudioPlayerService = AudioServiceFactory.CreateAudioPlayer();
 
-                _audioCaptureService.AudioCaptured += async (s, chunk) =>
+            _audioCaptureService.AudioCaptured += async (s, chunk) =>
                 {
                     if (_isHosting && _audioServer.IsRunning)
                     {
@@ -355,7 +354,6 @@ namespace LanScreenShare.Desktop
                     _streamClient?.UpdateAvDrift(_avSyncController.CurrentDriftMs);
                     _audioPlayerService?.PlayChunk(chunk);
                 };
-            }
 
             _discoveryService.IsRemoteControlAllowedProvider = () => _allowRemoteControl;
 
@@ -2476,53 +2474,22 @@ namespace LanScreenShare.Desktop
 
         private IScreenCaptureService CreateCaptureService(CaptureSource source, string engine)
         {
-            if (!OperatingSystem.IsWindows())
+            var captureService = CaptureServiceFactory.Create(source, engine);
+            if (captureService is DxgiScreenCaptureService dxgi)
             {
-                return new WindowsScreenCaptureService();
-            }
-
-            if (source.Type == CaptureSourceType.Window && source.Handle != IntPtr.Zero)
-            {
-                return new WindowCaptureService(source.Handle);
-            }
-
-            if (source.Type == CaptureSourceType.AllScreens || engine == "gdi")
-            {
-                var gdi = new WindowsScreenCaptureService();
-                if (source.Type == CaptureSourceType.AllScreens)
+                dxgi.CaptureFailed += (s, ex) =>
                 {
-                    gdi.SetTargetBounds(0, 0, 0, 0, allScreens: true);
-                }
-                else
-                {
-                    gdi.SetTargetBounds(source.X, source.Y, source.Width, source.Height, allScreens: false);
-                }
-                return gdi;
-            }
-
-            var dxgi = new DxgiScreenCaptureService
-            {
-                MonitorIndex = source.MonitorIndex,
-                DeviceName = source.DeviceName,
-                TargetX = source.X,
-                TargetY = source.Y,
-                TargetSourceWidth = source.Width,
-                TargetSourceHeight = source.Height
-            };
-
-            dxgi.CaptureFailed += (s, ex) =>
-            {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                {
-                    if (_isHosting && _screenCaptureService is DxgiScreenCaptureService)
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     {
-                        UpdateStatus($"DXGI no disponible en esta pantalla ({ex.Message}), cambiando a GDI...", "#F59E0B");
-                        SwitchCaptureSource(_currentSource, "gdi", GetSelectedFps(), _appSettings.Quality, 1.0, GetSelectedCodec(), 0, 0, _appSettings.BitrateMbps);
-                    }
-                });
-            };
-
-            return dxgi;
+                        if (_isHosting && _screenCaptureService is DxgiScreenCaptureService)
+                        {
+                            UpdateStatus($"DXGI no disponible en esta pantalla ({ex.Message}), cambiando a GDI...", "#F59E0B");
+                            SwitchCaptureSource(_currentSource, "gdi", GetSelectedFps(), _appSettings.Quality, 1.0, GetSelectedCodec(), 0, 0, _appSettings.BitrateMbps);
+                        }
+                    });
+                };
+            }
+            return captureService;
         }
 
         private async void SelectSourceButton_Click(object? sender, RoutedEventArgs e)

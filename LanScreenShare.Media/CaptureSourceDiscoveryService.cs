@@ -10,7 +10,6 @@ using NAudio.CoreAudioApi.Interfaces;
 
 namespace LanScreenShare.Media
 {
-    [SupportedOSPlatform("windows")]
     public class CaptureSourceDiscoveryService
     {
         public static List<CaptureSource> GetScreenSources()
@@ -18,7 +17,23 @@ namespace LanScreenShare.Media
             var sources = new List<CaptureSource>();
 
             if (!OperatingSystem.IsWindows())
+            {
+                sources.Add(new CaptureSource
+                {
+                    Type = CaptureSourceType.Screen,
+                    Id = "screen:0",
+                    Name = "Pantalla principal",
+                    Subtitle = "1920 × 1080 · Multiplataforma",
+                    MonitorIndex = 0,
+                    DeviceName = "DefaultDisplay",
+                    X = 0,
+                    Y = 0,
+                    Width = 1920,
+                    Height = 1080,
+                    IsPrimary = true
+                });
                 return sources;
+            }
 
             try
             {

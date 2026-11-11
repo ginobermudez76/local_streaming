@@ -8,7 +8,7 @@
         Title="Elige qué compartir"
         Width="640" Height="580"
         CanResize="False"
-        SystemDecorations="None"
+        WindowDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
         WindowStartupLocation="CenterOwner">
