@@ -83,6 +83,7 @@ namespace LanScreenShare.Desktop
         private CancellationTokenSource? _activeTransferCts;
         private string? _lastReceivedFilePath;
         private DispatcherTimer? _fileTransferBannerTimer;
+        private readonly AdaptiveBitrateController _abrController = new();
 
         private bool _isHosting;
         private bool _isViewing;
@@ -214,7 +215,43 @@ namespace LanScreenShare.Desktop
             _streamServer.PairingApprovalCallback = (fingerprint, deviceName, sasFormatted) => RequestPairingApprovalAsync(deviceName, fingerprint, sasFormatted);
             _streamServer.ClientConnected += StreamServer_ClientConnected;
             _streamServer.ClientDisconnected += StreamServer_ClientDisconnected;
-            _streamServer.FrameDropped += (s, e) => _screenCaptureService.RequestKeyframe();
+            _streamServer.FrameDropped += (s, e) =>
+            {
+                _screenCaptureService?.RequestKeyframe();
+                _abrController.RegisterHostDrop();
+            };
+            _streamServer.TelemetryUpdated += (s, telemetry) =>
+            {
+                _abrController.RegisterTelemetry(telemetry);
+            };
+
+            _abrController.BitrateChanged += (newBitrate, reason) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_isHosting && _screenCaptureService != null && _screenCaptureService.BitrateMbps != newBitrate)
+                    {
+                        _screenCaptureService.BitrateMbps = newBitrate;
+                    }
+                    UpdateAbrUI();
+                });
+            };
+
+            _abrController.FpsChanged += (newFps, reason) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_isHosting && _screenCaptureService != null && _screenCaptureService.TargetFps != newFps)
+                    {
+                        _screenCaptureService.TargetFps = newFps;
+                    }
+                });
+            };
+
+            _abrController.KeyframeRequested += () =>
+            {
+                _screenCaptureService?.RequestKeyframe();
+            };
 
             _streamClient = new TcpStreamClient();
             _streamClient.FrameReceived += StreamClient_FrameReceived;
@@ -1009,6 +1046,28 @@ namespace LanScreenShare.Desktop
                             SaveCurrentSettings();
                         }
                     }
+                };
+            }
+
+            var abrCb = this.FindControl<CheckBox>("AbrCheckBox");
+            if (abrCb != null)
+            {
+                abrCb.IsChecked = _appSettings.EnableAdaptiveBitrate;
+                _abrController.IsEnabled = _appSettings.EnableAdaptiveBitrate;
+                abrCb.IsCheckedChanged += (s, e) =>
+                {
+                    bool isChecked = abrCb.IsChecked ?? true;
+                    _appSettings.EnableAdaptiveBitrate = isChecked;
+                    _abrController.IsEnabled = isChecked;
+                    if (!isChecked && _screenCaptureService != null)
+                    {
+                        var slider = this.FindControl<Slider>("QualitySlider");
+                        int manualVal = slider != null ? (int)slider.Value : _appSettings.BitrateMbps;
+                        _screenCaptureService.BitrateMbps = manualVal;
+                        _screenCaptureService.TargetFps = GetSelectedFps();
+                    }
+                    UpdateAbrUI();
+                    SaveCurrentSettings();
                 };
             }
 
@@ -2690,9 +2749,18 @@ namespace LanScreenShare.Desktop
             _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
             _screenCaptureService.Dispose();
 
+            _abrController.BaseFps = fps;
+            _abrController.MaxBitrateMbps = Math.Max(bitrateMbps, _appSettings.MaxAdaptiveBitrateMbps);
+            if (_abrController.IsEnabled && codec == "h264")
+            {
+                bitrateMbps = _abrController.CurrentBitrateMbps;
+                fps = _abrController.TargetFps;
+            }
+
             _screenCaptureService = CreateCaptureService(source, engine);
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
             _screenCaptureService.StartCapture(fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+            UpdateAbrUI();
         }
 
         private void OnEngineChanged()
@@ -2712,6 +2780,33 @@ namespace LanScreenShare.Desktop
                 UpdateStatus($"Cambiado a motor {engineName} ({codec.ToUpper()}) en caliente", "#22C55E");
             }
         }
+
+        private void UpdateAbrUI()
+        {
+            var qualityTitle = this.FindControl<TextBlock>("QualityTitleLabel");
+            if (qualityTitle != null)
+            {
+                string codec = GetSelectedCodec();
+                if (codec == "h264")
+                {
+                    if (_abrController.IsEnabled)
+                    {
+                        qualityTitle.Text = _isHosting 
+                            ? $"Tasa de bits (ABR: {_abrController.CurrentBitrateMbps} Mbps)"
+                            : "Tasa de bits (ABR auto)";
+                    }
+                    else
+                    {
+                        qualityTitle.Text = "Tasa de bits";
+                    }
+                }
+                else
+                {
+                    qualityTitle.Text = "Calidad JPEG";
+                }
+            }
+        }
+
         private void OnSettingChanged()
         {
             int fps = GetSelectedFps();
@@ -2731,14 +2826,18 @@ namespace LanScreenShare.Desktop
                 qualityLabel.Text = codec == "h264" ? $"{sliderVal} Mbps" : $"{sliderVal}%";
             }
 
-            var qualityTitle = this.FindControl<TextBlock>("QualityTitleLabel");
-            if (qualityTitle != null)
-            {
-                qualityTitle.Text = codec == "h264" ? "Tasa de bits" : "Calidad JPEG";
-            }
-
             int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
             int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
+
+            if (_abrController.IsEnabled && codec == "h264")
+            {
+                _abrController.BaseFps = fps;
+                _abrController.MaxBitrateMbps = Math.Max(bitrateMbps, _appSettings.MaxAdaptiveBitrateMbps);
+                bitrateMbps = _abrController.CurrentBitrateMbps;
+                fps = _abrController.TargetFps;
+            }
+
+            UpdateAbrUI();
 
             var scaleLabel = this.FindControl<TextBlock>("ScaleValueLabel");
             if (scaleLabel != null)
@@ -2798,6 +2897,7 @@ namespace LanScreenShare.Desktop
                 _appSettings.ViewerVoiceChatEnabled = this.FindControl<CheckBox>("ViewerVoiceChatCheckBox")?.IsChecked ?? true;
                 _appSettings.AllowRemoteControl = this.FindControl<CheckBox>("AllowRemoteControlCheckBox")?.IsChecked ?? true;
                 _appSettings.ClipboardSyncEnabled = this.FindControl<CheckBox>("ClipboardSyncCheckBox")?.IsChecked ?? true;
+                _appSettings.EnableAdaptiveBitrate = this.FindControl<CheckBox>("AbrCheckBox")?.IsChecked ?? true;
 
                 var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
                 if (streamAccessCombo?.SelectedItem is ComboBoxItem streamItem && streamItem.Tag is string streamTag)
@@ -2917,7 +3017,21 @@ namespace LanScreenShare.Desktop
                         avSyncTag = $" • A/V: {drift} ms";
                     }
 
-                    statsText.Text = $"{rttTag}{fpsInfo} • {transferRate}{res}{engineTag}{codecTag}{audioTag}{avSyncTag}{controlTag}{dropsTag}";
+                    string abrTag = "";
+                    if (_isHosting && _abrController.IsEnabled)
+                    {
+                        string stateIcon = _abrController.CurrentState switch
+                        {
+                            AbrNetworkState.Optimal => "⚡",
+                            AbrNetworkState.Moderate => "⚖️",
+                            AbrNetworkState.Congested => "⚠️",
+                            AbrNetworkState.SevereCongestion => "🚨",
+                            _ => "⚡"
+                        };
+                        abrTag = $" • ABR: {_abrController.CurrentBitrateMbps} Mbps {stateIcon}";
+                    }
+
+                    statsText.Text = $"{rttTag}{fpsInfo} • {transferRate}{res}{engineTag}{codecTag}{abrTag}{audioTag}{avSyncTag}{controlTag}{dropsTag}";
 
                     if (_isPopoutActive && _popoutWindow != null)
                     {
@@ -3029,6 +3143,11 @@ namespace LanScreenShare.Desktop
 
                     // 1. Iniciar servidor de video (Puerto 5001)
                     await _streamServer.StartAsync(5001);
+                    _abrController.Reset(initialBitrateMbps: bitrateMbps, baseFps: fps);
+                    _abrController.MaxBitrateMbps = Math.Max(bitrateMbps, _appSettings.MaxAdaptiveBitrateMbps);
+                    _abrController.MinBitrateMbps = _appSettings.MinAdaptiveBitrateMbps;
+                    _abrController.IsEnabled = _appSettings.EnableAdaptiveBitrate;
+                    UpdateAbrUI();
                     SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
                     _inputSimulatorService?.SetTargetSource(_currentSource);
 
@@ -3110,6 +3229,7 @@ namespace LanScreenShare.Desktop
 
                 _isHosting = false;
                 ResetMetrics();
+                UpdateAbrUI();
 
                 var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
                 var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");

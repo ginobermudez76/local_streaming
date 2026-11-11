@@ -473,7 +473,19 @@
                                                 </StackPanel>
 
                                                 <StackPanel Grid.Column="1" Spacing="4" Margin="4,0,0,0">
-                                                    <TextBlock x:Name="QualityTitleLabel" Text="Tasa de bits" FontSize="11" Foreground="#7C8B9E"/>
+                                                    <Grid ColumnDefinitions="*,Auto">
+                                                        <TextBlock x:Name="QualityTitleLabel" Grid.Column="0" Text="Tasa de bits" FontSize="11" Foreground="#7C8B9E" VerticalAlignment="Center"/>
+                                                        <CheckBox x:Name="AbrCheckBox"
+                                                                  Grid.Column="1"
+                                                                  Content="ABR Auto"
+                                                                  IsChecked="True"
+                                                                  FontSize="10.5"
+                                                                  Foreground="#38BDF8"
+                                                                  VerticalAlignment="Center"
+                                                                  Padding="4,0,0,0"
+                                                                  Margin="0"
+                                                                  ToolTip.Tip="Ajuste Automático de Bitrate (ABR): adapta dinámicamente la tasa de bits y FPS según RTT y congestión de la red."/>
+                                                    </Grid>
                                                     <TextBlock x:Name="QualityValueLabel" Text="15 Mbps" IsVisible="False"/>
                                                     <ComboBox x:Name="BitrateComboBox"
                                                               Classes="darkCombo"

@@ -24,5 +24,8 @@ namespace LanScreenShare.Core.Models
         public bool ViewerVoiceChatEnabled { get; set; } = true;
         public bool ClipboardSyncEnabled { get; set; } = true;
         public string StretchMode { get; set; } = "Uniform";
+        public bool EnableAdaptiveBitrate { get; set; } = true;
+        public int MinAdaptiveBitrateMbps { get; set; } = 2;
+        public int MaxAdaptiveBitrateMbps { get; set; } = 25;
     }
 }
