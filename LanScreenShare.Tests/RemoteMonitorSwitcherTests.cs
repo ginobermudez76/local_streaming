@@ -188,7 +188,7 @@ namespace LanScreenShare.Tests
                 }
             };
 
-            await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId);
+            await client.ConnectAsync(new ControlClientConnectionOptions("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId));
 
             await client.SendSwitchMonitorAsync(-1);
             await client.SendSwitchMonitorAsync(-1);

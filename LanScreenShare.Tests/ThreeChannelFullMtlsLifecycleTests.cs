@@ -140,7 +140,7 @@ public class ThreeChannelFullMtlsLifecycleTests
 
         // 3. Cliente conecta al canal de Control (5003) con el token de Control
         using var controlClient = new TcpControlClient();
-        await controlClient.ConnectAsync("127.0.0.1", controlPort, clientOptions, sessionId, controlToken, token);
+        await controlClient.ConnectAsync(new ControlClientConnectionOptions("127.0.0.1", controlPort, clientOptions, sessionId, controlToken), token);
         Assert.IsTrue(controlClient.IsConnected);
 
         // Otorgar control remoto a la sesión para permitir inyección

@@ -196,7 +196,7 @@ namespace LanScreenShare.Tests
             // Conectar con un CancellationToken de handshake con margen suficiente para concurrencia de tests
             using (var handshakeCts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
             {
-                await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId, handshakeCts.Token);
+                await client.ConnectAsync(new ControlClientConnectionOptions("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId), handshakeCts.Token);
             }
 
             // Esperar a que venza el token de handshake (500ms) y a que el servidor registre al controlador activo

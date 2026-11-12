@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -81,7 +82,7 @@ namespace LanScreenShare.Network.Streaming
 
             Console.WriteLine($"[ControlServer] Servidor de control remoto (LSI2) escuchando en puerto {port}...");
 
-            _ = Task.Run(async () => await AcceptLoopAsync(token), token);
+            _ = Task.Run(() => AcceptLoopAsync(token), token);
             return Task.CompletedTask;
         }
 
@@ -93,7 +94,7 @@ namespace LanScreenShare.Network.Streaming
                 {
                     var client = await _listener!.AcceptTcpClientAsync(token);
                     client.NoDelay = true;
-                    _ = Task.Run(async () => await HandleIncomingClientAsync(client, token), token);
+                    _ = Task.Run(() => HandleIncomingClientAsync(client, token), token);
                 }
                 catch (OperationCanceledException)
                 {
@@ -110,42 +111,29 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
+        private readonly record struct EstablishedClientSession(Stream Stream, string? SessionId);
+
         private async Task HandleIncomingClientAsync(TcpClient client, CancellationToken token)
         {
             var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
 
             try
             {
-                Stream stream = client.GetStream();
-                string? assignedSessionId = null;
-
-                if (_sslServerOptions != null)
-                {
-                    var (sslStream, sessionId, success) = await NegotiateTlsSessionAsync(client, stream, clientId, token);
-                    if (!success || sslStream == null)
-                        return;
-
-                    stream = sslStream;
-                    assignedSessionId = sessionId;
-                }
-
-                if (!await IsClientApprovedAsync(client, stream, clientId, token))
+                var session = await SetupClientSessionAsync(client, clientId, token);
+                if (session == null)
                     return;
 
-                if (!TryAcquireControlSession(client, stream, clientId, assignedSessionId))
-                    return;
+                _clients[clientId] = (session.Value.Stream, client, session.Value.SessionId, new SemaphoreSlim(1, 1));
 
-                _clients[clientId] = (stream, client, assignedSessionId, new SemaphoreSlim(1, 1));
-
-                if (_sslServerOptions != null && assignedSessionId != null)
+                if (_sslServerOptions != null && session.Value.SessionId != null)
                 {
-                    await stream.WriteAsync(new byte[] { (byte)AttachmentStatus.Success }, token);
+                    await session.Value.Stream.WriteAsync(new byte[] { (byte)AttachmentStatus.Success }, token);
                 }
 
                 Console.WriteLine($"[ControlServer] Controlador LSI2 conectado: {clientId}");
                 ClientConnected?.Invoke(this, clientId);
 
-                var ctx = new ControlClientContext(clientId, client, stream, assignedSessionId);
+                var ctx = new ControlClientContext(clientId, client, session.Value.Stream, session.Value.SessionId);
                 await ProcessClientInputAsync(ctx, token);
             }
             catch (Exception ex)
@@ -153,6 +141,33 @@ namespace LanScreenShare.Network.Streaming
                 Console.WriteLine($"[ControlServer] Error inicializando cliente {clientId}: {ex.Message}");
                 RemoveClient(clientId);
             }
+        }
+
+        private async Task<EstablishedClientSession?> SetupClientSessionAsync(
+            TcpClient client,
+            string clientId,
+            CancellationToken token)
+        {
+            Stream stream = client.GetStream();
+            string? assignedSessionId = null;
+
+            if (_sslServerOptions != null)
+            {
+                var (sslStream, sessionId, success) = await NegotiateTlsSessionAsync(client, stream, clientId, token);
+                if (!success || sslStream == null)
+                    return null;
+
+                stream = sslStream;
+                assignedSessionId = sessionId;
+            }
+
+            if (!await IsClientApprovedAsync(client, stream, clientId, token))
+                return null;
+
+            if (!TryAcquireControlSession(client, stream, clientId, assignedSessionId))
+                return null;
+
+            return new EstablishedClientSession(stream, assignedSessionId);
         }
 
         private async Task<(SslStream? SslStream, string? SessionId, bool Success)> NegotiateTlsSessionAsync(
@@ -268,45 +283,10 @@ namespace LanScreenShare.Network.Streaming
             {
                 while (!token.IsCancellationRequested && ctx.Client.Connected)
                 {
-                    await ReadExactBytesAsync(ctx.Stream, packetBuffer, token);
-
-                    if (!Lsi2ControlPacket.TryReadPacket(
-                            packetBuffer,
-                            out _,
-                            out _,
-                            out var input,
-                            out string? protocolError))
+                    if (!await ProcessSingleInputPacketAsync(ctx, packetBuffer, token))
                     {
-                        Console.WriteLine($"[ControlServer] Error de protocolo de {ctx.ClientId}: {protocolError}. Desconectando.");
                         break;
                     }
-
-                    if (input == null) continue;
-
-                    if (input.Type == InputEventType.ClipboardText)
-                    {
-                        if (!await HandleClipboardTextPacketAsync(ctx, input, token))
-                            break;
-                        continue;
-                    }
-
-                    if (input.Type == InputEventType.SelectSource)
-                    {
-                        if (!await HandleSelectSourcePacketAsync(ctx, input, token))
-                            break;
-                        continue;
-                    }
-
-                    if (input.Type == InputEventType.SwitchMonitor)
-                    {
-                        HandleSwitchMonitorPacket(ctx, input);
-                        continue;
-                    }
-
-                    if (!IsAuthorizedSession(ctx.SessionId))
-                        continue;
-
-                    DispatchInputSafe(input);
                 }
             }
             catch (OperationCanceledException)
@@ -323,22 +303,67 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
-        private async Task<bool> HandleClipboardTextPacketAsync(ControlClientContext ctx, RemoteInputMessage input, CancellationToken token)
+        private async Task<bool> ProcessSingleInputPacketAsync(
+            ControlClientContext ctx,
+            byte[] packetBuffer,
+            CancellationToken token)
         {
-            int payloadLength = input.KeyCode;
-            if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
+            await ReadExactBytesAsync(ctx.Stream, packetBuffer, token);
+
+            if (!Lsi2ControlPacket.TryReadPacket(
+                    packetBuffer,
+                    out _,
+                    out _,
+                    out var input,
+                    out string? protocolError))
             {
-                Console.WriteLine($"[ControlServer] Longitud de portapapeles inválida ({payloadLength}) de {ctx.ClientId}. Desconectando.");
+                Console.WriteLine($"[ControlServer] Error de protocolo de {ctx.ClientId}: {protocolError}. Desconectando.");
                 return false;
             }
 
+            if (input == null)
+                return true;
+
+            return input.Type switch
+            {
+                InputEventType.ClipboardText => await HandleClipboardTextPacketAsync(ctx, input, token),
+                InputEventType.SelectSource => await HandleSelectSourcePacketAsync(ctx, input, token),
+                InputEventType.SwitchMonitor => HandleSwitchMonitorPacket(ctx, input),
+                _ => HandleStandardInput(ctx, input)
+            };
+        }
+
+        private bool HandleStandardInput(ControlClientContext ctx, RemoteInputMessage input)
+        {
+            if (IsAuthorizedSession(ctx.SessionId))
+            {
+                DispatchInputSafe(input);
+            }
+            return true;
+        }
+
+        private async Task<string?> TryReadTextPayloadAsync(Stream stream, int payloadLength, string clientId, CancellationToken token)
+        {
+            if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
+            {
+                Console.WriteLine($"[ControlServer] Longitud de payload inválida ({payloadLength}) de {clientId}. Desconectando.");
+                return null;
+            }
+
             byte[] textBytes = new byte[payloadLength];
-            await ReadExactBytesAsync(ctx.Stream, textBytes, token);
+            await ReadExactBytesAsync(stream, textBytes, token);
+            return Encoding.UTF8.GetString(textBytes);
+        }
+
+        private async Task<bool> HandleClipboardTextPacketAsync(ControlClientContext ctx, RemoteInputMessage input, CancellationToken token)
+        {
+            string? text = await TryReadTextPayloadAsync(ctx.Stream, input.KeyCode, ctx.ClientId, token);
+            if (text == null)
+                return false;
 
             if (!IsAuthorizedSession(ctx.SessionId))
                 return true;
 
-            string text = Encoding.UTF8.GetString(textBytes);
             input.ClipboardText = text;
 
             try { InputReceived?.Invoke(this, input); }
@@ -352,20 +377,13 @@ namespace LanScreenShare.Network.Streaming
 
         private async Task<bool> HandleSelectSourcePacketAsync(ControlClientContext ctx, RemoteInputMessage input, CancellationToken token)
         {
-            int payloadLength = input.KeyCode;
-            if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
-            {
-                Console.WriteLine($"[ControlServer] Longitud de ID de fuente inválida ({payloadLength}) de {ctx.ClientId}. Desconectando.");
+            string? sourceId = await TryReadTextPayloadAsync(ctx.Stream, input.KeyCode, ctx.ClientId, token);
+            if (sourceId == null)
                 return false;
-            }
-
-            byte[] sourceBytes = new byte[payloadLength];
-            await ReadExactBytesAsync(ctx.Stream, sourceBytes, token);
 
             if (!IsAuthorizedSession(ctx.SessionId))
                 return true;
 
-            string sourceId = Encoding.UTF8.GetString(sourceBytes);
             input.ClipboardText = sourceId;
 
             try { InputReceived?.Invoke(this, input); }
@@ -377,10 +395,10 @@ namespace LanScreenShare.Network.Streaming
             return true;
         }
 
-        private void HandleSwitchMonitorPacket(ControlClientContext ctx, RemoteInputMessage input)
+        private bool HandleSwitchMonitorPacket(ControlClientContext ctx, RemoteInputMessage input)
         {
             if (!IsAuthorizedSession(ctx.SessionId))
-                return;
+                return true;
 
             try { InputReceived?.Invoke(this, input); }
             catch (Exception ex) { Console.WriteLine($"[ControlServer] Error en InputReceived (cambio de monitor): {ex.Message}"); }
@@ -400,6 +418,8 @@ namespace LanScreenShare.Network.Streaming
             {
                 Console.WriteLine($"[ControlServer] Error en SwitchMonitorRequested: {ex.Message}");
             }
+
+            return true;
         }
 
         private void DispatchInputSafe(RemoteInputMessage input)
@@ -423,26 +443,26 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
-        public Task BroadcastClipboardTextAsync(string text)
+        public Task BroadcastClipboardTextAsync(string text) =>
+            BroadcastTextPayloadAsync(InputEventType.ClipboardText, text);
+
+        public Task BroadcastMonitorInfoAsync(string monitorLabel) =>
+            BroadcastTextPayloadAsync(InputEventType.MonitorInfo, monitorLabel);
+
+        private bool HasActiveClients => IsRunning && !_clients.IsEmpty;
+
+        private bool CanBroadcastText(string text, out byte[] utf8Bytes)
         {
-            return BroadcastTextPayloadAsync(InputEventType.ClipboardText, text);
+            utf8Bytes = Array.Empty<byte>();
+            if (!HasActiveClients || string.IsNullOrEmpty(text))
+                return false;
+
+            utf8Bytes = Encoding.UTF8.GetBytes(text);
+            return utf8Bytes.Length > 0 && utf8Bytes.Length <= Lsi2ControlPacket.MaxClipboardPayloadBytes;
         }
 
-        public Task BroadcastMonitorInfoAsync(string monitorLabel)
+        private byte[] BuildServerTextPacket(InputEventType payloadType, string text, byte[] utf8Bytes)
         {
-            return BroadcastTextPayloadAsync(InputEventType.MonitorInfo, monitorLabel);
-        }
-
-        private async Task BroadcastTextPayloadAsync(InputEventType payloadType, string text)
-        {
-            if (!IsRunning) return;
-            if (_clients.IsEmpty) return;
-            if (string.IsNullOrEmpty(text)) return;
-
-            byte[] utf8Bytes = Encoding.UTF8.GetBytes(text);
-            if (utf8Bytes.Length == 0 || utf8Bytes.Length > Lsi2ControlPacket.MaxClipboardPayloadBytes)
-                return;
-
             byte[] packet = new byte[Lsi2ControlPacket.PacketSize + utf8Bytes.Length];
             ulong seq = Interlocked.Increment(ref _serverSequenceNumber);
             ulong ts = (ulong)Stopwatch.GetTimestamp();
@@ -456,37 +476,56 @@ namespace LanScreenShare.Network.Streaming
 
             Lsi2ControlPacket.WritePacket(packet.AsSpan(0, Lsi2ControlPacket.PacketSize), seq, ts, msg);
             Buffer.BlockCopy(utf8Bytes, 0, packet, Lsi2ControlPacket.PacketSize, utf8Bytes.Length);
+            return packet;
+        }
 
-            foreach (var kvp in _clients)
+        private async Task BroadcastTextPayloadAsync(InputEventType payloadType, string text)
+        {
+            if (!CanBroadcastText(text, out var utf8Bytes))
+                return;
+
+            byte[] packet = BuildServerTextPacket(payloadType, text, utf8Bytes);
+            var tasks = _clients.Select(kvp => SendPayloadToClientAsync(kvp.Key, kvp.Value, packet, payloadType));
+            await Task.WhenAll(tasks);
+        }
+
+        private bool IsActiveController(string? sessionId)
+        {
+            if (_sessionAuthority == null || sessionId == null)
+                return true;
+
+            return _sessionAuthority.ActiveControllerSessionId == sessionId;
+        }
+
+        private async Task SendPayloadToClientAsync(
+            string clientId,
+            (Stream Stream, TcpClient Client, string? SessionId, SemaphoreSlim SendLock) ctx,
+            byte[] packet,
+            InputEventType payloadType)
+        {
+            if (!IsActiveController(ctx.SessionId))
             {
-                var clientId = kvp.Key;
-                var ctx = kvp.Value;
+                return;
+            }
 
-                if (_sessionAuthority != null && ctx.SessionId != null)
-                {
-                    if (_sessionAuthority.ActiveControllerSessionId != ctx.SessionId)
-                        continue;
-                }
-
+            try
+            {
+                await ctx.SendLock.WaitAsync();
                 try
                 {
-                    await ctx.SendLock.WaitAsync();
-                    try
+                    if (ctx.Client.Connected)
                     {
-                        if (ctx.Client.Connected)
-                        {
-                            await ctx.Stream.WriteAsync(packet.AsMemory(0, packet.Length));
-                        }
-                    }
-                    finally
-                    {
-                        ctx.SendLock.Release();
+                        await ctx.Stream.WriteAsync(packet.AsMemory(0, packet.Length));
                     }
                 }
-                catch (Exception ex)
+                finally
                 {
-                    Console.WriteLine($"[ControlServer] Error enviando payload {payloadType} a {clientId}: {ex.Message}");
+                    ctx.SendLock.Release();
                 }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlServer] Error enviando payload {payloadType} a {clientId}: {ex.Message}");
             }
         }
 
