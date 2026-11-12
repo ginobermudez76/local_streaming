@@ -222,6 +222,11 @@ namespace LanScreenShare.Tests
             server.Stop();
         }
 
+        private static bool HasMinChunks(int val, int min) => val >= min;
+
+        private static bool AreAllChunksReceived(int vHost, int dViewer, int mViewer) =>
+            HasMinChunks(vHost, 5) && HasMinChunks(dViewer, 5) && HasMinChunks(mViewer, 5);
+
         [TestMethod]
         public async Task BidirectionalAudio_OverMtlsSslStream_SimultaneousFullDuplex_Succeeds()
         {
@@ -241,8 +246,6 @@ namespace LanScreenShare.Tests
             Assert.IsNotNull(session);
 
             var audioToken = authority.IssueChannelToken(session.SessionId, ChannelType.Audio);
-            Assert.IsNotNull(audioToken);
-
             var serverSslOpts = TlsConfigurationHelper.CreateServerOptions(hostCert, store);
             var clientSslOpts = TlsConfigurationHelper.CreateClientOptions(viewerCert, "localhost", store);
 
@@ -253,14 +256,14 @@ namespace LanScreenShare.Tests
             int viewerChunksOnHost = 0;
             int hostDesktopChunksOnViewer = 0;
             int hostMicChunksOnViewer = 0;
-
             var tcsAllReceived = new TaskCompletionSource<bool>();
 
             void CheckCompletion()
             {
-                if (Volatile.Read(ref viewerChunksOnHost) >= 5 &&
-                    Volatile.Read(ref hostDesktopChunksOnViewer) >= 5 &&
-                    Volatile.Read(ref hostMicChunksOnViewer) >= 5)
+                if (AreAllChunksReceived(
+                        Volatile.Read(ref viewerChunksOnHost),
+                        Volatile.Read(ref hostDesktopChunksOnViewer),
+                        Volatile.Read(ref hostMicChunksOnViewer)))
                 {
                     tcsAllReceived.TrySetResult(true);
                 }
@@ -286,12 +289,23 @@ namespace LanScreenShare.Tests
                 CheckCompletion();
             };
 
-            await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, audioToken.TokenId);
+            await client.ConnectAsync(new AudioClientConnectionOptions("127.0.0.1", port, clientSslOpts, session.SessionId, audioToken.TokenId));
             await Task.Delay(100);
 
             Assert.AreEqual(1, server.ConnectedClientsCount, "El cliente mTLS debe estar registrado en el servidor.");
 
-            // Enviar simultáneamente en ambas direcciones sobre el mismo SslStream
+            await SendSimultaneousDuplexAudioAsync(server, client);
+
+            var done = await Task.WhenAny(tcsAllReceived.Task, Task.Delay(3000));
+            Assert.AreEqual(tcsAllReceived.Task, done,
+                $"Fallo recepción full-duplex mTLS (ViewerOnHost={viewerChunksOnHost}, DesktopOnViewer={hostDesktopChunksOnViewer}, MicOnViewer={hostMicChunksOnViewer})");
+
+            await client.DisconnectAsync();
+            server.Stop();
+        }
+
+        private static async Task SendSimultaneousDuplexAudioAsync(TcpAudioServer server, TcpAudioClient client)
+        {
             var tasks = new List<Task>();
             for (int i = 0; i < 5; i++)
             {
@@ -330,13 +344,6 @@ namespace LanScreenShare.Tests
             }
 
             await Task.WhenAll(tasks);
-
-            var done = await Task.WhenAny(tcsAllReceived.Task, Task.Delay(3000));
-            Assert.AreEqual(tcsAllReceived.Task, done,
-                $"Fallo recepción full-duplex mTLS (ViewerOnHost={viewerChunksOnHost}, DesktopOnViewer={hostDesktopChunksOnViewer}, MicOnViewer={hostMicChunksOnViewer})");
-
-            await client.DisconnectAsync();
-            server.Stop();
         }
 
         [TestMethod]

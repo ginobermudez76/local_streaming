@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -36,7 +35,7 @@ namespace LanScreenShare.Desktop
         private bool _isRecenteringMouse;
         private bool _isFullscreen;
         private WindowState _previousWindowState = WindowState.Normal;
-        private readonly DispatcherTimer _headerAutoHideTimer;
+        private DispatcherTimer _headerAutoHideTimer = null!;
         private bool _isMouseOverHeaderBar;
         private DispatcherTimer? _gameModeBannerTimer;
         private Stretch _currentStretch = Stretch.Uniform;
@@ -46,23 +45,17 @@ namespace LanScreenShare.Desktop
         public StreamPopoutWindow()
         {
             InitializeComponent();
+            InitializeHeaderAndAutoHide();
+            InitializeScreenImageEvents();
+            InitializeRemoteControlButtons();
+            InitializeAudioControls();
+            InitializeWindowButtons();
+        }
 
-            _headerAutoHideTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(2.5)
-            };
-            _headerAutoHideTimer.Tick += (s, e) =>
-            {
-                if (_isFullscreen && !_isMouseOverHeaderBar)
-                {
-                    var header = this.FindControl<Border>("StreamHeaderBar");
-                    if (header != null)
-                    {
-                        header.IsVisible = false;
-                    }
-                    _headerAutoHideTimer.Stop();
-                }
-            };
+        private void InitializeHeaderAndAutoHide()
+        {
+            _headerAutoHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+            _headerAutoHideTimer.Tick += OnHeaderAutoHideTick;
 
             var headerBar = this.FindControl<Border>("StreamHeaderBar");
             if (headerBar != null)
@@ -72,30 +65,32 @@ namespace LanScreenShare.Desktop
                     _isMouseOverHeaderBar = true;
                     _headerAutoHideTimer.Stop();
                 };
-
                 headerBar.PointerExited += (s, e) =>
                 {
                     _isMouseOverHeaderBar = false;
-                    if (_isFullscreen)
-                    {
-                        _headerAutoHideTimer.Stop();
-                        _headerAutoHideTimer.Start();
-                    }
+                    if (_isFullscreen) RestartHeaderTimer();
                 };
             }
 
             this.AddHandler(InputElement.PointerMovedEvent, Popout_GlobalPointerMoved, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        }
 
+        private void OnHeaderAutoHideTick(object? sender, EventArgs e)
+        {
+            if (!_isFullscreen || _isMouseOverHeaderBar) return;
+            var header = this.FindControl<Border>("StreamHeaderBar");
+            if (header != null) header.IsVisible = false;
+            _headerAutoHideTimer.Stop();
+        }
+
+        private void InitializeScreenImageEvents()
+        {
             var screenImage = this.FindControl<Image>("ScreenImage");
             if (screenImage != null)
             {
                 screenImage.DoubleTapped += (s, e) =>
                 {
-                    // Si el control remoto o el modo juego están activos, no alternar pantalla completa
-                    // para permitir abrir carpetas, archivos y hacer clics rápidos en juegos del anfitrión
-                    if (_isRemoteControlEnabled || _isGameMode)
-                        return;
-
+                    if (_isRemoteControlEnabled || _isGameMode) return;
                     ToggleFullscreen();
                 };
                 screenImage.PointerMoved += ScreenImage_PointerMoved;
@@ -105,23 +100,20 @@ namespace LanScreenShare.Desktop
                 screenImage.KeyDown += ScreenImage_KeyDown;
                 screenImage.KeyUp += ScreenImage_KeyUp;
             }
+        }
 
+        private void InitializeRemoteControlButtons()
+        {
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
             if (remoteControlBtn != null)
             {
-                remoteControlBtn.IsCheckedChanged += (s, e) =>
-                {
-                    RemoteControlToggled?.Invoke(remoteControlBtn.IsChecked == true);
-                };
+                remoteControlBtn.IsCheckedChanged += (s, e) => RemoteControlToggled?.Invoke(remoteControlBtn.IsChecked == true);
             }
 
             var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
             if (gameModeBtn != null)
             {
-                gameModeBtn.IsCheckedChanged += (s, e) =>
-                {
-                    GameModeToggled?.Invoke();
-                };
+                gameModeBtn.IsCheckedChanged += (s, e) => GameModeToggled?.Invoke();
             }
 
             var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
@@ -138,47 +130,39 @@ namespace LanScreenShare.Desktop
 
             this.AddHandler(DragDrop.DropEvent, Popout_Drop);
             this.AddHandler(DragDrop.DragOverEvent, Popout_DragOver);
+        }
 
-            var muteBtn = this.FindControl<Button>("AudioMuteButton");
-            if (muteBtn != null)
-            {
-                muteBtn.Click += (s, e) => MuteToggled?.Invoke();
-            }
+        private void ConfigureAudioVolumeSlider(string sliderName, Action<float>? volumeChanged, Action<double> updateVolumeText)
+        {
+            var slider = this.FindControl<Slider>(sliderName);
+            if (slider == null) return;
 
-            var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
-            if (volumeSlider != null)
+            slider.PropertyChanged += (s, e) =>
             {
-                volumeSlider.PropertyChanged += (s, e) =>
+                if (e.Property.Name == nameof(Slider.Value))
                 {
-                    if (e.Property.Name == nameof(Slider.Value))
-                    {
-                        float vol = (float)Math.Clamp(volumeSlider.Value / 100.0, 0.0, 1.0);
-                        VolumeChanged?.Invoke(vol);
-                        UpdateVolumeText(volumeSlider.Value);
-                    }
-                };
-            }
+                    float vol = (float)Math.Clamp(slider.Value / 100.0, 0.0, 1.0);
+                    volumeChanged?.Invoke(vol);
+                    updateVolumeText(slider.Value);
+                }
+            };
+        }
+
+        private void InitializeAudioControls()
+        {
+            var muteBtn = this.FindControl<Button>("AudioMuteButton");
+            if (muteBtn != null) muteBtn.Click += (s, e) => MuteToggled?.Invoke();
+
+            ConfigureAudioVolumeSlider("AudioVolumeSlider", VolumeChanged, UpdateVolumeText);
 
             var micMuteBtn = this.FindControl<Button>("MicMuteButton");
-            if (micMuteBtn != null)
-            {
-                micMuteBtn.Click += (s, e) => MicMuteToggled?.Invoke();
-            }
+            if (micMuteBtn != null) micMuteBtn.Click += (s, e) => MicMuteToggled?.Invoke();
 
-            var micVolumeSlider = this.FindControl<Slider>("MicVolumeSlider");
-            if (micVolumeSlider != null)
-            {
-                micVolumeSlider.PropertyChanged += (s, e) =>
-                {
-                    if (e.Property.Name == nameof(Slider.Value))
-                    {
-                        float vol = (float)Math.Clamp(micVolumeSlider.Value / 100.0, 0.0, 1.0);
-                        MicVolumeChanged?.Invoke(vol);
-                        UpdateMicVolumeText(micVolumeSlider.Value);
-                    }
-                };
-            }
+            ConfigureAudioVolumeSlider("MicVolumeSlider", MicVolumeChanged, UpdateMicVolumeText);
+        }
 
+        private void InitializeWindowButtons()
+        {
             var stretchBtn = this.FindControl<Button>("StretchModeButton");
             if (stretchBtn != null)
             {
@@ -315,6 +299,58 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private readonly record struct BannerStyle(string IconName, string ColorHex, string Text, double Seconds);
+
+        private static readonly BannerStyle ActiveGameModeStyle = new(
+            "Icon3dRotation", "#38BDF8", "Modo 3D Activo — Presiona Ctrl + Alt + L para liberar el cursor", 3.0);
+
+        private static readonly BannerStyle InactiveGameModeStyle = new(
+            "IconLockOpen", "#FBBF24", "Mouse Liberado — Presiona Ctrl + Alt + L para recapturar", 2.5);
+
+        private static bool IsMutedOrZero(bool isMuted, float volume) =>
+            isMuted || volume <= 0.01f;
+
+        private bool TryGetStreamGeometry(string resourceKey, out StreamGeometry geometry)
+        {
+            if (this.TryFindResource(resourceKey, out var res) && res is StreamGeometry geo)
+            {
+                geometry = geo;
+                return true;
+            }
+            geometry = null!;
+            return false;
+        }
+
+        private void ShowGameModeBanner(bool isGameMode, Border? banner, TextBlock? bannerText, PathIcon? bannerIcon)
+        {
+            if (banner == null || bannerText == null) return;
+
+            var style = isGameMode ? ActiveGameModeStyle : InactiveGameModeStyle;
+            banner.IsVisible = true;
+
+            if (bannerIcon != null && TryGetStreamGeometry(style.IconName, out var geo))
+            {
+                bannerIcon.Data = geo;
+                bannerIcon.Foreground = new SolidColorBrush(Color.Parse(style.ColorHex));
+            }
+            bannerText.Text = style.Text;
+            bannerText.Foreground = new SolidColorBrush(Color.Parse(style.ColorHex));
+
+            RestartBannerTimer(banner, style.Seconds);
+        }
+
+        private void RestartBannerTimer(Border banner, double seconds)
+        {
+            _gameModeBannerTimer?.Stop();
+            _gameModeBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
+            _gameModeBannerTimer.Tick += (s, e) =>
+            {
+                banner.IsVisible = false;
+                _gameModeBannerTimer?.Stop();
+            };
+            _gameModeBannerTimer.Start();
+        }
+
         public void SetGameModeState(bool isGameMode)
         {
             _isGameMode = isGameMode;
@@ -330,54 +366,12 @@ namespace LanScreenShare.Desktop
                 gameModeBtn.Background = isGameMode ? new SolidColorBrush(Color.Parse("#2563EB")) : new SolidColorBrush(Color.Parse("#27272A"));
             }
 
-            if (isGameMode)
+            if (screenImage != null)
             {
-                if (screenImage != null) screenImage.Cursor = new Cursor(StandardCursorType.None);
-                if (banner != null && bannerText != null)
-                {
-                    banner.IsVisible = true;
-                    if (bannerIcon != null)
-                    {
-                        bannerIcon.Data = (this.FindResource("Icon3dRotation") as StreamGeometry)!;
-                        bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
-                    }
-                    bannerText.Text = "Modo 3D Activo — Presiona Ctrl + Alt + L para liberar el cursor";
-                    bannerText.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
-
-                    _gameModeBannerTimer?.Stop();
-                    _gameModeBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-                    _gameModeBannerTimer.Tick += (s, e) =>
-                    {
-                        banner.IsVisible = false;
-                        _gameModeBannerTimer?.Stop();
-                    };
-                    _gameModeBannerTimer.Start();
-                }
+                screenImage.Cursor = isGameMode ? new Cursor(StandardCursorType.None) : Cursor.Default;
             }
-            else
-            {
-                if (screenImage != null) screenImage.Cursor = Cursor.Default;
-                if (banner != null && bannerText != null)
-                {
-                    banner.IsVisible = true;
-                    if (bannerIcon != null)
-                    {
-                        bannerIcon.Data = (this.FindResource("IconLockOpen") as StreamGeometry)!;
-                        bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
-                    }
-                    bannerText.Text = "Mouse Liberado — Presiona Ctrl + Alt + L para recapturar";
-                    bannerText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
 
-                    _gameModeBannerTimer?.Stop();
-                    _gameModeBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
-                    _gameModeBannerTimer.Tick += (s, e) =>
-                    {
-                        banner.IsVisible = false;
-                        _gameModeBannerTimer?.Stop();
-                    };
-                    _gameModeBannerTimer.Start();
-                }
-            }
+            ShowGameModeBanner(isGameMode, banner, bannerText, bannerIcon);
         }
 
         public void SetVolume(float volume, bool isMuted)
@@ -390,9 +384,10 @@ namespace LanScreenShare.Desktop
             UpdateVolumeText(volume * 100);
 
             var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
-            if (muteIcon != null)
+            string iconName = IsMutedOrZero(isMuted, volume) ? "IconVolumeOff" : "IconVolumeUp";
+            if (muteIcon != null && TryGetStreamGeometry(iconName, out var geo))
             {
-                muteIcon.Data = (this.FindResource(isMuted || volume <= 0.01f ? "IconVolumeOff" : "IconVolumeUp") as StreamGeometry)!;
+                muteIcon.Data = geo;
             }
         }
 
@@ -415,10 +410,14 @@ namespace LanScreenShare.Desktop
             UpdateMicVolumeText(volume * 100);
 
             var muteIcon = this.FindControl<PathIcon>("MicMuteIcon");
-            if (muteIcon != null)
+            if (muteIcon == null) return;
+
+            bool muted = IsMutedOrZero(isMuted, volume);
+            string iconName = muted ? "IconMicOff" : "IconMic";
+            if (TryGetStreamGeometry(iconName, out var geo))
             {
-                muteIcon.Data = (this.FindResource(isMuted || volume <= 0.01f ? "IconMicOff" : "IconMic") as StreamGeometry)!;
-                muteIcon.Foreground = new SolidColorBrush(isMuted || volume <= 0.01f ? Avalonia.Media.Color.Parse("#EF4444") : Avalonia.Media.Color.Parse("#10B981"));
+                muteIcon.Data = geo;
+                muteIcon.Foreground = new SolidColorBrush(Color.Parse(muted ? "#EF4444" : "#10B981"));
             }
         }
 
@@ -465,70 +464,79 @@ namespace LanScreenShare.Desktop
         private void Popout_GlobalPointerMoved(object? sender, PointerEventArgs e)
         {
             if (!_isFullscreen || _isGameMode) return;
-
             var headerBar = this.FindControl<Border>("StreamHeaderBar");
             if (headerBar == null) return;
 
-            var pos = e.GetPosition(this);
+            UpdateHeaderVisibility(headerBar, e.GetPosition(this).Y);
+        }
 
-            if (pos.Y <= 20)
+        private void UpdateHeaderVisibility(Border headerBar, double posY)
+        {
+            if (posY <= 20)
             {
                 if (!headerBar.IsVisible) headerBar.IsVisible = true;
-                _headerAutoHideTimer.Stop();
-                _headerAutoHideTimer.Start();
+                RestartHeaderTimer();
+                return;
             }
-            else if (headerBar.IsVisible)
+
+            if (!headerBar.IsVisible) return;
+
+            double headerHeight = headerBar.Bounds.Height > 0 ? headerBar.Bounds.Height : 50;
+            if (posY <= headerHeight)
             {
-                double headerHeight = headerBar.Bounds.Height > 0 ? headerBar.Bounds.Height : 50;
-                if (pos.Y <= headerHeight)
-                {
-                    _headerAutoHideTimer.Stop();
-                    _headerAutoHideTimer.Start();
-                }
-                else if (pos.Y > headerHeight + 25)
-                {
-                    headerBar.IsVisible = false;
-                    _headerAutoHideTimer.Stop();
-                }
+                RestartHeaderTimer();
+            }
+            else if (posY > headerHeight + 25)
+            {
+                headerBar.IsVisible = false;
+                _headerAutoHideTimer.Stop();
             }
         }
 
-        private void ToggleFullscreen()
+        private void RestartHeaderTimer()
         {
-            SetFullscreen(!_isFullscreen);
+            _headerAutoHideTimer.Stop();
+            _headerAutoHideTimer.Start();
+        }
+
+        private void ToggleFullscreen() => SetFullscreen(!_isFullscreen);
+
+        private void UpdateFullscreenButtonUI(bool fullscreen)
+        {
+            var fullscreenIcon = this.FindControl<PathIcon>("FullscreenButtonIcon");
+            var fullscreenText = this.FindControl<TextBlock>("FullscreenButtonText");
+
+            string iconRes = fullscreen ? "IconFullscreenExit" : "IconFullscreen";
+            if (fullscreenIcon != null && TryGetStreamGeometry(iconRes, out var geo))
+            {
+                fullscreenIcon.Data = geo;
+            }
+            if (fullscreenText != null)
+            {
+                fullscreenText.Text = fullscreen ? "Salir" : "Pantalla Completa";
+            }
         }
 
         private void SetFullscreen(bool fullscreen)
         {
             _isFullscreen = fullscreen;
             var headerBar = this.FindControl<Border>("StreamHeaderBar");
-            var fullscreenIcon = this.FindControl<PathIcon>("FullscreenButtonIcon");
-            var fullscreenText = this.FindControl<TextBlock>("FullscreenButtonText");
 
-            if (_isFullscreen)
+            if (fullscreen)
             {
                 _previousWindowState = this.WindowState;
                 this.WindowState = WindowState.FullScreen;
-
-                if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreenExit") as StreamGeometry)!;
-                if (fullscreenText != null) fullscreenText.Text = "Salir";
-
-                if (headerBar != null)
-                {
-                    headerBar.IsVisible = false;
-                }
             }
             else
             {
                 this.WindowState = _previousWindowState == WindowState.FullScreen ? WindowState.Normal : _previousWindowState;
+            }
 
-                if (fullscreenIcon != null) fullscreenIcon.Data = (this.FindResource("IconFullscreen") as StreamGeometry)!;
-                if (fullscreenText != null) fullscreenText.Text = "Pantalla Completa";
+            UpdateFullscreenButtonUI(fullscreen);
 
-                if (headerBar != null)
-                {
-                    headerBar.IsVisible = true;
-                }
+            if (headerBar != null)
+            {
+                headerBar.IsVisible = !fullscreen;
             }
         }
 
@@ -539,300 +547,6 @@ namespace LanScreenShare.Desktop
             var pos = e.GetPosition(this);
             double headerHeight = header.Bounds.Height > 0 ? header.Bounds.Height : 50;
             return pos.Y <= headerHeight;
-        }
-
-        private bool TryGetNormalizedCoordinates(PointerEventArgs e, out float normX, out float normY)
-        {
-            normX = 0f;
-            normY = 0f;
-
-            var screenImage = this.FindControl<Image>("ScreenImage");
-            if (screenImage?.Source == null) return false;
-
-            var imageSize = screenImage.Source.Size;
-            if (imageSize.Width <= 0 || imageSize.Height <= 0) return false;
-
-            var controlBounds = screenImage.Bounds;
-            if (controlBounds.Width <= 0 || controlBounds.Height <= 0) return false;
-
-            if (screenImage.Stretch == Stretch.Fill)
-            {
-                var pos = e.GetPosition(screenImage);
-                normX = (float)Math.Clamp(pos.X / controlBounds.Width, 0.0, 1.0);
-                normY = (float)Math.Clamp(pos.Y / controlBounds.Height, 0.0, 1.0);
-                return true;
-            }
-
-            double scaleX = controlBounds.Width / imageSize.Width;
-            double scaleY = controlBounds.Height / imageSize.Height;
-            double scale = Math.Min(scaleX, scaleY);
-
-            double renderedW = imageSize.Width * scale;
-            double renderedH = imageSize.Height * scale;
-
-            double offsetX = (controlBounds.Width - renderedW) / 2.0;
-            double offsetY = (controlBounds.Height - renderedH) / 2.0;
-
-            var p = e.GetPosition(screenImage);
-
-            if (p.X < offsetX || p.X > offsetX + renderedW ||
-                p.Y < offsetY || p.Y > offsetY + renderedH)
-            {
-                return false;
-            }
-
-            normX = (float)Math.Clamp((p.X - offsetX) / renderedW, 0.0, 1.0);
-            normY = (float)Math.Clamp((p.Y - offsetY) / renderedH, 0.0, 1.0);
-            return true;
-        }
-
-        private Avalonia.PixelPoint GetScreenImageCenterOnScreen()
-        {
-            var screenImage = this.FindControl<Image>("ScreenImage");
-            if (screenImage != null && screenImage.Bounds.Width > 0 && screenImage.Bounds.Height > 0)
-            {
-                int imgCenterX = this.Position.X + (int)Math.Round(screenImage.Bounds.X + (screenImage.Bounds.Width / 2.0));
-                int imgCenterY = this.Position.Y + (int)Math.Round(screenImage.Bounds.Y + (screenImage.Bounds.Height / 2.0));
-                return new Avalonia.PixelPoint(imgCenterX, imgCenterY);
-            }
-
-            int winCenterX = this.Position.X + (int)Math.Round(this.Bounds.Width / 2.0);
-            int winCenterY = this.Position.Y + (int)Math.Round(this.Bounds.Height / 2.0);
-            return new Avalonia.PixelPoint(winCenterX, winCenterY);
-        }
-
-        private void ScreenImage_PointerMoved(object? sender, PointerEventArgs e)
-        {
-            if (!_isRemoteControlEnabled) return;
-            if (IsPointerOverHeader(e)) return;
-
-            if (_isGameMode)
-            {
-                if (_isRecenteringMouse)
-                {
-                    _isRecenteringMouse = false;
-                    return;
-                }
-
-                if (OperatingSystem.IsWindows())
-                {
-                    var center = GetScreenImageCenterOnScreen();
-                    if (GetCursorPos(out POINT curPos))
-                    {
-                        int dx = curPos.X - center.X;
-                        int dy = curPos.Y - center.Y;
-
-                        if (dx != 0 || dy != 0)
-                        {
-                            RemoteInputSent?.Invoke(new RemoteInputMessage
-                            {
-                                Type = InputEventType.MouseMoveRelative,
-                                NormalizedX = dx,
-                                NormalizedY = dy
-                            });
-
-                            _isRecenteringMouse = true;
-                            SetCursorPos(center.X, center.Y);
-                        }
-                    }
-                }
-                return;
-            }
-
-            if (TryGetNormalizedCoordinates(e, out float x, out float y))
-            {
-                RemoteInputSent?.Invoke(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseMove,
-                    NormalizedX = x,
-                    NormalizedY = y
-                });
-            }
-        }
-
-        private void ScreenImage_PointerPressed(object? sender, PointerPressedEventArgs e)
-        {
-            if (!_isRemoteControlEnabled) return;
-            if (IsPointerOverHeader(e)) return;
-
-            var screenImage = this.FindControl<Image>("ScreenImage");
-            screenImage?.Focus();
-
-            var point = e.GetCurrentPoint(screenImage);
-            var props = point.Properties;
-
-            RemoteMouseButton button = props.IsLeftButtonPressed ? RemoteMouseButton.Left
-                : props.IsRightButtonPressed ? RemoteMouseButton.Right
-                : props.IsMiddleButtonPressed ? RemoteMouseButton.Middle
-                : RemoteMouseButton.None;
-
-            if (button == RemoteMouseButton.None) return;
-
-            if (_isGameMode)
-            {
-                RemoteInputSent?.Invoke(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseDown,
-                    Button = button,
-                    NormalizedX = -1f,
-                    NormalizedY = -1f
-                });
-                e.Handled = true;
-                return;
-            }
-
-            if (TryGetNormalizedCoordinates(e, out float x, out float y))
-            {
-                RemoteInputSent?.Invoke(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseDown,
-                    Button = button,
-                    NormalizedX = x,
-                    NormalizedY = y
-                });
-                e.Handled = true;
-            }
-        }
-
-        private void ScreenImage_PointerReleased(object? sender, PointerReleasedEventArgs e)
-        {
-            if (!_isRemoteControlEnabled) return;
-            if (IsPointerOverHeader(e)) return;
-
-            var screenImage = this.FindControl<Image>("ScreenImage");
-            var point = e.GetCurrentPoint(screenImage);
-            var props = point.Properties;
-
-            RemoteMouseButton button = props.PointerUpdateKind == PointerUpdateKind.LeftButtonReleased ? RemoteMouseButton.Left
-                : props.PointerUpdateKind == PointerUpdateKind.RightButtonReleased ? RemoteMouseButton.Right
-                : props.PointerUpdateKind == PointerUpdateKind.MiddleButtonReleased ? RemoteMouseButton.Middle
-                : RemoteMouseButton.Left;
-
-            if (_isGameMode)
-            {
-                RemoteInputSent?.Invoke(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseUp,
-                    Button = button,
-                    NormalizedX = -1f,
-                    NormalizedY = -1f
-                });
-                e.Handled = true;
-                return;
-            }
-
-            if (TryGetNormalizedCoordinates(e, out float x, out float y))
-            {
-                RemoteInputSent?.Invoke(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseUp,
-                    Button = button,
-                    NormalizedX = x,
-                    NormalizedY = y
-                });
-                e.Handled = true;
-            }
-        }
-
-        private void ScreenImage_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
-        {
-            if (!_isRemoteControlEnabled) return;
-            if (IsPointerOverHeader(e)) return;
-
-            short delta = (short)(e.Delta.Y * 120);
-
-            if (_isGameMode)
-            {
-                RemoteInputSent?.Invoke(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseWheel,
-                    WheelDelta = delta,
-                    NormalizedX = -1f,
-                    NormalizedY = -1f
-                });
-                e.Handled = true;
-                return;
-            }
-
-            if (TryGetNormalizedCoordinates(e, out float x, out float y))
-            {
-                RemoteInputSent?.Invoke(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseWheel,
-                    WheelDelta = delta,
-                    NormalizedX = x,
-                    NormalizedY = y
-                });
-                e.Handled = true;
-            }
-        }
-
-        private void ScreenImage_KeyDown(object? sender, KeyEventArgs e)
-        {
-            if (e.Key == Key.F11)
-            {
-                ToggleFullscreen();
-                e.Handled = true;
-                return;
-            }
-
-            if (!_isRemoteControlEnabled) return;
-
-            int keyCode = (int)e.Key;
-            RemoteInputSent?.Invoke(new RemoteInputMessage
-            {
-                Type = InputEventType.KeyDown,
-                KeyCode = keyCode
-            });
-            e.Handled = true;
-        }
-
-        private void ScreenImage_KeyUp(object? sender, KeyEventArgs e)
-        {
-            if (!_isRemoteControlEnabled) return;
-
-            int keyCode = (int)e.Key;
-            RemoteInputSent?.Invoke(new RemoteInputMessage
-            {
-                Type = InputEventType.KeyUp,
-                KeyCode = keyCode
-            });
-            e.Handled = true;
-        }
-
-        private void PopoutWindow_KeyDown(object? sender, KeyEventArgs e)
-        {
-            if (e.Key == Key.L &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
-            {
-                GameModeToggled?.Invoke();
-                e.Handled = true;
-                return;
-            }
-
-            if (e.Key == Key.M &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
-            {
-                CycleMonitorRequested?.Invoke();
-                e.Handled = true;
-                return;
-            }
-
-            if (e.Key == Key.F11)
-            {
-                ToggleFullscreen();
-                e.Handled = true;
-                return;
-            }
-
-            if (e.Key == Key.Escape && _isFullscreen)
-            {
-                SetFullscreen(false);
-                e.Handled = true;
-                return;
-            }
         }
 
         private void PopoutWindow_Closing(object? sender, WindowClosingEventArgs e)
@@ -846,23 +560,5 @@ namespace LanScreenShare.Desktop
                 ReattachRequested?.Invoke();
             }
         }
-
-        #region Win32 P/Invoke
-
-        [DllImport("user32.dll")]
-        private static extern bool SetCursorPos(int X, int Y);
-
-        [DllImport("user32.dll")]
-        private static extern bool GetCursorPos(out POINT lpPoint);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct POINT
-        {
-            public int X;
-            public int Y;
-        }
-
-        #endregion
     }
 }
-

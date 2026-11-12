@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography;
@@ -34,24 +35,14 @@ public static class TlsConfigurationHelper
         IPairedDeviceStore? deviceStore,
         Func<string, X509Certificate2, bool>? provisionalPairingCallback = null)
     {
-        return new SslServerAuthenticationOptions
+        var options = new SslServerAuthenticationOptions
         {
             ServerCertificate = hostCertificate,
             ClientCertificateRequired = true,
-            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
-            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-            RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) =>
-            {
-                if (certificate == null) return false;
-                using var clientCert = new X509Certificate2(certificate);
-
-                return ValidateCertificate(
-                    clientCert,
-                    expectedEkuOid: ClientAuthOid,
-                    deviceStore: deviceStore,
-                    provisionalPairingCallback: provisionalPairingCallback);
-            }
+            RemoteCertificateValidationCallback = CreateValidationCallback(ClientAuthOid, deviceStore, provisionalPairingCallback)
         };
+        ApplyBaseTlsSettings(options);
+        return options;
     }
 
     /// <summary>
@@ -63,27 +54,39 @@ public static class TlsConfigurationHelper
         IPairedDeviceStore? deviceStore,
         Func<string, X509Certificate2, bool>? provisionalPairingCallback = null)
     {
-        return new SslClientAuthenticationOptions
+        var options = new SslClientAuthenticationOptions
         {
             ClientCertificates = new X509CertificateCollection { viewerCertificate },
             TargetHost = targetHost,
-            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
-            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-            LocalCertificateSelectionCallback = (sender, targetHost, localCertificates, remoteCertificate, acceptableIssuers) =>
-            {
-                return viewerCertificate;
-            },
-            RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) =>
-            {
-                if (certificate == null) return false;
-                using var hostCert = new X509Certificate2(certificate);
+            LocalCertificateSelectionCallback = (_, _, _, _, _) => viewerCertificate,
+            RemoteCertificateValidationCallback = CreateValidationCallback(ServerAuthOid, deviceStore, provisionalPairingCallback)
+        };
+        ApplyBaseTlsSettings(options);
+        return options;
+    }
 
-                return ValidateCertificate(
-                    hostCert,
-                    expectedEkuOid: ServerAuthOid,
-                    deviceStore: deviceStore,
-                    provisionalPairingCallback: provisionalPairingCallback);
-            }
+    private static void ApplyBaseTlsSettings(SslServerAuthenticationOptions options)
+    {
+        options.EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12;
+        options.CertificateRevocationCheckMode = X509RevocationMode.NoCheck;
+    }
+
+    private static void ApplyBaseTlsSettings(SslClientAuthenticationOptions options)
+    {
+        options.EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12;
+        options.CertificateRevocationCheckMode = X509RevocationMode.NoCheck;
+    }
+
+    private static RemoteCertificateValidationCallback CreateValidationCallback(
+        string expectedEkuOid,
+        IPairedDeviceStore? deviceStore,
+        Func<string, X509Certificate2, bool>? provisionalPairingCallback)
+    {
+        return (_, certificate, _, _) =>
+        {
+            if (certificate == null) return false;
+            using var cert = new X509Certificate2(certificate);
+            return ValidateCertificate(cert, expectedEkuOid, deviceStore, provisionalPairingCallback);
         };
     }
 
@@ -100,78 +103,93 @@ public static class TlsConfigurationHelper
         IPairedDeviceStore? deviceStore,
         Func<string, X509Certificate2, bool>? provisionalPairingCallback)
     {
-        var now = DateTime.UtcNow;
-
-        // 1. Vigencia
-        if (now < cert.NotBefore.ToUniversalTime() || now > cert.NotAfter.ToUniversalTime())
+        if (!IsCertificatePeriodValid(cert))
         {
             Console.WriteLine("[mTLS] Certificado rechazado: fuera del período de vigencia.");
             return false;
         }
 
-        // 2. Longitud y tipo de clave
-        if (cert.PublicKey.Oid.Value == "1.2.840.10045.2.1") // id-ecPublicKey
+        if (!IsKeyLengthValid(cert))
         {
-            using var ecdsa = cert.GetECDsaPublicKey();
-            if (ecdsa == null || ecdsa.KeySize < 256)
-            {
-                Console.WriteLine("[mTLS] Certificado rechazado: clave ECDSA menor a 256 bits.");
-                return false;
-            }
-        }
-        else if (cert.PublicKey.Oid.Value == "1.2.840.113549.1.1.1") // rsaEncryption
-        {
-            using var rsa = cert.GetRSAPublicKey();
-            if (rsa == null || rsa.KeySize < 2048)
-            {
-                Console.WriteLine("[mTLS] Certificado rechazado: clave RSA menor a 2048 bits.");
-                return false;
-            }
-        }
-        else
-        {
-            Console.WriteLine($"[mTLS] Algoritmo de clave pública no soportado: {cert.PublicKey.Oid.Value}");
             return false;
         }
 
-        // 3. EKU requerido
-        bool hasEku = false;
-        foreach (var ext in cert.Extensions)
-        {
-            if (ext is X509EnhancedKeyUsageExtension ekuExt)
-            {
-                foreach (var oid in ekuExt.EnhancedKeyUsages)
-                {
-                    if (oid.Value == expectedEkuOid)
-                    {
-                        hasEku = true;
-                        break;
-                    }
-                }
-            }
-            else if (ext.Oid?.Value == "2.5.29.37")
-            {
-                var decodedEku = new X509EnhancedKeyUsageExtension(ext, ext.Critical);
-                foreach (var oid in decodedEku.EnhancedKeyUsages)
-                {
-                    if (oid.Value == expectedEkuOid)
-                    {
-                        hasEku = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!hasEku)
+        if (!HasRequiredEku(cert, expectedEkuOid))
         {
             Console.WriteLine($"[mTLS] Certificado rechazado: no contiene la extensión EKU requerida ({expectedEkuOid}).");
             return false;
         }
 
-        // 4. Huella y autorización en IPairedDeviceStore
         string fingerprint = ComputeFingerprint(cert);
+        return IsDeviceAuthorized(fingerprint, cert, deviceStore, provisionalPairingCallback);
+    }
 
+    private static bool IsCertificatePeriodValid(X509Certificate2 cert)
+    {
+        var now = DateTime.UtcNow;
+        return now >= cert.NotBefore.ToUniversalTime() && now <= cert.NotAfter.ToUniversalTime();
+    }
+
+    private static bool IsKeyLengthValid(X509Certificate2 cert)
+    {
+        return (cert.PublicKey.Oid?.Value) switch
+        {
+            "1.2.840.10045.2.1" => IsEcdsaValid(cert),
+            "1.2.840.113549.1.1.1" => IsRsaValid(cert),
+            _ => RejectUnsupportedKey(cert.PublicKey.Oid?.Value)
+        };
+    }
+
+    private static bool IsEcdsaValid(X509Certificate2 cert)
+    {
+        using var ecdsa = cert.GetECDsaPublicKey();
+        if (ecdsa != null && ecdsa.KeySize >= 256) return true;
+        Console.WriteLine("[mTLS] Certificado rechazado: clave ECDSA menor a 256 bits.");
+        return false;
+    }
+
+    private static bool IsRsaValid(X509Certificate2 cert)
+    {
+        using var rsa = cert.GetRSAPublicKey();
+        if (rsa != null && rsa.KeySize >= 2048) return true;
+        Console.WriteLine("[mTLS] Certificado rechazado: clave RSA menor a 2048 bits.");
+        return false;
+    }
+
+    private static bool RejectUnsupportedKey(string? oid)
+    {
+        Console.WriteLine($"[mTLS] Algoritmo de clave pública no soportado: {oid}");
+        return false;
+    }
+
+    private static bool HasRequiredEku(X509Certificate2 cert, string expectedEkuOid) =>
+        cert.Extensions.Cast<X509Extension>().Any(ext => MatchesEkuExtension(ext, expectedEkuOid));
+
+    private static bool MatchesEkuExtension(X509Extension ext, string expectedEkuOid)
+    {
+        if (ext is X509EnhancedKeyUsageExtension ekuExt)
+        {
+            return ContainsEkuOid(ekuExt.EnhancedKeyUsages, expectedEkuOid);
+        }
+
+        if (ext.Oid?.Value == "2.5.29.37")
+        {
+            var decodedEku = new X509EnhancedKeyUsageExtension(ext, ext.Critical);
+            return ContainsEkuOid(decodedEku.EnhancedKeyUsages, expectedEkuOid);
+        }
+
+        return false;
+    }
+
+    private static bool ContainsEkuOid(OidCollection usages, string expectedEkuOid) =>
+        usages.Cast<Oid>().Any(oid => oid.Value == expectedEkuOid);
+
+    private static bool IsDeviceAuthorized(
+        string fingerprint,
+        X509Certificate2 cert,
+        IPairedDeviceStore? deviceStore,
+        Func<string, X509Certificate2, bool>? provisionalPairingCallback)
+    {
         if (deviceStore != null)
         {
             bool isRevoked = deviceStore.IsDeviceRevokedAsync(fingerprint).GetAwaiter().GetResult();
@@ -188,7 +206,6 @@ public static class TlsConfigurationHelper
             }
         }
 
-        // 5. Si no está emparejado, comprobar si se permite emparejamiento provisional
         if (provisionalPairingCallback != null && provisionalPairingCallback(fingerprint, cert))
         {
             return true;

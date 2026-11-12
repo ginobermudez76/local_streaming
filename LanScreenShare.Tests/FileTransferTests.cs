@@ -196,7 +196,7 @@ namespace LanScreenShare.Tests
             server.TransferCompleted += (s, c) => serverCompletedTcs.TrySetResult(c);
 
             using var client = new TcpFileTransferClient();
-            await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, fileToken.TokenId);
+            await client.ConnectAsync(new FileTransferClientConnectionOptions("127.0.0.1", port, clientSslOpts, session.SessionId, fileToken.TokenId));
             Assert.IsTrue(client.IsConnected);
 
             bool sendResult = await client.SendFileAsync(sourceFile);

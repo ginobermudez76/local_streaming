@@ -1,9 +1,10 @@
 using System;
 using System.Buffers.Binary;
-using System.IO;
 using LanScreenShare.Core.Models;
 
 namespace LanScreenShare.Network.Security;
+
+public readonly record struct Lsi2PacketHeader(ulong SequenceNumber, ulong Timestamp);
 
 /// <summary>
 /// Encapsula la serialización y deserialización del paquete de control remoto LSI2 (28 bytes).
@@ -28,18 +29,6 @@ public sealed class Lsi2ControlPacket
 
     /// <summary>
     /// Serializa el paquete LSI2 en el búfer proporcionado (debe ser de al menos 28 bytes).
-    /// Estructura de 28 bytes:
-    /// 0..3:   Magic (0x4C534932)
-    /// 4..11:  SequenceNumber (uint64 BE)
-    /// 12..19: Timestamp (uint64 BE)
-    /// 20:     EventType (uint8)
-    /// 21:     Button (uint8)
-    /// 22..23: WheelDelta (int16 BE)
-    /// 24..27: KeyCode (int32 BE)
-    /// Para eventos de ratón con coordenadas (Move/Down/Up), se codifican en NormalizedX y NormalizedY.
-    /// Para mantener 28 bytes exactos según ADR-001:
-    /// Si EventType es MouseMove, Wheel o MouseButton con coordenadas:
-    /// KeyCode almacena NormalizedX (ushort, 16-bit) y NormalizedY (ushort, 16-bit) empaquetados.
     /// </summary>
     public static void WritePacket(
         Span<byte> destination,
@@ -50,77 +39,85 @@ public sealed class Lsi2ControlPacket
         if (destination.Length < PacketSize)
             throw new ArgumentException($"El destino debe tener al menos {PacketSize} bytes.", nameof(destination));
 
-        // 1. Magic (4 bytes Big-Endian)
         BinaryPrimitives.WriteUInt32BigEndian(destination.Slice(0, 4), MagicLsi2);
-
-        // 2. SequenceNumber (8 bytes Big-Endian)
         BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(4, 8), sequenceNumber);
-
-        // 3. Timestamp (8 bytes Big-Endian)
         BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(12, 8), timestamp);
 
-        // 4. Payload (8 bytes):
-        // Offset 20: EventType (1B)
         destination[20] = (byte)input.Type;
-
-        // Offset 21: Button (1B)
         destination[21] = (byte)input.Button;
-
-        // Offset 22..23: WheelDelta (2B)
         BinaryPrimitives.WriteInt16BigEndian(destination.Slice(22, 2), input.WheelDelta);
 
-        // Offset 24..27: KeyCode / Longitud de payload / Índice de monitor / Coordenadas empaquetadas (4B)
-        if (input.Type == InputEventType.KeyDown ||
-            input.Type == InputEventType.KeyUp ||
-            input.Type == InputEventType.ClipboardText ||
-            input.Type == InputEventType.SwitchMonitor ||
-            input.Type == InputEventType.MonitorInfo ||
-            input.Type == InputEventType.SelectSource)
-        {
-            BinaryPrimitives.WriteInt32BigEndian(destination.Slice(24, 4), input.KeyCode);
-        }
-        else if (input.Type == InputEventType.MouseMoveRelative)
-        {
-            // Coordenadas relativas en modo juego: deltas de píxeles con signo (-32768 a 32767)
-            short relX = (short)Math.Clamp((int)Math.Round(input.NormalizedX), short.MinValue, short.MaxValue);
-            short relY = (short)Math.Clamp((int)Math.Round(input.NormalizedY), short.MinValue, short.MaxValue);
-            BinaryPrimitives.WriteInt16BigEndian(destination.Slice(24, 2), relX);
-            BinaryPrimitives.WriteInt16BigEndian(destination.Slice(26, 2), relY);
-        }
-        else
-        {
-            // Coordenadas absolutas normalizadas (0.0 a 1.0) en dos enteros de 16 bits (0 a 65535)
-            if (input.NormalizedX < 0f || input.NormalizedY < 0f)
-            {
-                BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(24, 2), 0xFFFF);
-                BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(26, 2), 0xFFFF);
-            }
-            else
-            {
-                ushort packedX = (ushort)Math.Clamp((int)Math.Round(input.NormalizedX * 65535f), 0, 65535);
-                ushort packedY = (ushort)Math.Clamp((int)Math.Round(input.NormalizedY * 65535f), 0, 65535);
-                BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(24, 2), packedX);
-                BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(26, 2), packedY);
-            }
-        }
+        WritePayloadField(destination.Slice(24, 4), input);
     }
 
-    /// <summary>
-    /// Intenta parsear un paquete de 28 bytes recibido.
-    /// Retorna false y desconecta si se detecta magic anterior LSI1 o magic corrupto.
-    /// </summary>
+    private static void WritePayloadField(Span<byte> destination, RemoteInputMessage input)
+    {
+        if (IsKeyOrCommandEvent(input.Type))
+        {
+            BinaryPrimitives.WriteInt32BigEndian(destination, input.KeyCode);
+            return;
+        }
+
+        if (input.Type == InputEventType.MouseMoveRelative)
+        {
+            WriteRelativeCoordinates(destination, input.NormalizedX, input.NormalizedY);
+            return;
+        }
+
+        WriteAbsoluteCoordinates(destination, input.NormalizedX, input.NormalizedY);
+    }
+
+    private static void WriteRelativeCoordinates(Span<byte> destination, float x, float y)
+    {
+        short relX = (short)Math.Clamp((int)Math.Round(x), short.MinValue, short.MaxValue);
+        short relY = (short)Math.Clamp((int)Math.Round(y), short.MinValue, short.MaxValue);
+        BinaryPrimitives.WriteInt16BigEndian(destination.Slice(0, 2), relX);
+        BinaryPrimitives.WriteInt16BigEndian(destination.Slice(2, 2), relY);
+    }
+
+    private static void WriteAbsoluteCoordinates(Span<byte> destination, float x, float y)
+    {
+        if (x < 0f || y < 0f)
+        {
+            BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(0, 2), 0xFFFF);
+            BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(2, 2), 0xFFFF);
+            return;
+        }
+
+        ushort packedX = (ushort)Math.Clamp((int)Math.Round(x * 65535f), 0, 65535);
+        ushort packedY = (ushort)Math.Clamp((int)Math.Round(y * 65535f), 0, 65535);
+        BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(0, 2), packedX);
+        BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(2, 2), packedY);
+    }
+
     public static bool TryReadPacket(
         ReadOnlySpan<byte> source,
-        out ulong sequenceNumber,
-        out ulong timestamp,
+        out Lsi2PacketHeader header,
         out RemoteInputMessage? inputMessage,
         out string? protocolError)
     {
-        sequenceNumber = 0;
-        timestamp = 0;
+        header = default;
         inputMessage = null;
-        protocolError = null;
 
+        if (!ValidatePacketHeader(source, out protocolError))
+        {
+            return false;
+        }
+
+        ulong sequenceNumber = BinaryPrimitives.ReadUInt64BigEndian(source.Slice(4, 8));
+        ulong timestamp = BinaryPrimitives.ReadUInt64BigEndian(source.Slice(12, 8));
+        header = new Lsi2PacketHeader(sequenceNumber, timestamp);
+
+        var eventType = (InputEventType)source[20];
+        var button = (RemoteMouseButton)source[21];
+        short wheelDelta = BinaryPrimitives.ReadInt16BigEndian(source.Slice(22, 2));
+
+        inputMessage = ReadInputMessage(source.Slice(24, 4), eventType, button, wheelDelta);
+        return true;
+    }
+
+    private static bool ValidatePacketHeader(ReadOnlySpan<byte> source, out string? protocolError)
+    {
         if (source.Length < 4)
         {
             protocolError = "PacketTooShort";
@@ -146,50 +143,35 @@ public sealed class Lsi2ControlPacket
             return false;
         }
 
-        sequenceNumber = BinaryPrimitives.ReadUInt64BigEndian(source.Slice(4, 8));
-        timestamp = BinaryPrimitives.ReadUInt64BigEndian(source.Slice(12, 8));
+        protocolError = null;
+        return true;
+    }
 
-        var eventType = (InputEventType)source[20];
-        var button = (RemoteMouseButton)source[21];
-        short wheelDelta = BinaryPrimitives.ReadInt16BigEndian(source.Slice(22, 2));
-
+    private static RemoteInputMessage ReadInputMessage(
+        ReadOnlySpan<byte> payloadSlice,
+        InputEventType eventType,
+        RemoteMouseButton button,
+        short wheelDelta)
+    {
         int keyCode = 0;
         float normX = 0f;
         float normY = 0f;
 
-        if (eventType == InputEventType.KeyDown ||
-            eventType == InputEventType.KeyUp ||
-            eventType == InputEventType.ClipboardText ||
-            eventType == InputEventType.SwitchMonitor ||
-            eventType == InputEventType.MonitorInfo ||
-            eventType == InputEventType.SelectSource)
+        if (IsKeyOrCommandEvent(eventType))
         {
-            keyCode = BinaryPrimitives.ReadInt32BigEndian(source.Slice(24, 4));
+            keyCode = BinaryPrimitives.ReadInt32BigEndian(payloadSlice);
         }
         else if (eventType == InputEventType.MouseMoveRelative)
         {
-            short relX = BinaryPrimitives.ReadInt16BigEndian(source.Slice(24, 2));
-            short relY = BinaryPrimitives.ReadInt16BigEndian(source.Slice(26, 2));
-            normX = relX;
-            normY = relY;
+            normX = BinaryPrimitives.ReadInt16BigEndian(payloadSlice.Slice(0, 2));
+            normY = BinaryPrimitives.ReadInt16BigEndian(payloadSlice.Slice(2, 2));
         }
         else
         {
-            ushort packedX = BinaryPrimitives.ReadUInt16BigEndian(source.Slice(24, 2));
-            ushort packedY = BinaryPrimitives.ReadUInt16BigEndian(source.Slice(26, 2));
-            if (packedX == 0xFFFF && packedY == 0xFFFF)
-            {
-                normX = -1f;
-                normY = -1f;
-            }
-            else
-            {
-                normX = packedX / 65535f;
-                normY = packedY / 65535f;
-            }
+            (normX, normY) = ReadAbsoluteCoordinates(payloadSlice);
         }
 
-        inputMessage = new RemoteInputMessage
+        return new RemoteInputMessage
         {
             Type = eventType,
             Button = button,
@@ -198,8 +180,26 @@ public sealed class Lsi2ControlPacket
             NormalizedX = normX,
             NormalizedY = normY
         };
-
-        return true;
     }
-}
 
+    private static (float X, float Y) ReadAbsoluteCoordinates(ReadOnlySpan<byte> slice)
+    {
+        ushort packedX = BinaryPrimitives.ReadUInt16BigEndian(slice.Slice(0, 2));
+        ushort packedY = BinaryPrimitives.ReadUInt16BigEndian(slice.Slice(2, 2));
+
+        if (packedX == 0xFFFF && packedY == 0xFFFF)
+        {
+            return (-1f, -1f);
+        }
+
+        return (packedX / 65535f, packedY / 65535f);
+    }
+
+    private static bool IsKeyOrCommandEvent(InputEventType type) =>
+        type is InputEventType.KeyDown or
+                InputEventType.KeyUp or
+                InputEventType.ClipboardText or
+                InputEventType.SwitchMonitor or
+                InputEventType.MonitorInfo or
+                InputEventType.SelectSource;
+}

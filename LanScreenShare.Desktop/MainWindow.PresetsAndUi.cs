@@ -10,6 +10,116 @@ namespace LanScreenShare.Desktop
 {
     public partial class MainWindow
     {
+        public readonly record struct ResolutionMetrics(
+            int NativeW,
+            int NativeH,
+            int TargetW,
+            int TargetH,
+            double Scale);
+
+        private readonly record struct TransmissionPresetConfig(
+            double? ApproximateScale,
+            int? ScaleIndex,
+            string Fps,
+            string Codec,
+            int Quality,
+            string Bitrate);
+
+        private readonly record struct ButtonTheme(
+            IBrush Background,
+            IBrush Border,
+            Thickness Thickness,
+            IBrush IconForeground,
+            IBrush TitleForeground,
+            IBrush SubForeground);
+
+        private readonly record struct AdminStatusStyle(
+            string Bg,
+            string Border,
+            string Text,
+            string Subtext,
+            string Tooltip);
+
+        private readonly record struct BadgeTheme(
+            string Bg,
+            string Border,
+            string Fg,
+            string Text,
+            string IconResource);
+
+        private static readonly ButtonTheme ActivePresetTheme = new(
+            new SolidColorBrush(Color.Parse("#192B4D")),
+            new SolidColorBrush(Color.Parse("#3B82F6")),
+            new Thickness(1.5),
+            new SolidColorBrush(Color.Parse("#60A5FA")),
+            new SolidColorBrush(Color.Parse("#F8FAFC")),
+            new SolidColorBrush(Color.Parse("#93C5FD")));
+
+        private static readonly ButtonTheme InactivePresetTheme = new(
+            new SolidColorBrush(Color.Parse("#1A2230")),
+            new SolidColorBrush(Color.Parse("#263246")),
+            new Thickness(1),
+            new SolidColorBrush(Color.Parse("#94A3B8")),
+            new SolidColorBrush(Color.Parse("#E2E8F0")),
+            new SolidColorBrush(Color.Parse("#7C8B9E")));
+
+        private static readonly AdminStatusStyle AdminElevatedStyle = new(
+            "#14291F",
+            "#1E4631",
+            "Modo administrador · Juegos y UAC activos",
+            "Control de juegos, apps elevadas y UAC garantizado.",
+            "Permisos elevados activos: Puede interactuar libremente con launchers de juegos, Administrador de Tareas y ventanas administrativas.");
+
+        private static readonly AdminStatusStyle AdminStandardStyle = new(
+            "#231F1A",
+            "#42331B",
+            "Modo estándar · Juegos/UAC requieren admin.",
+            "Ejecuta como Administrador para interactuar con juegos o UAC.",
+            "Windows restringe el control remoto sobre ventanas elevadas como launchers o juegos. Abre la aplicación con 'Ejecutar como Administrador' para habilitarlo.");
+
+        private static TransmissionPresetConfig GetPresetConfig(string presetName) =>
+            presetName.ToLowerInvariant() switch
+            {
+                "quality" => new TransmissionPresetConfig(null, 0, "60", "h264", 15, "15"),
+                "speed" => new TransmissionPresetConfig(0.50, null, "30", "h264", 3, "3"),
+                _ => new TransmissionPresetConfig(0.75, null, "30", "h264", 8, "8")
+            };
+
+        private void ApplyPresetScale(ComboBox? scaleCombo, in TransmissionPresetConfig config)
+        {
+            if (scaleCombo == null || scaleCombo.Items.Count == 0) return;
+            if (config.ScaleIndex is int scaleIdx)
+            {
+                scaleCombo.SelectedIndex = scaleIdx;
+                return;
+            }
+            if (config.ApproximateScale is double approxScale)
+            {
+                SelectScaleApproximate(scaleCombo, approxScale);
+            }
+        }
+
+        private void ApplyPresetControls(TransmissionPresetConfig config)
+        {
+            var codecCombo = this.FindControl<ComboBox>("CodecComboBox");
+            var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
+            var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
+            var qualitySlider = this.FindControl<Slider>("QualitySlider");
+            var bitrateCombo = this.FindControl<ComboBox>("BitrateComboBox");
+
+            ApplyPresetScale(scaleCombo, config);
+            SelectComboBoxItemByTag(fpsCombo, config.Fps);
+            SelectComboBoxItemByTag(codecCombo, config.Codec);
+            UpdateQualitySliderForCodec(config.Codec);
+
+            if (qualitySlider != null)
+            {
+                qualitySlider.Value = config.Quality;
+            }
+
+            SelectComboBoxItemByTag(bitrateCombo, config.Bitrate);
+        }
+
         private void ApplyTransmissionPreset(string presetName, bool save = true)
         {
             _isApplyingPreset = true;
@@ -17,57 +127,8 @@ namespace LanScreenShare.Desktop
             {
                 _appSettings.TransmissionPreset = presetName;
 
-                var codecCombo = this.FindControl<ComboBox>("CodecComboBox");
-                var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
-                var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
-                var qualitySlider = this.FindControl<Slider>("QualitySlider");
-                var bitrateCombo = this.FindControl<ComboBox>("BitrateComboBox");
-
-                switch (presetName.ToLowerInvariant())
-                {
-                    case "quality":
-                        // 100% Nativa, 60 FPS, Bitrate alto (15 Mbps H.264 / 85% JPEG)
-                        if (scaleCombo != null && scaleCombo.Items.Count > 0)
-                        {
-                            scaleCombo.SelectedIndex = 0; // Nativa
-                        }
-                        SelectComboBoxItemByTag(fpsCombo, "60");
-                        SelectComboBoxItemByTag(codecCombo, "h264");
-                        UpdateQualitySliderForCodec("h264");
-                        if (qualitySlider != null)
-                        {
-                            qualitySlider.Value = 15;
-                        }
-                        SelectComboBoxItemByTag(bitrateCombo, "15");
-                        break;
-
-                    case "speed":
-                        // 50% Escala, 30 FPS, Bitrate bajo (3 Mbps H.264 / 50% JPEG)
-                        SelectScaleApproximate(scaleCombo, 0.50);
-                        SelectComboBoxItemByTag(fpsCombo, "30");
-                        SelectComboBoxItemByTag(codecCombo, "h264");
-                        UpdateQualitySliderForCodec("h264");
-                        if (qualitySlider != null)
-                        {
-                            qualitySlider.Value = 3;
-                        }
-                        SelectComboBoxItemByTag(bitrateCombo, "3");
-                        break;
-
-                    case "balanced":
-                    default:
-                        // 75% Escala, 30 FPS, Bitrate balanceado (8 Mbps H.264 / 75% JPEG)
-                        SelectScaleApproximate(scaleCombo, 0.75);
-                        SelectComboBoxItemByTag(fpsCombo, "30");
-                        SelectComboBoxItemByTag(codecCombo, "h264");
-                        UpdateQualitySliderForCodec("h264");
-                        if (qualitySlider != null)
-                        {
-                            qualitySlider.Value = 8;
-                        }
-                        SelectComboBoxItemByTag(bitrateCombo, "8");
-                        break;
-                }
+                var config = GetPresetConfig(presetName);
+                ApplyPresetControls(config);
 
                 UpdatePresetButtonsHighlight(presetName);
                 UpdateHardwareEncoderBadgeUI();
@@ -85,57 +146,11 @@ namespace LanScreenShare.Desktop
 
         private void UpdatePresetButtonsHighlight(string activePreset)
         {
-            var presetQualityBtn = this.FindControl<Button>("PresetQualityButton");
-            var presetBalancedBtn = this.FindControl<Button>("PresetBalancedButton");
-            var presetSpeedBtn = this.FindControl<Button>("PresetSpeedButton");
+            UpdateSinglePresetButtonHighlight("Quality", activePreset == "quality");
+            UpdateSinglePresetButtonHighlight("Balanced", activePreset == "balanced");
+            UpdateSinglePresetButtonHighlight("Speed", activePreset == "speed");
+
             var presetBadgeText = this.FindControl<TextBlock>("PresetBadgeText");
-
-            var activeBg = new SolidColorBrush(Color.Parse("#192B4D"));
-            var activeBorder = new SolidColorBrush(Color.Parse("#3B82F6"));
-            var normalBg = new SolidColorBrush(Color.Parse("#1A2230"));
-            var normalBorder = new SolidColorBrush(Color.Parse("#263246"));
-
-            var activeIconBrush = new SolidColorBrush(Color.Parse("#60A5FA"));
-            var normalIconBrush = new SolidColorBrush(Color.Parse("#94A3B8"));
-            var activeTitleBrush = new SolidColorBrush(Color.Parse("#F8FAFC"));
-            var normalTitleBrush = new SolidColorBrush(Color.Parse("#E2E8F0"));
-            var activeSubBrush = new SolidColorBrush(Color.Parse("#93C5FD"));
-            var normalSubBrush = new SolidColorBrush(Color.Parse("#7C8B9E"));
-
-            void ApplyButtonState(Button? btn, PathIcon? icon, TextBlock? title, TextBlock? sub, bool isAct)
-            {
-                if (btn != null)
-                {
-                    btn.Background = isAct ? activeBg : normalBg;
-                    btn.BorderBrush = isAct ? activeBorder : normalBorder;
-                    btn.BorderThickness = isAct ? new Thickness(1.5) : new Thickness(1);
-                }
-                if (icon != null) icon.Foreground = isAct ? activeIconBrush : normalIconBrush;
-                if (title != null) title.Foreground = isAct ? activeTitleBrush : normalTitleBrush;
-                if (sub != null) sub.Foreground = isAct ? activeSubBrush : normalSubBrush;
-            }
-
-            ApplyButtonState(
-                presetQualityBtn,
-                this.FindControl<PathIcon>("PresetQualityIcon"),
-                this.FindControl<TextBlock>("PresetQualityTitleText"),
-                this.FindControl<TextBlock>("PresetQualitySubText"),
-                activePreset == "quality");
-
-            ApplyButtonState(
-                presetBalancedBtn,
-                this.FindControl<PathIcon>("PresetBalancedIcon"),
-                this.FindControl<TextBlock>("PresetBalancedTitleText"),
-                this.FindControl<TextBlock>("PresetBalancedSubText"),
-                activePreset == "balanced");
-
-            ApplyButtonState(
-                presetSpeedBtn,
-                this.FindControl<PathIcon>("PresetSpeedIcon"),
-                this.FindControl<TextBlock>("PresetSpeedTitleText"),
-                this.FindControl<TextBlock>("PresetSpeedSubText"),
-                activePreset == "speed");
-
             if (presetBadgeText != null)
             {
                 presetBadgeText.Text = activePreset switch
@@ -146,6 +161,27 @@ namespace LanScreenShare.Desktop
                     _ => "Equilibrado"
                 };
             }
+        }
+
+        private void UpdateSinglePresetButtonHighlight(string prefix, bool isActive)
+        {
+            var btn = this.FindControl<Button>($"Preset{prefix}Button");
+            var icon = this.FindControl<PathIcon>($"Preset{prefix}Icon");
+            var title = this.FindControl<TextBlock>($"Preset{prefix}TitleText");
+            var sub = this.FindControl<TextBlock>($"Preset{prefix}SubText");
+
+            var theme = isActive ? ActivePresetTheme : InactivePresetTheme;
+
+            if (btn != null)
+            {
+                btn.Background = theme.Background;
+                btn.BorderBrush = theme.Border;
+                btn.BorderThickness = theme.Thickness;
+            }
+
+            if (icon != null) icon.Foreground = theme.IconForeground;
+            if (title != null) title.Foreground = theme.TitleForeground;
+            if (sub != null) sub.Foreground = theme.SubForeground;
         }
 
         private void UpdateAdvancedSettingsVisibility()
@@ -162,26 +198,19 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void UpdateResolutionLabels(int nativeW, int nativeH, int targetW, int targetH, double scale)
+        private static int CalculateDimension(int target, int native, double scale) =>
+            target > 0 ? target : (int)Math.Round((native * scale) / 2.0) * 2;
+
+        private void UpdateResolutionLabels(ResolutionMetrics metrics)
         {
             var captureResLabel = this.FindControl<TextBlock>("CaptureResolutionText");
             if (captureResLabel != null)
             {
-                captureResLabel.Text = $"{nativeW} × {nativeH}";
+                captureResLabel.Text = $"{metrics.NativeW} × {metrics.NativeH}";
             }
 
-            int outW;
-            int outH;
-            if (targetW > 0 && targetH > 0)
-            {
-                outW = targetW;
-                outH = targetH;
-            }
-            else
-            {
-                outW = (int)Math.Round((nativeW * scale) / 2.0) * 2;
-                outH = (int)Math.Round((nativeH * scale) / 2.0) * 2;
-            }
+            int outW = CalculateDimension(metrics.TargetW, metrics.NativeW, metrics.Scale);
+            int outH = CalculateDimension(metrics.TargetH, metrics.NativeH, metrics.Scale);
 
             var outputResLabel = this.FindControl<TextBlock>("OutputResolutionText");
             if (outputResLabel != null)
@@ -204,81 +233,84 @@ namespace LanScreenShare.Desktop
         {
             var adminStatusBorder = this.FindControl<Border>("AdminStatusBorder");
             var adminStatusText = this.FindControl<TextBlock>("AdminStatusText");
-            var adminStatusSubtext = this.FindControl<TextBlock>("AdminStatusSubtext");
-            var adminStatusIcon = this.FindControl<PathIcon>("AdminStatusIcon");
+            if (adminStatusBorder == null || adminStatusText == null) return;
 
-            if (adminStatusBorder != null && adminStatusText != null)
+            bool isAdmin = IsRunningAsAdministrator();
+            var style = isAdmin ? AdminElevatedStyle : AdminStandardStyle;
+            var textBrush = new SolidColorBrush(Color.Parse(isAdmin ? "#4ADE80" : "#FBBF24"));
+
+            adminStatusBorder.Background = new SolidColorBrush(Color.Parse(style.Bg));
+            adminStatusBorder.BorderBrush = new SolidColorBrush(Color.Parse(style.Border));
+            adminStatusText.Text = style.Text;
+            adminStatusText.Foreground = textBrush;
+
+            var adminStatusSubtext = this.FindControl<TextBlock>("AdminStatusSubtext");
+            if (adminStatusSubtext != null)
             {
-                if (IsRunningAsAdministrator())
-                {
-                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#14291F"));
-                    adminStatusBorder.BorderBrush = new SolidColorBrush(Color.Parse("#1E4631"));
-                    adminStatusText.Text = "Modo administrador · Juegos y UAC activos";
-                    adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
-                    if (adminStatusSubtext != null)
-                    {
-                        adminStatusSubtext.Text = "Control de juegos, apps elevadas y UAC garantizado.";
-                        adminStatusSubtext.Foreground = new SolidColorBrush(Color.Parse("#86EFAC"));
-                    }
-                    if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
-                    ToolTip.SetTip(adminStatusBorder, "Permisos elevados activos: Puede interactuar libremente con launchers de juegos, Administrador de Tareas y ventanas administrativas.");
-                }
-                else
-                {
-                    adminStatusBorder.Background = new SolidColorBrush(Color.Parse("#231F1A"));
-                    adminStatusBorder.BorderBrush = new SolidColorBrush(Color.Parse("#42331B"));
-                    adminStatusText.Text = "Modo estándar · Juegos/UAC requieren admin.";
-                    adminStatusText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
-                    if (adminStatusSubtext != null)
-                    {
-                        adminStatusSubtext.Text = "Ejecuta como Administrador para interactuar con juegos o UAC.";
-                        adminStatusSubtext.Foreground = new SolidColorBrush(Color.Parse("#FDE68A"));
-                    }
-                    if (adminStatusIcon != null) adminStatusIcon.Foreground = new SolidColorBrush(Color.Parse("#F59E0B"));
-                    ToolTip.SetTip(adminStatusBorder, "Windows restringe el control remoto sobre ventanas elevadas como launchers o juegos. Abre la aplicación con 'Ejecutar como Administrador' para habilitarlo.");
-                }
+                adminStatusSubtext.Text = style.Subtext;
+                adminStatusSubtext.Foreground = new SolidColorBrush(Color.Parse(isAdmin ? "#86EFAC" : "#FDE68A"));
             }
+
+            var adminStatusIcon = this.FindControl<PathIcon>("AdminStatusIcon");
+            if (adminStatusIcon != null)
+            {
+                adminStatusIcon.Foreground = textBrush;
+            }
+
+            ToolTip.SetTip(adminStatusBorder, style.Tooltip);
         }
 
-        private void SelectScaleApproximate(ComboBox? scaleCombo, double targetRatio)
+        private static double? TryParseDimensionRatio(string tag, int nativeWidth)
         {
-            if (scaleCombo == null || scaleCombo.Items.Count == 0) return;
+            if (nativeWidth <= 0) return null;
+            var parts = tag.Split('x');
+            if (parts.Length != 2) return null;
+            return int.TryParse(parts[0], out int width) ? (double)width / nativeWidth : null;
+        }
 
-            int nativeW = (_currentSource != null && _currentSource.Width > 0) ? _currentSource.Width : 1920;
+        private static double? TryParseScaleRatio(string tag, int nativeWidth)
+        {
+            if (tag.Contains('x'))
+            {
+                return TryParseDimensionRatio(tag, nativeWidth);
+            }
+
+            return double.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out double scale)
+                ? scale
+                : null;
+        }
+
+        private int GetCurrentSourceWidth() =>
+            (_currentSource?.Width > 0) ? _currentSource.Width : 1920;
+
+        private static int FindClosestScaleIndex(ComboBox scaleCombo, double targetRatio, int nativeWidth)
+        {
             int bestIndex = 0;
             double bestDiff = double.MaxValue;
 
             for (int i = 0; i < scaleCombo.Items.Count; i++)
             {
-                if (scaleCombo.Items[i] is ComboBoxItem item && item.Tag is string tag)
+                if (scaleCombo.Items[i] is not ComboBoxItem { Tag: string tag }) continue;
+
+                double? ratio = TryParseScaleRatio(tag, nativeWidth);
+                if (!ratio.HasValue) continue;
+
+                double diff = Math.Abs(ratio.Value - targetRatio);
+                if (diff < bestDiff)
                 {
-                    if (tag.Contains('x'))
-                    {
-                        var parts = tag.Split('x');
-                        if (parts.Length == 2 && int.TryParse(parts[0], out int w))
-                        {
-                            double ratio = (double)w / nativeW;
-                            double diff = Math.Abs(ratio - targetRatio);
-                            if (diff < bestDiff)
-                            {
-                                bestDiff = diff;
-                                bestIndex = i;
-                            }
-                        }
-                    }
-                    else if (double.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out double s))
-                    {
-                        double diff = Math.Abs(s - targetRatio);
-                        if (diff < bestDiff)
-                        {
-                            bestDiff = diff;
-                            bestIndex = i;
-                        }
-                    }
+                    bestDiff = diff;
+                    bestIndex = i;
                 }
             }
 
-            scaleCombo.SelectedIndex = bestIndex;
+            return bestIndex;
+        }
+
+        private void SelectScaleApproximate(ComboBox? scaleCombo, double targetRatio)
+        {
+            if (scaleCombo == null || scaleCombo.Items.Count == 0) return;
+            int nativeW = GetCurrentSourceWidth();
+            scaleCombo.SelectedIndex = FindClosestScaleIndex(scaleCombo, targetRatio, nativeW);
         }
 
         private static void SelectComboBoxItemByTag(ComboBox? comboBox, string tag)
@@ -294,6 +326,36 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void ApplyEncoderBadgeTheme(Border badge, PathIcon? icon, TextBlock text, BadgeTheme theme)
+        {
+            badge.Background = new SolidColorBrush(Color.Parse(theme.Bg));
+            badge.BorderBrush = new SolidColorBrush(Color.Parse(theme.Border));
+            text.Text = theme.Text;
+            text.Foreground = new SolidColorBrush(Color.Parse(theme.Fg));
+
+            if (icon != null)
+            {
+                if (this.TryFindResource(theme.IconResource, out var iconGeo) && iconGeo is Geometry geo)
+                {
+                    icon.Data = geo;
+                }
+                icon.Foreground = new SolidColorBrush(Color.Parse(theme.Fg));
+            }
+        }
+
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+        private void UpdateWindowsEncoderBadge(Border badge, PathIcon? icon, TextBlock text)
+        {
+            var encoders = HardwareMftEncoderDiscovery.EnumerateEncoders();
+            var best = encoders.Count > 0 ? encoders[0] : null;
+
+            var theme = (best != null && best.IsHardware)
+                ? new BadgeTheme("#0F2922", "#10B981", "#34D399", $"⚡ {best.DisplayName} (Hardware)", "IconZap")
+                : new BadgeTheme("#261E14", "#D97706", "#FBBF24", "⚙️ CPU (Software Microsoft)", "IconSettings");
+
+            ApplyEncoderBadgeTheme(badge, icon, text, theme);
+        }
+
         private void UpdateHardwareEncoderBadgeUI()
         {
             var badge = this.FindControl<Border>("HardwareEncoderBadge");
@@ -307,56 +369,14 @@ namespace LanScreenShare.Desktop
 
             if (selectedCodec.Equals("jpeg", StringComparison.OrdinalIgnoreCase))
             {
-                badge.Background = new SolidColorBrush(Color.Parse("#1A2230"));
-                badge.BorderBrush = new SolidColorBrush(Color.Parse("#263246"));
-                text.Text = "Codificador: JPEG (Software CPU)";
-                text.Foreground = new SolidColorBrush(Color.Parse("#94A3B8"));
-                if (icon != null)
-                {
-                    if (this.TryFindResource("IconSliders", out var iconGeo) && iconGeo is Geometry geo)
-                    {
-                        icon.Data = geo;
-                    }
-                    icon.Foreground = new SolidColorBrush(Color.Parse("#94A3B8"));
-                }
+                var jpegTheme = new BadgeTheme("#1A2230", "#263246", "#94A3B8", "Codificador: JPEG (Software CPU)", "IconSliders");
+                ApplyEncoderBadgeTheme(badge, icon, text, jpegTheme);
                 return;
             }
 
             if (OperatingSystem.IsWindows())
             {
-                var encoders = HardwareMftEncoderDiscovery.EnumerateEncoders();
-                var best = encoders.Count > 0 ? encoders[0] : null;
-
-                if (best != null && best.IsHardware)
-                {
-                    badge.Background = new SolidColorBrush(Color.Parse("#0F2922"));
-                    badge.BorderBrush = new SolidColorBrush(Color.Parse("#10B981"));
-                    text.Text = $"⚡ {best.DisplayName} (Hardware)";
-                    text.Foreground = new SolidColorBrush(Color.Parse("#34D399"));
-                    if (icon != null)
-                    {
-                        if (this.TryFindResource("IconZap", out var iconGeo) && iconGeo is Geometry geo)
-                        {
-                            icon.Data = geo;
-                        }
-                        icon.Foreground = new SolidColorBrush(Color.Parse("#34D399"));
-                    }
-                }
-                else
-                {
-                    badge.Background = new SolidColorBrush(Color.Parse("#261E14"));
-                    badge.BorderBrush = new SolidColorBrush(Color.Parse("#D97706"));
-                    text.Text = "⚙️ CPU (Software Microsoft)";
-                    text.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
-                    if (icon != null)
-                    {
-                        if (this.TryFindResource("IconSettings", out var iconGeo) && iconGeo is Geometry geo)
-                        {
-                            icon.Data = geo;
-                        }
-                        icon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
-                    }
-                }
+                UpdateWindowsEncoderBadge(badge, icon, text);
             }
         }
     }

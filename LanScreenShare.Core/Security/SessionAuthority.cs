@@ -103,53 +103,51 @@ namespace LanScreenShare.Core.Security
             return token;
         }
 
-        public AttachmentStatus TryAttachChannel(string tokenId, string sessionId, string peerFingerprint, ChannelType channel)
+        public AttachmentStatus TryAttachChannel(ChannelAttachmentRequest request)
         {
-            var session = GetSession(sessionId);
+            var session = GetSession(request.SessionId);
             if (session == null || session.State != SessionState.Active)
             {
                 return AttachmentStatus.SessionNotFound;
             }
 
-            if (!_attachmentTokens.TryGetValue(tokenId, out var token))
+            if (!_attachmentTokens.TryGetValue(request.TokenId, out var token))
             {
                 return AttachmentStatus.TokenNotFound;
             }
 
-            if (token.SessionId != sessionId || token.PeerFingerprint != peerFingerprint)
+            var validation = ValidateTokenMatch(token, request);
+            if (validation != AttachmentStatus.Success)
             {
-                return AttachmentStatus.TokenBindingMismatch;
-            }
-
-            if (token.AllowedChannel != channel)
-            {
-                // Preservar el token si el tipo de canal no coincide para evitar ataques de invalidación maliciosa
-                return AttachmentStatus.ChannelMismatch;
+                return validation;
             }
 
             if (DateTime.UtcNow > token.ExpiresAt)
             {
-                _attachmentTokens.TryRemove(tokenId, out _);
+                _attachmentTokens.TryRemove(request.TokenId, out _);
                 return AttachmentStatus.TokenExpired;
             }
 
             // Consumo atómico: sólo la primera operación exitosa lo retira
-            if (!_attachmentTokens.TryRemove(tokenId, out _))
+            if (!_attachmentTokens.TryRemove(request.TokenId, out _))
             {
                 return AttachmentStatus.TokenAlreadyConsumed;
             }
 
             lock (session.AttachedChannels)
             {
-                session.AttachedChannels.Add(channel);
+                session.AttachedChannels.Add(request.Channel);
             }
 
             return AttachmentStatus.Success;
         }
 
-        public bool TryAttachChannel(string tokenId, string sessionId, string peerFingerprint, ChannelType channel, out string? failureReason)
+        public AttachmentStatus TryAttachChannel(string tokenId, string sessionId, string peerFingerprint, ChannelType channel) =>
+            TryAttachChannel(new ChannelAttachmentRequest(tokenId, sessionId, peerFingerprint, channel));
+
+        public bool TryAttachChannel(ChannelAttachmentRequest request, out string? failureReason)
         {
-            var status = TryAttachChannel(tokenId, sessionId, peerFingerprint, channel);
+            var status = TryAttachChannel(request);
             if (status == AttachmentStatus.Success)
             {
                 failureReason = null;
@@ -160,19 +158,29 @@ namespace LanScreenShare.Core.Security
             return false;
         }
 
+        private static AttachmentStatus ValidateTokenMatch(ChannelAttachmentToken token, ChannelAttachmentRequest request)
+        {
+            if (token.SessionId != request.SessionId || token.PeerFingerprint != request.PeerFingerprint)
+            {
+                return AttachmentStatus.TokenBindingMismatch;
+            }
+
+            if (token.AllowedChannel != request.Channel)
+            {
+                // Preservar el token si el tipo de canal no coincide para evitar ataques de invalidación maliciosa
+                return AttachmentStatus.ChannelMismatch;
+            }
+
+            return AttachmentStatus.Success;
+        }
+
         public RemoteControlState RequestRemoteControl(string sessionId)
         {
             lock (_controlLock)
             {
-                if (_activeControllerSessionId != null && _activeControllerSessionId != sessionId)
+                if (IsConflictingControllerActive(sessionId))
                 {
-                    var existingSession = GetSession(_activeControllerSessionId);
-                    if (existingSession != null && existingSession.State == SessionState.Active && existingSession.ControlState == RemoteControlState.Granted)
-                    {
-                        return RemoteControlState.DeniedConflict;
-                    }
-
-                    _activeControllerSessionId = null;
+                    return RemoteControlState.DeniedConflict;
                 }
 
                 var session = GetSession(sessionId);
@@ -185,6 +193,23 @@ namespace LanScreenShare.Core.Security
                 session.ControlState = RemoteControlState.Granted;
                 return RemoteControlState.Granted;
             }
+        }
+
+        private bool IsConflictingControllerActive(string currentSessionId)
+        {
+            if (_activeControllerSessionId == null || _activeControllerSessionId == currentSessionId)
+            {
+                return false;
+            }
+
+            var existingSession = GetSession(_activeControllerSessionId);
+            if (existingSession is { State: SessionState.Active, ControlState: RemoteControlState.Granted })
+            {
+                return true;
+            }
+
+            _activeControllerSessionId = null;
+            return false;
         }
 
         public bool TryAcquireControl(string sessionId, out string? failureReason)
@@ -200,7 +225,11 @@ namespace LanScreenShare.Core.Security
             return false;
         }
 
-        public void ReleaseRemoteControl(string sessionId)
+        public void ReleaseRemoteControl(string sessionId) => SetControlState(sessionId, RemoteControlState.Disabled);
+
+        public void RevokeControl(string sessionId) => SetControlState(sessionId, RemoteControlState.Revoked);
+
+        private void SetControlState(string sessionId, RemoteControlState targetState)
         {
             lock (_controlLock)
             {
@@ -211,23 +240,7 @@ namespace LanScreenShare.Core.Security
 
                 if (_sessions.TryGetValue(sessionId, out var session))
                 {
-                    session.ControlState = RemoteControlState.Disabled;
-                }
-            }
-        }
-
-        public void RevokeControl(string sessionId)
-        {
-            lock (_controlLock)
-            {
-                if (_activeControllerSessionId == sessionId)
-                {
-                    _activeControllerSessionId = null;
-                }
-
-                if (_sessions.TryGetValue(sessionId, out var session))
-                {
-                    session.ControlState = RemoteControlState.Revoked;
+                    session.ControlState = targetState;
                 }
             }
         }
@@ -276,20 +289,28 @@ namespace LanScreenShare.Core.Security
         public void PruneExpired()
         {
             var now = DateTime.UtcNow;
+            PruneExpiredTokens(now);
+            PruneExpiredSessions(now);
+        }
 
-            foreach (var kvp in _attachmentTokens)
+        private void PruneExpiredTokens(DateTime now)
+        {
+            foreach (var (key, token) in _attachmentTokens)
             {
-                if (now > kvp.Value.ExpiresAt)
+                if (now > token.ExpiresAt)
                 {
-                    _attachmentTokens.TryRemove(kvp.Key, out _);
+                    _attachmentTokens.TryRemove(key, out _);
                 }
             }
+        }
 
-            foreach (var kvp in _sessions)
+        private void PruneExpiredSessions(DateTime now)
+        {
+            foreach (var (key, session) in _sessions)
             {
-                if (now > kvp.Value.ExpiresAt)
+                if (now > session.ExpiresAt)
                 {
-                    TerminateSession(kvp.Key);
+                    TerminateSession(key);
                 }
             }
         }

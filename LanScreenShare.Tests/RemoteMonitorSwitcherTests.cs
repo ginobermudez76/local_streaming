@@ -70,10 +70,11 @@ namespace LanScreenShare.Tests
             };
             Lsi2ControlPacket.WritePacket(buffer, 10UL, 20UL, cycleMsg);
 
-            Assert.IsTrue(Lsi2ControlPacket.TryReadPacket(buffer, out ulong seq1, out ulong ts1, out var parsed1, out _));
+            Assert.IsTrue(Lsi2ControlPacket.TryReadPacket(buffer, out var h1, out var parsed1, out _));
             Assert.IsNotNull(parsed1);
             Assert.AreEqual(InputEventType.SwitchMonitor, parsed1.Type);
             Assert.AreEqual(-1, parsed1.KeyCode);
+            Assert.AreEqual(10UL, h1.SequenceNumber);
 
             // Caso 2: Índice específico (e.g., monitor 2)
             var indexMsg = new RemoteInputMessage
@@ -83,7 +84,7 @@ namespace LanScreenShare.Tests
             };
             Lsi2ControlPacket.WritePacket(buffer, 11UL, 21UL, indexMsg);
 
-            Assert.IsTrue(Lsi2ControlPacket.TryReadPacket(buffer, out _, out _, out var parsed2, out _));
+            Assert.IsTrue(Lsi2ControlPacket.TryReadPacket(buffer, out _, out var parsed2, out _));
             Assert.IsNotNull(parsed2);
             Assert.AreEqual(InputEventType.SwitchMonitor, parsed2.Type);
             Assert.AreEqual(2, parsed2.KeyCode);
@@ -188,7 +189,7 @@ namespace LanScreenShare.Tests
                 }
             };
 
-            await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId);
+            await client.ConnectAsync(new ControlClientConnectionOptions("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId));
 
             await client.SendSwitchMonitorAsync(-1);
             await client.SendSwitchMonitorAsync(-1);

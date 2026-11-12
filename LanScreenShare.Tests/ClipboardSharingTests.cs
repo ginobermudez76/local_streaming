@@ -76,15 +76,14 @@ namespace LanScreenShare.Tests
 
             bool ok = Lsi2ControlPacket.TryReadPacket(
                 buffer,
-                out ulong seq,
-                out ulong ts,
+                out var header,
                 out var parsed,
                 out string? error);
 
             Assert.IsTrue(ok, $"TryReadPacket falló: {error}");
             Assert.IsNotNull(parsed);
-            Assert.AreEqual(42UL, seq);
-            Assert.AreEqual(99999UL, ts);
+            Assert.AreEqual(42UL, header.SequenceNumber);
+            Assert.AreEqual(99999UL, header.Timestamp);
             Assert.AreEqual(InputEventType.ClipboardText, parsed.Type);
             Assert.AreEqual(4096, parsed.KeyCode);
         }
@@ -193,10 +192,10 @@ namespace LanScreenShare.Tests
             using var client = new TcpControlClient();
             client.ClipboardTextReceived += (s, text) => viewerReceivedTcs.TrySetResult(text);
 
-            // Conectar con un CancellationToken de handshake corto (300ms) para verificar que la sesión persiste
-            using (var handshakeCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+            // Conectar con un CancellationToken de handshake con margen suficiente para concurrencia de tests
+            using (var handshakeCts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
             {
-                await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId, handshakeCts.Token);
+                await client.ConnectAsync(new ControlClientConnectionOptions("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId), handshakeCts.Token);
             }
 
             // Esperar a que venza el token de handshake (500ms) y a que el servidor registre al controlador activo

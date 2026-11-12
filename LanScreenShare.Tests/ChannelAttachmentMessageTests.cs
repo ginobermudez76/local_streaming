@@ -20,16 +20,14 @@ public class ChannelAttachmentMessageTests
 
         bool success = ChannelAttachmentMessage.TryDeserialize(
             serialized,
-            out string outSessionId,
-            out string outTokenId,
-            out var outChannel,
+            out var payload,
             out string? error);
 
         Assert.IsTrue(success);
         Assert.IsNull(error);
-        Assert.AreEqual(sessionId, outSessionId);
-        Assert.AreEqual(tokenId, outTokenId);
-        Assert.AreEqual(ChannelType.Audio, outChannel);
+        Assert.AreEqual(sessionId, payload.SessionId);
+        Assert.AreEqual(tokenId, payload.TokenId);
+        Assert.AreEqual(ChannelType.Audio, payload.Channel);
     }
 
     [TestMethod]
@@ -43,16 +41,14 @@ public class ChannelAttachmentMessageTests
 
         bool success = ChannelAttachmentMessage.TryDeserialize(
             serialized,
-            out string outSessionId,
-            out string outTokenId,
-            out var outChannel,
+            out var payload,
             out string? error);
 
         Assert.IsTrue(success);
         Assert.IsNull(error);
-        Assert.AreEqual(sessionId, outSessionId);
-        Assert.AreEqual(tokenId, outTokenId);
-        Assert.AreEqual(ChannelType.RemoteControl, outChannel);
+        Assert.AreEqual(sessionId, payload.SessionId);
+        Assert.AreEqual(tokenId, payload.TokenId);
+        Assert.AreEqual(ChannelType.RemoteControl, payload.Channel);
     }
 
     [TestMethod]
@@ -62,8 +58,6 @@ public class ChannelAttachmentMessageTests
 
         bool success = ChannelAttachmentMessage.TryDeserialize(
             buffer,
-            out _,
-            out _,
             out _,
             out string? error);
 
@@ -80,12 +74,9 @@ public class ChannelAttachmentMessageTests
         bool success = ChannelAttachmentMessage.TryDeserialize(
             buffer,
             out _,
-            out _,
-            out _,
             out string? error);
 
         Assert.IsFalse(success);
         Assert.IsTrue(error!.Contains("Invalid attachment magic"));
     }
 }
-

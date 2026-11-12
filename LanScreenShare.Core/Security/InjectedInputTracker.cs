@@ -22,18 +22,9 @@ public class InjectedInputTracker
     /// </summary>
     public void RecordKey(int keyCode, bool isDown)
     {
-        if (keyCode <= 0 || keyCode > 0xFF) return;
-
-        lock (_lock)
+        if (keyCode is > 0 and <= 0xFF)
         {
-            if (isDown)
-            {
-                _pressedKeys.Add(keyCode);
-            }
-            else
-            {
-                _pressedKeys.Remove(keyCode);
-            }
+            UpdateState(_pressedKeys, keyCode, isDown);
         }
     }
 
@@ -42,17 +33,23 @@ public class InjectedInputTracker
     /// </summary>
     public void RecordMouseButton(RemoteMouseButton button, bool isDown)
     {
-        if (button == RemoteMouseButton.None) return;
+        if (button != RemoteMouseButton.None)
+        {
+            UpdateState(_pressedMouseButtons, button, isDown);
+        }
+    }
 
+    private void UpdateState<T>(HashSet<T> set, T item, bool isDown)
+    {
         lock (_lock)
         {
             if (isDown)
             {
-                _pressedMouseButtons.Add(button);
+                set.Add(item);
             }
             else
             {
-                _pressedMouseButtons.Remove(button);
+                set.Remove(item);
             }
         }
     }
@@ -60,44 +57,36 @@ public class InjectedInputTracker
     /// <summary>
     /// Comprueba si una tecla está actualmente registrada como presionada.
     /// </summary>
-    public bool IsKeyPressed(int keyCode)
-    {
-        lock (_lock)
-        {
-            return _pressedKeys.Contains(keyCode);
-        }
-    }
+    public bool IsKeyPressed(int keyCode) => ContainsItem(_pressedKeys, keyCode);
 
     /// <summary>
     /// Comprueba si un botón de ratón está actualmente registrado como presionado.
     /// </summary>
-    public bool IsMouseButtonPressed(RemoteMouseButton button)
+    public bool IsMouseButtonPressed(RemoteMouseButton button) => ContainsItem(_pressedMouseButtons, button);
+
+    private bool ContainsItem<T>(HashSet<T> set, T item)
     {
         lock (_lock)
         {
-            return _pressedMouseButtons.Contains(button);
+            return set.Contains(item);
         }
     }
 
     /// <summary>
     /// Obtiene una instantánea de las teclas actualmente inyectadas y pendientes de liberación.
     /// </summary>
-    public int[] GetPressedKeysSnapshot()
-    {
-        lock (_lock)
-        {
-            return _pressedKeys.ToArray();
-        }
-    }
+    public int[] GetPressedKeysSnapshot() => GetSnapshot(_pressedKeys);
 
     /// <summary>
     /// Obtiene una instantánea de los botones de ratón actualmente inyectados y pendientes de liberación.
     /// </summary>
-    public RemoteMouseButton[] GetPressedMouseButtonsSnapshot()
+    public RemoteMouseButton[] GetPressedMouseButtonsSnapshot() => GetSnapshot(_pressedMouseButtons);
+
+    private T[] GetSnapshot<T>(HashSet<T> set)
     {
         lock (_lock)
         {
-            return _pressedMouseButtons.ToArray();
+            return set.ToArray();
         }
     }
 

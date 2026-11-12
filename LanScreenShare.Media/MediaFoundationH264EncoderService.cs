@@ -49,13 +49,15 @@ namespace LanScreenShare.Media
             MediaFactory.MFStartup().CheckError();
         }
 
+        private bool CanReinitializeEncoder => _encoder != null && _width > 0 && _height > 0;
+
         public void UpdateBitrate(int bitrate)
         {
             if (_bitrate == bitrate) return;
             lock (_lock)
             {
                 _bitrate = bitrate;
-                if (_encoder != null && _width > 0 && _height > 0)
+                if (CanReinitializeEncoder)
                 {
                     try
                     {
@@ -76,7 +78,7 @@ namespace LanScreenShare.Media
             lock (_lock)
             {
                 _fps = fps;
-                if (_encoder != null && _width > 0 && _height > 0)
+                if (CanReinitializeEncoder)
                 {
                     try
                     {
@@ -97,6 +99,96 @@ namespace LanScreenShare.Media
             _mftProvidesSamples = false;
         }
 
+        private void ConfigureMediaTypes(IMFTransform encoder, int width, int height)
+        {
+            using (IMFMediaType outputType = MediaFactory.MFCreateMediaType())
+            {
+                outputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
+                outputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
+                outputType.Set(MediaTypeAttributeKeys.AvgBitrate, _bitrate);
+                outputType.Set(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
+                MediaFactory.MFSetAttributeSize(outputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
+                MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.FrameRate, (uint)_fps, 1u);
+                MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
+                outputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
+
+                encoder.SetOutputType(0, outputType, 0);
+            }
+
+            using (IMFMediaType inputType = MediaFactory.MFCreateMediaType())
+            {
+                inputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
+                inputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.NV12);
+                MediaFactory.MFSetAttributeSize(inputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
+                MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.FrameRate, (uint)_fps, 1u);
+                MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
+                inputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
+
+                encoder.SetInputType(0, inputType, 0);
+            }
+        }
+
+        private void InspectOutputStreamInfo(IMFTransform encoder)
+        {
+            try
+            {
+                var streamInfo = encoder.GetOutputStreamInfo(0);
+                uint flags = (uint)streamInfo.Flags;
+                _mftProvidesSamples = (flags & 0x00000100) != 0 || (flags & 0x00000200) != 0;
+                if (streamInfo.Size > 0)
+                {
+                    _outputBufferSize = Math.Max(streamInfo.Size, 256 * 1024);
+                }
+            }
+            catch
+            {
+                _mftProvidesSamples = false;
+            }
+        }
+
+        private bool TryInitializeCandidate(MftEncoderInfo candidate, int width, int height)
+        {
+            var (transform, _) = HardwareMftEncoderDiscovery.ActivateEncoder(candidate);
+            if (transform == null)
+                return false;
+
+            _encoder = transform;
+
+            try
+            {
+                _encoder.Attributes.Set(HardwareMftEncoderDiscovery.MF_TRANSFORM_ASYNC_UNLOCK, 1);
+            }
+            catch
+            {
+                // Transformadores síncronos no soportan ASYNC_UNLOCK
+            }
+
+            ConfigureCodecApi(_encoder, _fps);
+            ConfigureMediaTypes(_encoder, width, height);
+            ConfigureCodecApi(_encoder, _fps);
+
+            _encoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
+            _encoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
+
+            InspectOutputStreamInfo(_encoder);
+
+            int hr = Marshal.QueryInterface(_encoder.NativePointer, in IID_IMFMediaEventGenerator, out IntPtr pEventGen);
+            if (hr == 0 && pEventGen != IntPtr.Zero)
+            {
+                _eventGen = new IMFMediaEventGenerator(pEventGen);
+                _isAsync = true;
+            }
+            else
+            {
+                _isAsync = false;
+            }
+
+            ActiveEncoderInfo = candidate;
+            IsHardwareAccelerated = candidate.IsHardware;
+            EncoderDescription = candidate.DisplayName;
+            return true;
+        }
+
         private void InitializeEncoder(int width, int height)
         {
             CleanupCurrentEncoder();
@@ -106,101 +198,15 @@ namespace LanScreenShare.Media
             _nv12Buffer = new byte[width * height * 3 / 2];
 
             var candidates = HardwareMftEncoderDiscovery.EnumerateEncoders();
-            bool initialized = false;
-
             foreach (var candidate in candidates)
             {
                 try
                 {
-                    var (transform, _) = HardwareMftEncoderDiscovery.ActivateEncoder(candidate);
-                    if (transform == null)
-                        continue;
-
-                    _encoder = transform;
-
-                    // Desbloquear MFT asíncrono para GPU si lo admite
-                    try
+                    if (TryInitializeCandidate(candidate, width, height))
                     {
-                        _encoder.Attributes.Set(HardwareMftEncoderDiscovery.MF_TRANSFORM_ASYNC_UNLOCK, 1);
+                        Console.WriteLine($"[H264Encoder] Inicializado exitosamente codificador: {EncoderDescription} (Hardware: {IsHardwareAccelerated}, Asíncrono: {_isAsync}, {width}x{height} @ {_fps} FPS, {_bitrate / 1_000_000} Mbps)");
+                        return;
                     }
-                    catch
-                    {
-                        // Transformadores puramente síncronos no requieren ni soportan ASYNC_UNLOCK
-                    }
-
-                    // Configurar parámetros de baja latencia antes y después de tipos de medios
-                    ConfigureCodecApi(_encoder, _fps);
-
-                    // Configurar tipo de salida (H.264 Baseline Profile sin B-Frames para cero latencia de reordenamiento)
-                    using (IMFMediaType outputType = MediaFactory.MFCreateMediaType())
-                    {
-                        outputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-                        outputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
-                        outputType.Set(MediaTypeAttributeKeys.AvgBitrate, _bitrate);
-                        outputType.Set(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
-                        MediaFactory.MFSetAttributeSize(outputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
-                        MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.FrameRate, (uint)_fps, 1u);
-                        MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
-                        outputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
-
-                        _encoder.SetOutputType(0, outputType, 0);
-                    }
-
-                    // Configurar tipo de entrada (NV12)
-                    using (IMFMediaType inputType = MediaFactory.MFCreateMediaType())
-                    {
-                        inputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-                        inputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.NV12);
-                        MediaFactory.MFSetAttributeSize(inputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
-                        MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.FrameRate, (uint)_fps, 1u);
-                        MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
-                        inputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
-
-                        _encoder.SetInputType(0, inputType, 0);
-                    }
-
-                    // Re-aplicar parámetros de baja latencia vía ICodecAPI si está soportado
-                    ConfigureCodecApi(_encoder, _fps);
-
-                    // Mensajes de inicio de transmisión
-                    _encoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
-                    _encoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
-
-                    // Inspeccionar información del flujo de salida
-                    try
-                    {
-                        var streamInfo = _encoder.GetOutputStreamInfo(0);
-                        uint flags = (uint)streamInfo.Flags;
-                        _mftProvidesSamples = (flags & 0x00000100) != 0 || (flags & 0x00000200) != 0;
-                        if (streamInfo.Size > 0)
-                        {
-                            _outputBufferSize = Math.Max(streamInfo.Size, 256 * 1024);
-                        }
-                    }
-                    catch
-                    {
-                        _mftProvidesSamples = false;
-                    }
-
-                    // Consultar si implementa IMFMediaEventGenerator (MFT Asíncrono)
-                    int hr = Marshal.QueryInterface(_encoder.NativePointer, in IID_IMFMediaEventGenerator, out IntPtr pEventGen);
-                    if (hr == 0 && pEventGen != IntPtr.Zero)
-                    {
-                        _eventGen = new IMFMediaEventGenerator(pEventGen);
-                        _isAsync = true;
-                    }
-                    else
-                    {
-                        _isAsync = false;
-                    }
-
-                    ActiveEncoderInfo = candidate;
-                    IsHardwareAccelerated = candidate.IsHardware;
-                    EncoderDescription = candidate.DisplayName;
-                    initialized = true;
-
-                    Console.WriteLine($"[H264Encoder] Inicializado exitosamente codificador: {EncoderDescription} (Hardware: {IsHardwareAccelerated}, Asíncrono: {_isAsync}, {width}x{height} @ {_fps} FPS, {_bitrate / 1_000_000} Mbps)");
-                    break;
                 }
                 catch (Exception ex)
                 {
@@ -209,10 +215,7 @@ namespace LanScreenShare.Media
                 }
             }
 
-            if (!initialized || _encoder == null)
-            {
-                throw new InvalidOperationException("No se pudo inicializar ningún codificador H.264 (hardware ni software).");
-            }
+            throw new InvalidOperationException("No se pudo inicializar ningún codificador H.264 (hardware ni software).");
         }
 
         private static void ConfigureCodecApi(IMFTransform encoder, int fps)
@@ -283,6 +286,48 @@ namespace LanScreenShare.Media
             }
         }
 
+        private bool NeedsEncoderReinitialization(int width, int height) =>
+            _encoder == null || _width != width || _height != height;
+
+        private IMFSample CreateInputSample(byte[] bgraData, int width, int height, bool forceKeyframe)
+        {
+            BgraToNv12(bgraData, _nv12Buffer!, width, height);
+
+            using IMFMediaBuffer inputBuffer = MediaFactory.MFCreateMemoryBuffer(_nv12Buffer!.Length);
+            inputBuffer.Lock(out IntPtr pBuffer, out _, out _);
+            try
+            {
+                Marshal.Copy(_nv12Buffer, 0, pBuffer, _nv12Buffer.Length);
+                inputBuffer.CurrentLength = _nv12Buffer.Length;
+            }
+            finally
+            {
+                inputBuffer.Unlock();
+            }
+
+            IMFSample inputSample = MediaFactory.MFCreateSample();
+            inputSample.AddBuffer(inputBuffer);
+            inputSample.SampleTime = _sampleTime;
+            inputSample.SampleDuration = 10_000_000 / _fps;
+            _sampleTime += inputSample.SampleDuration;
+
+            if (forceKeyframe)
+            {
+                inputSample.Set(SampleAttributeKeys.CleanPoint, 1);
+            }
+
+            return inputSample;
+        }
+
+        private byte[] DispatchEncodeSample(IMFSample inputSample)
+        {
+            if (_isAsync && _eventGen != null)
+            {
+                return EncodeFrameAsync(inputSample);
+            }
+            return EncodeFrameSync(inputSample);
+        }
+
         public byte[] EncodeFrame(byte[] bgraData, int width, int height, bool forceKeyframe = false)
         {
             lock (_lock)
@@ -290,7 +335,7 @@ namespace LanScreenShare.Media
                 if (_disposed)
                     return Array.Empty<byte>();
 
-                if (_encoder == null || _width != width || _height != height)
+                if (NeedsEncoderReinitialization(width, height))
                 {
                     InitializeEncoder(width, height);
                 }
@@ -300,40 +345,8 @@ namespace LanScreenShare.Media
 
                 try
                 {
-                    // Conversión paralela BGRA -> NV12 optimizada para SIMD y núcleos múltiples
-                    BgraToNv12(bgraData, _nv12Buffer, width, height);
-
-                    using IMFMediaBuffer inputBuffer = MediaFactory.MFCreateMemoryBuffer(_nv12Buffer.Length);
-                    inputBuffer.Lock(out IntPtr pBuffer, out _, out _);
-                    try
-                    {
-                        Marshal.Copy(_nv12Buffer, 0, pBuffer, _nv12Buffer.Length);
-                        inputBuffer.CurrentLength = _nv12Buffer.Length;
-                    }
-                    finally
-                    {
-                        inputBuffer.Unlock();
-                    }
-
-                    using IMFSample inputSample = MediaFactory.MFCreateSample();
-                    inputSample.AddBuffer(inputBuffer);
-                    inputSample.SampleTime = _sampleTime;
-                    inputSample.SampleDuration = 10_000_000 / _fps;
-                    _sampleTime += inputSample.SampleDuration;
-
-                    if (forceKeyframe)
-                    {
-                        inputSample.Set(SampleAttributeKeys.CleanPoint, 1);
-                    }
-
-                    if (_isAsync && _eventGen != null)
-                    {
-                        return EncodeFrameAsync(inputSample);
-                    }
-                    else
-                    {
-                        return EncodeFrameSync(inputSample);
-                    }
+                    using IMFSample inputSample = CreateInputSample(bgraData, width, height, forceKeyframe);
+                    return DispatchEncodeSample(inputSample);
                 }
                 catch (Exception ex)
                 {
@@ -424,6 +437,69 @@ namespace LanScreenShare.Media
             return outputMs.ToArray();
         }
 
+        private static void WriteSampleBytesToStream(IMFSample produced, MemoryStream outputMs)
+        {
+            using var contiguous = produced.ConvertToContiguousBuffer();
+            int len = contiguous.CurrentLength;
+            if (len <= 0) return;
+
+            contiguous.Lock(out IntPtr pData, out _, out _);
+            try
+            {
+                byte[] chunk = new byte[len];
+                Marshal.Copy(pData, chunk, 0, len);
+                outputMs.Write(chunk, 0, len);
+            }
+            finally
+            {
+                contiguous.Unlock();
+            }
+        }
+
+        private void ProcessAsyncOutput(MemoryStream outputMs)
+        {
+            if (_encoder == null) return;
+
+            IMFSample? callerSample = null;
+            IMFMediaBuffer? callerBuf = null;
+
+            if (!_mftProvidesSamples)
+            {
+                callerSample = MediaFactory.MFCreateSample();
+                callerBuf = MediaFactory.MFCreateMemoryBuffer(_outputBufferSize);
+                callerSample.AddBuffer(callerBuf);
+            }
+
+            var outData = new OutputDataBuffer
+            {
+                StreamID = 0,
+                Sample = callerSample,
+                Status = 0
+            };
+
+            try
+            {
+                var res = _encoder.ProcessOutput(ProcessOutputFlags.None, 1, ref outData, out _);
+                if (res.Success)
+                {
+                    var produced = outData.Sample ?? callerSample;
+                    if (produced != null)
+                    {
+                        WriteSampleBytesToStream(produced, outputMs);
+                    }
+                }
+            }
+            finally
+            {
+                if (outData.Sample != null && outData.Sample != callerSample)
+                {
+                    outData.Sample.Dispose();
+                }
+                callerBuf?.Dispose();
+                callerSample?.Dispose();
+            }
+        }
+
         private void DrainAsyncEvents(MemoryStream outputMs)
         {
             if (_encoder == null || _eventGen == null) return;
@@ -446,59 +522,7 @@ namespace LanScreenShare.Media
                 {
                     if ((int)ev.EventType == 602) // METransformHaveOutput
                     {
-                        IMFSample? callerSample = null;
-                        IMFMediaBuffer? callerBuf = null;
-
-                        if (!_mftProvidesSamples)
-                        {
-                            callerSample = MediaFactory.MFCreateSample();
-                            callerBuf = MediaFactory.MFCreateMemoryBuffer(_outputBufferSize);
-                            callerSample.AddBuffer(callerBuf);
-                        }
-
-                        var outData = new OutputDataBuffer
-                        {
-                            StreamID = 0,
-                            Sample = callerSample,
-                            Status = 0
-                        };
-
-                        try
-                        {
-                            var res = _encoder.ProcessOutput(ProcessOutputFlags.None, 1, ref outData, out _);
-                            if (res.Success)
-                            {
-                                var produced = outData.Sample ?? callerSample;
-                                if (produced != null)
-                                {
-                                    using var contiguous = produced.ConvertToContiguousBuffer();
-                                    int len = contiguous.CurrentLength;
-                                    if (len > 0)
-                                    {
-                                        contiguous.Lock(out IntPtr pData, out _, out _);
-                                        try
-                                        {
-                                            byte[] chunk = new byte[len];
-                                            Marshal.Copy(pData, chunk, 0, len);
-                                            outputMs.Write(chunk, 0, len);
-                                        }
-                                        finally
-                                        {
-                                            contiguous.Unlock();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        finally
-                        {
-                            if (outData.Sample != null && outData.Sample != callerSample)
-                            {
-                                outData.Sample.Dispose();
-                            }
-                            callerBuf?.Dispose();
-                            callerSample?.Dispose();
-                        }
+                        ProcessAsyncOutput(outputMs);
                     }
                 }
             }
@@ -527,33 +551,7 @@ namespace LanScreenShare.Media
             _mftProvidesSamples = false;
 
             ConfigureCodecApi(_encoder, _fps);
-
-            using (IMFMediaType outputType = MediaFactory.MFCreateMediaType())
-            {
-                outputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-                outputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
-                outputType.Set(MediaTypeAttributeKeys.AvgBitrate, _bitrate);
-                outputType.Set(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
-                MediaFactory.MFSetAttributeSize(outputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
-                MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.FrameRate, (uint)_fps, 1u);
-                MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
-                outputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
-
-                _encoder.SetOutputType(0, outputType, 0);
-            }
-
-            using (IMFMediaType inputType = MediaFactory.MFCreateMediaType())
-            {
-                inputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-                inputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.NV12);
-                MediaFactory.MFSetAttributeSize(inputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
-                MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.FrameRate, (uint)_fps, 1u);
-                MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
-                inputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
-
-                _encoder.SetInputType(0, inputType, 0);
-            }
-
+            ConfigureMediaTypes(_encoder, width, height);
             ConfigureCodecApi(_encoder, _fps);
 
             _encoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);

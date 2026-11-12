@@ -43,7 +43,7 @@ public sealed class SessionHandshakeMessage
     public static async Task<SessionHandshakeMessage> ReadAsync(Stream stream, CancellationToken ct)
     {
         byte[] lengthPrefix = new byte[4];
-        await ReadExactBytesAsync(stream, lengthPrefix, 0, 4, ct);
+        await ReadExactBytesAsync(stream, lengthPrefix, ct);
 
         uint length = BinaryPrimitives.ReadUInt32BigEndian(lengthPrefix);
         if (length == 0 || length > MaxSignalingPayloadBytes)
@@ -52,18 +52,18 @@ public sealed class SessionHandshakeMessage
         }
 
         byte[] payload = new byte[length];
-        await ReadExactBytesAsync(stream, payload, 0, (int)length, ct);
+        await ReadExactBytesAsync(stream, payload, ct);
 
         var result = JsonSerializer.Deserialize<SessionHandshakeMessage>(payload);
         return result ?? throw new InvalidDataException("No se pudo deserializar el mensaje de señalización JSON.");
     }
 
-    private static async Task ReadExactBytesAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken ct)
+    private static async Task ReadExactBytesAsync(Stream stream, Memory<byte> buffer, CancellationToken ct)
     {
         int total = 0;
-        while (total < count)
+        while (total < buffer.Length)
         {
-            int read = await stream.ReadAsync(buffer.AsMemory(offset + total, count - total), ct);
+            int read = await stream.ReadAsync(buffer.Slice(total), ct);
             if (read == 0)
             {
                 throw new EndOfStreamException("Flujo cerrado antes de completar la lectura del mensaje de señalización.");

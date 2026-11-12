@@ -212,53 +212,75 @@ namespace LanScreenShare.Core.Services
             lock (_lock)
             {
                 long now = _timeProvider();
-
-                // 1. Detección de incrementos en fotogramas descartados
-                long currentDrops = telemetry.DroppedFrames;
-                long dropsDelta = Math.Max(0, currentDrops - _lastObservedDroppedFrames);
-                _lastObservedDroppedFrames = currentDrops;
-
-                if (dropsDelta > 0)
-                {
-                    _lastDropTimeMs = now;
-                    HandleSevereCongestion($"Receptor reportó {dropsDelta} fotograma(s) descartado(s)", now);
+                if (CheckAndHandleDrops(telemetry, now))
                     return;
-                }
 
-                // 2. Si hubo un drop muy reciente, respetar ventana de estabilidad
                 if (now - _lastDropTimeMs < DecreaseCooldownMs)
-                {
                     return;
-                }
 
-                int rtt = telemetry.RttMs;
+                UpdateBaselineRtt(telemetry.RttMs);
 
-                // Actualizar baseline RTT cuando la red está estable y no congestionada
-                if (rtt > 0 && rtt < _baselineRttMs)
-                {
-                    _baselineRttMs = rtt;
-                }
-
-                // 3. Evaluar congestión severa por RTT
-                if (rtt >= RttThresholdSevereMs)
-                {
-                    HandleSevereCongestion($"RTT crítico ({rtt} ms >= {RttThresholdSevereMs} ms)", now);
+                if (CheckAndHandleRttCongestion(telemetry.RttMs, now))
                     return;
-                }
 
-                // 4. Evaluar congestión moderada
-                if (rtt >= RttThresholdCongestionMs || (rtt > _baselineRttMs + 20 && rtt > 30))
-                {
-                    HandleModerateCongestion($"RTT elevado ({rtt} ms)", now);
-                    return;
-                }
-
-                // 5. Evaluar condiciones óptimas para incremento aditivo
-                if (rtt < RttThresholdOptimalMs && (now - _lastAdjustmentTimeMs >= IncreaseCooldownMs))
-                {
-                    HandleOptimalNetwork(telemetry, now);
-                }
+                CheckAndHandleOptimalNetwork(telemetry, now);
             }
+        }
+
+        private bool CheckAndHandleDrops(StreamTelemetry telemetry, long now)
+        {
+            long currentDrops = telemetry.DroppedFrames;
+            long dropsDelta = Math.Max(0, currentDrops - _lastObservedDroppedFrames);
+            _lastObservedDroppedFrames = currentDrops;
+
+            if (dropsDelta > 0)
+            {
+                _lastDropTimeMs = now;
+                HandleSevereCongestion($"Receptor reportó {dropsDelta} fotograma(s) descartado(s)", now);
+                return true;
+            }
+            return false;
+        }
+
+        private void UpdateBaselineRtt(int rtt)
+        {
+            if (rtt > 0 && rtt < _baselineRttMs)
+            {
+                _baselineRttMs = rtt;
+            }
+        }
+
+        private bool CheckAndHandleRttCongestion(int rtt, long now)
+        {
+            if (rtt >= RttThresholdSevereMs)
+            {
+                HandleSevereCongestion($"RTT crítico ({rtt} ms >= {RttThresholdSevereMs} ms)", now);
+                return true;
+            }
+
+            if (IsModerateCongestion(rtt))
+            {
+                HandleModerateCongestion($"RTT elevado ({rtt} ms)", now);
+                return true;
+            }
+
+            return false;
+        }
+
+        private void CheckAndHandleOptimalNetwork(StreamTelemetry telemetry, long now)
+        {
+            if (telemetry.RttMs < RttThresholdOptimalMs && now - _lastAdjustmentTimeMs >= IncreaseCooldownMs)
+            {
+                HandleOptimalNetwork(telemetry, now);
+            }
+        }
+
+        private bool IsModerateCongestion(int rtt)
+        {
+            if (rtt >= RttThresholdCongestionMs)
+                return true;
+
+            return rtt > 30 && rtt > _baselineRttMs + 20;
         }
 
         private void HandleSevereCongestion(string reason, long now)

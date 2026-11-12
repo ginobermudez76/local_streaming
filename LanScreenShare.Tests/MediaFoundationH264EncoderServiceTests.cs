@@ -34,6 +34,25 @@ namespace LanScreenShare.Tests
             Assert.IsFalse(string.IsNullOrWhiteSpace(best.FriendlyName));
         }
 
+        private static readonly byte[] NalPrefix4 = [0, 0, 0, 1];
+        private static readonly byte[] NalPrefix3 = [0, 0, 1];
+
+        private static bool IsValidNalPrefix(byte[] encoded) =>
+            encoded.AsSpan().StartsWith(NalPrefix4) || encoded.AsSpan().StartsWith(NalPrefix3);
+
+        private static byte[] CreateGradientBgra(int width, int height)
+        {
+            byte[] dummyBgra = new byte[width * height * 4];
+            for (int i = 0; i < dummyBgra.Length; i += 4)
+            {
+                dummyBgra[i] = (byte)(i & 0xFF);
+                dummyBgra[i + 1] = (byte)((i >> 2) & 0xFF);
+                dummyBgra[i + 2] = (byte)((i >> 4) & 0xFF);
+                dummyBgra[i + 3] = 255;
+            }
+            return dummyBgra;
+        }
+
         [TestMethod]
         [DoNotParallelize]
         public void MediaFoundationH264EncoderService_InitializesAndEncodesFrames()
@@ -47,16 +66,7 @@ namespace LanScreenShare.Tests
 
             int width = 1280;
             int height = 720;
-            byte[] dummyBgra = new byte[width * height * 4];
-
-            // Rellenar con un gradiente de color para probar conversión realista
-            for (int i = 0; i < dummyBgra.Length; i += 4)
-            {
-                dummyBgra[i] = (byte)(i & 0xFF);         // B
-                dummyBgra[i + 1] = (byte)((i >> 2) & 0xFF); // G
-                dummyBgra[i + 2] = (byte)((i >> 4) & 0xFF); // R
-                dummyBgra[i + 3] = 255;                   // A
-            }
+            byte[] dummyBgra = CreateGradientBgra(width, height);
 
             bool hasProducedBytes = false;
             int totalBytes = 0;
@@ -65,16 +75,12 @@ namespace LanScreenShare.Tests
             for (int frame = 0; frame < 10; frame++)
             {
                 byte[] encoded = encoder.EncodeFrame(dummyBgra, width, height, forceKeyframe: frame == 0);
-                if (encoded.Length > 0)
-                {
-                    hasProducedBytes = true;
-                    totalBytes += encoded.Length;
+                if (encoded.Length == 0) continue;
 
-                    // Verificar presencia de prefijo de NAL unit H.264 (00 00 00 01 o 00 00 01)
-                    bool validNalPrefix = (encoded.Length >= 4 && encoded[0] == 0 && encoded[1] == 0 && encoded[2] == 0 && encoded[3] == 1) ||
-                                          (encoded.Length >= 3 && encoded[0] == 0 && encoded[1] == 0 && encoded[2] == 1);
-                    Assert.IsTrue(validNalPrefix, "El flujo H.264 debe comenzar con prefijo de NAL unit.");
-                }
+                hasProducedBytes = true;
+                totalBytes += encoded.Length;
+
+                Assert.IsTrue(IsValidNalPrefix(encoded), "El flujo H.264 debe comenzar con prefijo de NAL unit.");
             }
 
             Assert.IsTrue(hasProducedBytes, "El codificador debe producir paquetes de datos H.264.");
@@ -174,6 +180,28 @@ namespace LanScreenShare.Tests
             Assert.IsNotNull(encoded);
         }
 
+        private readonly record struct FrameBuffer(byte[] Bgra, int Width, int Height);
+
+        private static (int firstIndex, int count) DecodeStream(
+            MediaFoundationH264EncoderService encoder,
+            MediaFoundationH264DecoderService decoder,
+            in FrameBuffer buffer,
+            int totalFrames)
+        {
+            int firstIndex = -1;
+            int count = 0;
+            for (int i = 0; i < totalFrames; i++)
+            {
+                byte[] encoded = encoder.EncodeFrame(buffer.Bgra, buffer.Width, buffer.Height, forceKeyframe: i == 0);
+                if (encoded.Length > 0 && decoder.TryDecodeFrame(encoded, buffer.Width, buffer.Height, out _))
+                {
+                    if (firstIndex < 0) firstIndex = i;
+                    count++;
+                }
+            }
+            return (firstIndex, count);
+        }
+
         [TestMethod]
         [DoNotParallelize]
         public void MediaFoundationH264DecoderService_DecodesEncoderOutput_960x540()
@@ -189,25 +217,11 @@ namespace LanScreenShare.Tests
             byte[] dummyBgra = new byte[width * height * 4];
             Array.Fill(dummyBgra, (byte)128);
 
-            int decodedCount = 0;
-            int firstDecodedFrameIndex = -1;
-            for (int i = 0; i < 90; i++)
-            {
-                byte[] encoded = encoder.EncodeFrame(dummyBgra, width, height, forceKeyframe: i == 0);
-                if (encoded.Length > 0)
-                {
-                    bool ok = decoder.TryDecodeFrame(encoded, width, height, out byte[] bgraPixels, out int decW, out int decH);
-                    if (ok)
-                    {
-                        if (firstDecodedFrameIndex < 0) firstDecodedFrameIndex = i;
-                        decodedCount++;
-                    }
-                }
-            }
+            var (firstIndex, count) = DecodeStream(encoder, decoder, new FrameBuffer(dummyBgra, width, height), 90);
 
-            Console.WriteLine($"[Test] Primer fotograma decodificado en índice: {firstDecodedFrameIndex}, Total decodificados: {decodedCount}/90");
-            Assert.IsTrue(firstDecodedFrameIndex >= 0 && firstDecodedFrameIndex <= 2, $"El primer fotograma debe decodificarse inmediatamente en baja latencia (índice <= 2), pero tardó hasta el índice {firstDecodedFrameIndex}.");
-            Assert.IsTrue(decodedCount > 80, $"El decodificador H.264 debió decodificar casi todos los fotogramas continuos (>80/90), pero solo decodificó {decodedCount}.");
+            Console.WriteLine($"[Test] Primer fotograma decodificado en índice: {firstIndex}, Total decodificados: {count}/90");
+            Assert.IsTrue((uint)firstIndex <= 2, $"El primer fotograma debe decodificarse inmediatamente en baja latencia (índice <= 2), pero tardó hasta el índice {firstIndex}.");
+            Assert.IsTrue(count > 80, $"El decodificador H.264 debió decodificar casi todos los fotogramas continuos (>80/90), pero solo decodificó {count}.");
         }
     }
 }

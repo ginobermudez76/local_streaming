@@ -46,6 +46,8 @@ namespace LanScreenShare.Network.Streaming
         public string Reason { get; set; } = string.Empty;
     }
 
+    public readonly record struct FileChunkPayload(Guid TransferId, long Offset, ReadOnlyMemory<byte> Data);
+
     public static class FileTransferPacket
     {
         public const uint Magic = 0x4C535346; // "LSSF"
@@ -53,15 +55,9 @@ namespace LanScreenShare.Network.Streaming
         public const int MaxPayloadSize = 256 * 1024; // 256 KB max chunk payload
         public const int DefaultChunkSize = 64 * 1024; // 64 KB chunks
 
-        public static async Task WriteOfferAsync(Stream stream, string transferId, string fileName, long fileSize, CancellationToken ct)
+        public static async Task WriteOfferAsync(Stream stream, FileTransferOfferDto offer, CancellationToken ct)
         {
-            var dto = new FileTransferOfferDto
-            {
-                TransferId = transferId,
-                FileName = Path.GetFileName(fileName),
-                FileSize = fileSize
-            };
-            await WriteJsonPacketAsync(stream, FileTransferPacketType.Offer, dto, ct);
+            await WriteJsonPacketAsync(stream, FileTransferPacketType.Offer, offer, ct);
         }
 
         public static async Task WriteAcceptAsync(Stream stream, string transferId, CancellationToken ct)
@@ -88,23 +84,23 @@ namespace LanScreenShare.Network.Streaming
             await WriteJsonPacketAsync(stream, FileTransferPacketType.Cancel, dto, ct);
         }
 
-        public static async Task WriteChunkAsync(Stream stream, Guid transferId, long offset, ReadOnlyMemory<byte> data, CancellationToken ct)
+        public static async Task WriteChunkAsync(Stream stream, FileChunkPayload chunk, CancellationToken ct)
         {
-            int payloadLen = 16 + 8 + data.Length;
+            int payloadLen = 16 + 8 + chunk.Data.Length;
             byte[] header = new byte[HeaderSize + 16 + 8];
 
             BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(0, 4), Magic);
             header[4] = (byte)FileTransferPacketType.Chunk;
             BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(5, 4), (uint)payloadLen);
 
-            byte[] guidBytes = transferId.ToByteArray();
+            byte[] guidBytes = chunk.TransferId.ToByteArray();
             Buffer.BlockCopy(guidBytes, 0, header, 9, 16);
-            BinaryPrimitives.WriteInt64BigEndian(header.AsSpan(25, 8), offset);
+            BinaryPrimitives.WriteInt64BigEndian(header.AsSpan(25, 8), chunk.Offset);
 
             await stream.WriteAsync(header, ct);
-            if (!data.IsEmpty)
+            if (!chunk.Data.IsEmpty)
             {
-                await stream.WriteAsync(data, ct);
+                await stream.WriteAsync(chunk.Data, ct);
             }
         }
 
@@ -121,15 +117,15 @@ namespace LanScreenShare.Network.Streaming
             await stream.WriteAsync(jsonBytes, ct);
         }
 
-        public static async Task ReadExactBytesAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken ct)
+        public static async Task ReadExactBytesAsync(Stream stream, Memory<byte> buffer, CancellationToken ct)
         {
             int total = 0;
-            while (total < count)
+            while (total < buffer.Length)
             {
-                int read = await stream.ReadAsync(buffer.AsMemory(offset + total, count - total), ct);
+                int read = await stream.ReadAsync(buffer.Slice(total), ct);
                 if (read <= 0)
                 {
-                    throw new EndOfStreamException($"Flujo cerrado prematuramente mientras se leían {count} bytes.");
+                    throw new EndOfStreamException($"Flujo cerrado prematuramente mientras se leían {buffer.Length} bytes.");
                 }
                 total += read;
             }

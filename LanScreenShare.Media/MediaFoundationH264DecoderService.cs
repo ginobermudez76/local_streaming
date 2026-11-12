@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using LanScreenShare.Core.Interfaces;
+using LanScreenShare.Core.Models;
 using Vortice.MediaFoundation;
 
 namespace LanScreenShare.Media
@@ -155,97 +156,235 @@ namespace LanScreenShare.Media
             }
         }
 
-        public bool TryDecodeFrame(byte[] encodedData, int width, int height, out byte[] bgraPixels, out int decodedWidth, out int decodedHeight)
+        public readonly record struct VideoFrameDimensions(int Width, int Height, int Stride = 0, int BufferHeight = 0);
+
+        private bool NeedsDecoderReinitialization(int width, int height) =>
+            _decoder == null || _width != width || _height != height;
+
+        private bool HasValidBuffers =>
+            _decoder != null && _decodedBgraBuffer != null && _nv12Buffer != null;
+
+        private bool EnsureDecoderInitialized(int width, int height)
         {
-            bgraPixels = Array.Empty<byte>();
-            decodedWidth = width;
-            decodedHeight = height;
+            if (NeedsDecoderReinitialization(width, height))
+            {
+                try
+                {
+                    InitializeDecoder(width, height);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[H264Decoder] Error inicializando decodificador: {ex.Message}");
+                    return false;
+                }
+            }
+
+            return HasValidBuffers;
+        }
+
+        private void FeedInputSample(byte[] encodedData, int width, int height)
+        {
+            using IMFMediaBuffer inputBuffer = MediaFactory.MFCreateMemoryBuffer(encodedData.Length);
+            inputBuffer.Lock(out IntPtr pInput, out _, out _);
+            try
+            {
+                Marshal.Copy(encodedData, 0, pInput, encodedData.Length);
+                inputBuffer.CurrentLength = encodedData.Length;
+            }
+            finally
+            {
+                inputBuffer.Unlock();
+            }
+
+            using IMFSample inputSample = MediaFactory.MFCreateSample();
+            inputSample.AddBuffer(inputBuffer);
+            _sampleTimeCounter += 166_667; // ~16.6ms a 60fps en unidades de 100ns
+            inputSample.SampleTime = _sampleTimeCounter;
+            inputSample.SampleDuration = 166_667;
+
+            try
+            {
+                _decoder!.ProcessInput(0, inputSample, 0);
+            }
+            catch (Exception ex)
+            {
+                // 0xC00D36B5 = MF_E_NOTACCEPTING (el decodificador tiene muestras pendientes sin drenar)
+                if (ex.HResult == unchecked((int)0xC00D36B5) || ex.Message.Contains("0xC00D36B5"))
+                {
+                    DrainPendingOutput(width, height);
+                    try
+                    {
+                        _decoder!.ProcessInput(0, inputSample, 0);
+                    }
+                    catch (Exception retryEx)
+                    {
+                        Console.WriteLine($"[H264Decoder] Reintento ProcessInput falló: {retryEx.Message}");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"[H264Decoder] Error en ProcessInput: {ex.Message}");
+                }
+            }
+        }
+
+        public bool TryDecodeFrame(byte[] encodedData, int width, int height, out DecodedVideoFrame decodedFrame)
+        {
+            decodedFrame = default;
 
             if (encodedData.Length == 0)
                 return false;
 
             lock (_lock)
             {
-                if (_disposed)
+                if (_disposed || !EnsureDecoderInitialized(width, height))
                     return false;
 
-                if (_decoder == null || _width != width || _height != height)
-                {
-                    try
-                    {
-                        InitializeDecoder(width, height);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[H264Decoder] Error inicializando decodificador: {ex.Message}");
-                        return false;
-                    }
-                }
+                FeedInputSample(encodedData, width, height);
 
-                if (_decoder == null || _decodedBgraBuffer == null || _nv12Buffer == null)
-                    return false;
-
-                // 1. Enviar paquete NAL H.264 a decodificador
-                IMFMediaBuffer inputBuffer = MediaFactory.MFCreateMemoryBuffer(encodedData.Length);
-                inputBuffer.Lock(out IntPtr pInput, out _, out _);
-                try
+                if (DrainPendingOutput(width, height))
                 {
-                    Marshal.Copy(encodedData, 0, pInput, encodedData.Length);
-                    inputBuffer.CurrentLength = encodedData.Length;
-                }
-                finally
-                {
-                    inputBuffer.Unlock();
-                }
-
-                IMFSample inputSample = MediaFactory.MFCreateSample();
-                inputSample.AddBuffer(inputBuffer);
-                _sampleTimeCounter += 166_667; // ~16.6ms a 60fps en unidades de 100ns
-                inputSample.SampleTime = _sampleTimeCounter;
-                inputSample.SampleDuration = 166_667;
-
-                try
-                {
-                    try
-                    {
-                        _decoder.ProcessInput(0, inputSample, 0);
-                    }
-                    catch (Exception ex)
-                    {
-                        // 0xC00D36B5 = MF_E_NOTACCEPTING (el decodificador tiene muestras pendientes sin drenar)
-                        if (ex.HResult == unchecked((int)0xC00D36B5) || ex.Message.Contains("0xC00D36B5"))
-                        {
-                            DrainPendingOutput(width, height);
-                            try
-                            {
-                                _decoder.ProcessInput(0, inputSample, 0);
-                            }
-                            catch (Exception retryEx)
-                            {
-                                Console.WriteLine($"[H264Decoder] Reintento ProcessInput falló: {retryEx.Message}");
-                            }
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[H264Decoder] Error en ProcessInput: {ex.Message}");
-                        }
-                    }
-                }
-                finally
-                {
-                    inputBuffer.Dispose();
-                    inputSample.Dispose();
-                }
-
-                // 2. Extraer fotograma decodificado drenando la cola
-                bool frameDecoded = DrainPendingOutput(width, height);
-                if (frameDecoded)
-                {
-                    bgraPixels = _decodedBgraBuffer;
+                    decodedFrame = new DecodedVideoFrame(_decodedBgraBuffer!, width, height);
                     return true;
                 }
 
                 return false;
+            }
+        }
+
+        private SharpGen.Runtime.Result HandleStreamChange(
+            ref OutputDataBuffer outBuffer,
+            ref IMFSample? outputSample,
+            ref IMFMediaBuffer? outputBuffer)
+        {
+            try
+            {
+                using IMFMediaType newOut = _decoder!.GetOutputAvailableType(0, 0);
+                MediaFactory.MFGetAttributeSize(newOut, MediaTypeAttributeKeys.FrameSize, out uint outW, out uint outH);
+                if (outW > 0) _actualStride = (int)outW;
+                if (outH > 0) _actualBufferHeight = (int)outH;
+
+                _decoder.SetOutputType(0, newOut, 0);
+
+                var streamInfo = _decoder.GetOutputStreamInfo(0);
+                uint flags = (uint)streamInfo.Flags;
+                _mftProvidesSamples = (flags & 0x00000100) != 0 || (flags & 0x00000200) != 0;
+                _outputBufferSize = streamInfo.Size > 0 ? streamInfo.Size : (_actualStride * _actualBufferHeight * 3 / 2);
+
+                if (!_mftProvidesSamples)
+                {
+                    outputBuffer?.Dispose();
+                    outputSample?.Dispose();
+
+                    outputSample = MediaFactory.MFCreateSample();
+                    outputBuffer = MediaFactory.MFCreateMemoryBuffer(_outputBufferSize);
+                    outputSample.AddBuffer(outputBuffer);
+                    outBuffer.Sample = outputSample;
+                }
+
+                return _decoder.ProcessOutput(ProcessOutputFlags.None, 1, ref outBuffer, out _);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[H264Decoder] Error en reconfiguración de salida: {ex.Message}");
+                return unchecked((int)0xC00D36B3);
+            }
+        }
+
+        private bool TryConvertSampleToBgra(IMFSample resolvedSample, int width, int height)
+        {
+            IMFMediaBuffer? sampleBuffer = null;
+            try
+            {
+                sampleBuffer = resolvedSample.ConvertToContiguousBuffer();
+                sampleBuffer.Lock(out IntPtr pOutput, out _, out int curLen);
+                try
+                {
+                    int stride = _actualStride > 0 ? _actualStride : ((width + 15) & ~15);
+                    int bufH = _actualBufferHeight > 0 ? _actualBufferHeight : ((height + 15) & ~15);
+                    int neededSize = Math.Max(curLen, stride * bufH * 3 / 2);
+
+                    if (_nv12Buffer == null || _nv12Buffer.Length < neededSize)
+                    {
+                        _nv12Buffer = new byte[neededSize];
+                    }
+
+                    int copyLen = Math.Min(curLen, _nv12Buffer.Length);
+                    Marshal.Copy(pOutput, _nv12Buffer, 0, copyLen);
+                    sampleBuffer.Unlock();
+
+                    Nv12ToBgra(_nv12Buffer, _decodedBgraBuffer!, new VideoFrameDimensions(width, height, stride, bufH));
+                    return true;
+                }
+                catch
+                {
+                    sampleBuffer.Unlock();
+                    return false;
+                }
+            }
+            finally
+            {
+                sampleBuffer?.Dispose();
+            }
+        }
+
+        private OutputDataBuffer CreateOutputDataBuffer(out IMFSample? outputSample, out IMFMediaBuffer? outputBuffer)
+        {
+            outputSample = null;
+            outputBuffer = null;
+
+            if (!_mftProvidesSamples)
+            {
+                outputSample = MediaFactory.MFCreateSample();
+                outputBuffer = MediaFactory.MFCreateMemoryBuffer(_outputBufferSize);
+                outputSample.AddBuffer(outputBuffer);
+            }
+
+            return new OutputDataBuffer
+            {
+                StreamID = 0,
+                Sample = outputSample,
+                Status = 0
+            };
+        }
+
+        private void CleanupOutputBuffers(in OutputDataBuffer outBuffer, IMFSample? outputSample, IMFMediaBuffer? outputBuffer)
+        {
+            if (_mftProvidesSamples && outBuffer.Sample != null)
+            {
+                outBuffer.Sample.Dispose();
+            }
+            if (!_mftProvidesSamples)
+            {
+                outputBuffer?.Dispose();
+                outputSample?.Dispose();
+            }
+        }
+
+        private bool TryProcessSingleOutput(int width, int height)
+        {
+            var outBuffer = CreateOutputDataBuffer(out IMFSample? outputSample, out IMFMediaBuffer? outputBuffer);
+
+            try
+            {
+                var result = _decoder!.ProcessOutput(ProcessOutputFlags.None, 1, ref outBuffer, out _);
+
+                if (result.Code == unchecked((int)0xC00D6D61))
+                {
+                    result = HandleStreamChange(ref outBuffer, ref outputSample, ref outputBuffer);
+                }
+
+                if (result.Code == unchecked((int)0xC00D36B3) || !result.Success)
+                {
+                    return false;
+                }
+
+                IMFSample? resolvedSample = _mftProvidesSamples ? outBuffer.Sample : outputSample;
+                return resolvedSample != null && TryConvertSampleToBgra(resolvedSample, width, height);
+            }
+            finally
+            {
+                CleanupOutputBuffers(outBuffer, outputSample, outputBuffer);
             }
         }
 
@@ -255,138 +394,23 @@ namespace LanScreenShare.Media
                 return false;
 
             bool frameDecoded = false;
-
-            // Extraer hasta 4 muestras para drenar la cola y mantener siempre el fotograma más reciente en baja latencia
             for (int drainAttempt = 0; drainAttempt < 4; drainAttempt++)
             {
-                IMFSample? outputSample = null;
-                IMFMediaBuffer? outputBuffer = null;
+                if (!TryProcessSingleOutput(width, height))
+                    break;
 
-                if (!_mftProvidesSamples)
-                {
-                    outputSample = MediaFactory.MFCreateSample();
-                    outputBuffer = MediaFactory.MFCreateMemoryBuffer(_outputBufferSize);
-                    outputSample.AddBuffer(outputBuffer);
-                }
-
-                var outBuffer = new OutputDataBuffer
-                {
-                    StreamID = 0,
-                    Sample = outputSample,
-                    Status = 0
-                };
-
-                try
-                {
-                    var result = _decoder.ProcessOutput(ProcessOutputFlags.None, 1, ref outBuffer, out _);
-
-                    // 0xC00D6D61 = MF_E_TRANSFORM_STREAM_CHANGE
-                    if (result.Code == unchecked((int)0xC00D6D61))
-                    {
-                        try
-                        {
-                            IMFMediaType newOut = _decoder.GetOutputAvailableType(0, 0);
-                            MediaFactory.MFGetAttributeSize(newOut, MediaTypeAttributeKeys.FrameSize, out uint outW, out uint outH);
-                            if (outW > 0) _actualStride = (int)outW;
-                            if (outH > 0) _actualBufferHeight = (int)outH;
-
-                            _decoder.SetOutputType(0, newOut, 0);
-                            newOut.Dispose();
-
-                            var streamInfo = _decoder.GetOutputStreamInfo(0);
-                            uint flags = (uint)streamInfo.Flags;
-                            _mftProvidesSamples = (flags & 0x00000100) != 0 || (flags & 0x00000200) != 0;
-                            _outputBufferSize = streamInfo.Size > 0 ? streamInfo.Size : (_actualStride * _actualBufferHeight * 3 / 2);
-
-                            if (!_mftProvidesSamples)
-                            {
-                                outputBuffer?.Dispose();
-                                outputSample?.Dispose();
-
-                                outputSample = MediaFactory.MFCreateSample();
-                                outputBuffer = MediaFactory.MFCreateMemoryBuffer(_outputBufferSize);
-                                outputSample.AddBuffer(outputBuffer);
-                                outBuffer.Sample = outputSample;
-                            }
-
-                            result = _decoder.ProcessOutput(ProcessOutputFlags.None, 1, ref outBuffer, out _);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[H264Decoder] Error en reconfiguración de salida: {ex.Message}");
-                        }
-                    }
-
-                    // 0xC00D36B3 = MF_E_TRANSFORM_NEED_MORE_INPUT (la cola está vacía)
-                    if (result.Code == unchecked((int)0xC00D36B3) || !result.Success)
-                    {
-                        break;
-                    }
-
-                    IMFSample? resolvedSample = _mftProvidesSamples ? outBuffer.Sample : outputSample;
-                    if (resolvedSample != null)
-                    {
-                        IMFMediaBuffer? sampleBuffer = null;
-                        try
-                        {
-                            sampleBuffer = resolvedSample.ConvertToContiguousBuffer();
-                            sampleBuffer.Lock(out IntPtr pOutput, out _, out int curLen);
-                            try
-                            {
-                                int stride = _actualStride > 0 ? _actualStride : ((width + 15) & ~15);
-                                int bufH = _actualBufferHeight > 0 ? _actualBufferHeight : ((height + 15) & ~15);
-                                int neededSize = Math.Max(curLen, stride * bufH * 3 / 2);
-
-                                if (_nv12Buffer == null || _nv12Buffer.Length < neededSize)
-                                {
-                                    _nv12Buffer = new byte[neededSize];
-                                }
-
-                                int copyLen = Math.Min(curLen, _nv12Buffer.Length);
-                                Marshal.Copy(pOutput, _nv12Buffer, 0, copyLen);
-                                sampleBuffer.Unlock();
-
-                                Nv12ToBgra(_nv12Buffer, _decodedBgraBuffer, width, height, stride, bufH);
-                                frameDecoded = true;
-                            }
-                            catch
-                            {
-                                sampleBuffer.Unlock();
-                            }
-                        }
-                        finally
-                        {
-                            sampleBuffer?.Dispose();
-                        }
-                    }
-                }
-                finally
-                {
-                    if (_mftProvidesSamples && outBuffer.Sample != null)
-                    {
-                        outBuffer.Sample.Dispose();
-                    }
-                    if (!_mftProvidesSamples)
-                    {
-                        outputBuffer?.Dispose();
-                        outputSample?.Dispose();
-                    }
-                }
+                frameDecoded = true;
             }
 
             return frameDecoded;
         }
 
-        /// <summary>
-        /// Convierte fotogramas NV12 (YUV 4:2:0 biplanar) a BGRA32 usando aritmética fija optimizada y paralelismo por filas,
-        /// respetando el stride (pitch) y la altura con macroblock padding (p. ej. 544 líneas para 540p).
-        /// </summary>
-        public static void Nv12ToBgra(byte[] nv12, byte[] bgra, int width, int height, int stride = 0, int bufferHeight = 0)
+        public static void Nv12ToBgra(byte[] nv12, byte[] bgra, in VideoFrameDimensions dims)
         {
-            if (stride <= 0)
-                stride = (width + 15) & ~15;
-            if (bufferHeight <= 0)
-                bufferHeight = (height + 15) & ~15;
+            int width = dims.Width;
+            int height = dims.Height;
+            int stride = dims.Stride > 0 ? dims.Stride : ((width + 15) & ~15);
+            int bufferHeight = dims.BufferHeight > 0 ? dims.BufferHeight : ((height + 15) & ~15);
 
             int yPlaneSize = stride * bufferHeight;
 
@@ -419,6 +443,9 @@ namespace LanScreenShare.Media
                 }
             });
         }
+
+        public static void Nv12ToBgra(byte[] nv12, byte[] bgra, int width, int height) =>
+            Nv12ToBgra(nv12, bgra, new VideoFrameDimensions(width, height));
 
         public void Dispose()
         {

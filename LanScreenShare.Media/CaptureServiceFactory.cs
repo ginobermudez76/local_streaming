@@ -29,11 +29,11 @@ namespace LanScreenShare.Media
                 var gdi = new WindowsScreenCaptureService();
                 if (source.Type == CaptureSourceType.AllScreens)
                 {
-                    gdi.SetTargetBounds(0, 0, 0, 0, allScreens: true);
+                    gdi.SetTargetBounds(new WindowsScreenCaptureService.ScreenBounds(0, 0, 0, 0, AllScreens: true));
                 }
                 else
                 {
-                    gdi.SetTargetBounds(source.X, source.Y, source.Width, source.Height, allScreens: false);
+                    gdi.SetTargetBounds(new WindowsScreenCaptureService.ScreenBounds(source.X, source.Y, source.Width, source.Height, AllScreens: false));
                 }
                 return gdi;
             }

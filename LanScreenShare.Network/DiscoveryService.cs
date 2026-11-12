@@ -11,11 +11,14 @@ using LanScreenShare.Core.Models;
 
 namespace LanScreenShare.Network
 {
+    public readonly record struct BroadcastTarget(IPAddress LocalIp, IPAddress BroadcastIp);
+
     public class DiscoveryService
     {
         private const int DiscoveryPort = 5000;
         private const string BroadcastMessagePrefix = "LAN_SCREEN_SHARE_HOST";
-        
+        private static readonly IPAddress DefaultSubnetMask = IPAddress.Parse("255.255.255.0");
+
         private CancellationTokenSource? _hostCts;
         private CancellationTokenSource? _listenCts;
 
@@ -38,33 +41,7 @@ namespace LanScreenShare.Network
                 {
                     try
                     {
-                        var targets = GetActiveBroadcastTargets();
-
-                        foreach (var target in targets)
-                        {
-                            try
-                            {
-                                using var udpClient = new UdpClient();
-                                udpClient.EnableBroadcast = true;
-
-                                var rcAllowed = IsRemoteControlAllowedProvider?.Invoke() ?? true;
-                                var message = $"{BroadcastMessagePrefix}|{pcName}|{target.LocalIp}|{(rcAllowed ? "1" : "0")}";
-                                var bytes = Encoding.UTF8.GetBytes(message);
-
-                                // 1. Broadcast dirigido a la subred de esta interfaz física (ej. 192.168.100.255)
-                                await udpClient.SendAsync(bytes, bytes.Length, new IPEndPoint(target.BroadcastIp, DiscoveryPort));
-
-                                // 2. Broadcast global (255.255.255.255) como respaldo
-                                if (!target.BroadcastIp.Equals(IPAddress.Broadcast))
-                                {
-                                    await udpClient.SendAsync(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort));
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"Error enviando broadcast a {target.BroadcastIp}: {ex.Message}");
-                            }
-                        }
+                        await BroadcastToAllTargetsAsync(pcName);
                     }
                     catch (Exception ex)
                     {
@@ -74,6 +51,39 @@ namespace LanScreenShare.Network
                     await Task.Delay(3000, token);
                 }
             }, token);
+        }
+
+        private async Task BroadcastToAllTargetsAsync(string pcName)
+        {
+            var targets = GetActiveBroadcastTargets();
+            foreach (var target in targets)
+            {
+                await TrySendBroadcastAsync(target, pcName);
+            }
+        }
+
+        private async Task TrySendBroadcastAsync(BroadcastTarget target, string pcName)
+        {
+            try
+            {
+                using var udpClient = new UdpClient { EnableBroadcast = true };
+                var rcAllowed = IsRemoteControlAllowedProvider?.Invoke() ?? true;
+                var message = $"{BroadcastMessagePrefix}|{pcName}|{target.LocalIp}|{(rcAllowed ? "1" : "0")}";
+                var bytes = Encoding.UTF8.GetBytes(message);
+
+                // 1. Broadcast dirigido a la subred de esta interfaz física
+                await udpClient.SendAsync(bytes, bytes.Length, new IPEndPoint(target.BroadcastIp, DiscoveryPort));
+
+                // 2. Broadcast global (255.255.255.255) como respaldo
+                if (!target.BroadcastIp.Equals(IPAddress.Broadcast))
+                {
+                    await udpClient.SendAsync(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error enviando broadcast a {target.BroadcastIp}: {ex.Message}");
+            }
         }
 
         public void StopHosting()
@@ -102,37 +112,7 @@ namespace LanScreenShare.Network
                     try
                     {
                         var result = await udpClient.ReceiveAsync(token);
-                        var message = Encoding.UTF8.GetString(result.Buffer);
-                        
-                        var parts = message.Split('|');
-                        if (parts.Length >= 3 && parts[0] == BroadcastMessagePrefix)
-                        {
-                            var senderName = parts[1];
-                            var reportedIp = parts[2];
-                            bool isRemoteControlAllowed = parts.Length < 4 || parts[3] == "1";
-                            var remoteIp = result.RemoteEndPoint.Address.ToString();
-
-                            // Evitar auto-descubrimiento si es este mismo equipo
-                            if (IsSelfMessage(senderName, reportedIp, remoteIp))
-                            {
-                                continue;
-                            }
-
-                            // Usar la IP reportada si es válida; si viene vacía o es loopback/APIPA, usar la IP remota del socket
-                            var finalIp = (!string.IsNullOrWhiteSpace(reportedIp) && reportedIp != "127.0.0.1" && !reportedIp.StartsWith("169.254"))
-                                ? reportedIp
-                                : remoteIp;
-
-                            var device = new DeviceInfo
-                            {
-                                Name = senderName,
-                                IPAddress = finalIp,
-                                LastSeen = DateTime.Now,
-                                IsRemoteControlAllowed = isRemoteControlAllowed
-                            };
-
-                            OnDeviceDiscovered?.Invoke(this, device);
-                        }
+                        ProcessIncomingDatagram(result);
                     }
                     catch (OperationCanceledException)
                     {
@@ -148,6 +128,45 @@ namespace LanScreenShare.Network
                     }
                 }
             }, token);
+        }
+
+        private void ProcessIncomingDatagram(UdpReceiveResult result)
+        {
+            var message = Encoding.UTF8.GetString(result.Buffer);
+            var parts = message.Split('|');
+            if (parts.Length < 3 || parts[0] != BroadcastMessagePrefix)
+            {
+                return;
+            }
+
+            var senderName = parts[1];
+            var reportedIp = parts[2];
+            var remoteIp = result.RemoteEndPoint.Address.ToString();
+
+            if (IsSelfMessage(senderName, reportedIp, remoteIp))
+            {
+                return;
+            }
+
+            bool isRemoteControlAllowed = parts.Length < 4 || parts[3] == "1";
+            var finalIp = ResolveFinalIp(reportedIp, remoteIp);
+
+            OnDeviceDiscovered?.Invoke(this, new DeviceInfo
+            {
+                Name = senderName,
+                IPAddress = finalIp,
+                LastSeen = DateTime.Now,
+                IsRemoteControlAllowed = isRemoteControlAllowed
+            });
+        }
+
+        private static string ResolveFinalIp(string reportedIp, string remoteIp)
+        {
+            bool isReportedValid = !string.IsNullOrWhiteSpace(reportedIp) &&
+                                   reportedIp != "127.0.0.1" &&
+                                   !reportedIp.StartsWith("169.254");
+
+            return isReportedValid ? reportedIp : remoteIp;
         }
 
         public void StopListening()
@@ -169,43 +188,17 @@ namespace LanScreenShare.Network
             return localIps.Contains(reportedIp) || localIps.Contains(remoteIp);
         }
 
-        private static List<(IPAddress LocalIp, IPAddress BroadcastIp)> GetActiveBroadcastTargets()
+        private static List<BroadcastTarget> GetActiveBroadcastTargets()
         {
-            var targets = new List<(IPAddress LocalIp, IPAddress BroadcastIp)>();
+            var targets = new List<BroadcastTarget>();
 
             try
             {
-                var interfaces = NetworkInterface.GetAllNetworkInterfaces();
-
-                foreach (var ni in interfaces)
+                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
                 {
-                    if (ni.OperationalStatus != OperationalStatus.Up)
-                        continue;
-
-                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
-                        ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel)
-                        continue;
-
-                    var ipProps = ni.GetIPProperties();
-                    foreach (var unicast in ipProps.UnicastAddresses)
+                    if (IsEligibleInterface(ni))
                     {
-                        if (unicast.Address.AddressFamily != AddressFamily.InterNetwork)
-                            continue;
-
-                        var ip = unicast.Address;
-
-                        // Descartar Loopback y direcciones APIPA (169.254.x.x)
-                        if (IPAddress.IsLoopback(ip) || ip.ToString().StartsWith("169.254."))
-                            continue;
-
-                        var mask = unicast.IPv4Mask;
-                        if (mask == null || mask.Equals(IPAddress.Any) || mask.Equals(IPAddress.None))
-                        {
-                            mask = IPAddress.Parse("255.255.255.0");
-                        }
-
-                        var broadcast = CalculateBroadcastAddress(ip, mask);
-                        targets.Add((ip, broadcast));
+                        CollectInterfaceTargets(ni, targets);
                     }
                 }
             }
@@ -216,10 +209,58 @@ namespace LanScreenShare.Network
 
             if (targets.Count == 0)
             {
-                targets.Add((IPAddress.Any, IPAddress.Broadcast));
+                targets.Add(new BroadcastTarget(IPAddress.Any, IPAddress.Broadcast));
             }
 
             return targets;
+        }
+
+        private static bool IsEligibleInterface(NetworkInterface ni) =>
+            ni.OperationalStatus == OperationalStatus.Up &&
+            ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
+            ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel;
+
+        private static void CollectInterfaceTargets(NetworkInterface ni, List<BroadcastTarget> targets)
+        {
+            foreach (var unicast in ni.GetIPProperties().UnicastAddresses)
+            {
+                if (TryExtractTarget(unicast, out var target))
+                {
+                    targets.Add(target);
+                }
+            }
+        }
+
+        private static bool TryExtractTarget(UnicastIPAddressInformation unicast, out BroadcastTarget target)
+        {
+            target = default;
+            var ip = unicast.Address;
+
+            if (!IsEligibleIpv4(ip))
+            {
+                return false;
+            }
+
+            var mask = NormalizeMask(unicast.IPv4Mask);
+            var broadcast = CalculateBroadcastAddress(ip, mask);
+            target = new BroadcastTarget(ip, broadcast);
+            return true;
+        }
+
+        private static bool IsEligibleIpv4(IPAddress ip)
+        {
+            if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
+            if (IPAddress.IsLoopback(ip)) return false;
+            return !ip.ToString().StartsWith("169.254.");
+        }
+
+        private static IPAddress NormalizeMask(IPAddress? mask) =>
+            IsValidSubnetMask(mask) ? mask! : DefaultSubnetMask;
+
+        private static bool IsValidSubnetMask(IPAddress? mask)
+        {
+            if (mask == null) return false;
+            return !mask.Equals(IPAddress.Any) && !mask.Equals(IPAddress.None);
         }
 
         private static IPAddress CalculateBroadcastAddress(IPAddress address, IPAddress mask)

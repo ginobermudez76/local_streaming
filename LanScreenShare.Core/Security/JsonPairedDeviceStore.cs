@@ -35,28 +35,62 @@ public class JsonPairedDeviceStore : IPairedDeviceStore
         }
     }
 
-    public async Task<bool> IsDevicePairedAsync(string fingerprint)
-    {
-        await _lock.WaitAsync();
-        try
-        {
-            var devices = await LoadDevicesInternalAsync();
-            return devices.Any(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
+    public Task<bool> IsDevicePairedAsync(string fingerprint) =>
+        QueryDevicesAsync(devices => devices.Any(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)));
 
-    public async Task<bool> IsDeviceRevokedAsync(string fingerprint)
-    {
-        await _lock.WaitAsync();
-        try
+    public Task<bool> IsDeviceRevokedAsync(string fingerprint) =>
+        QueryDevicesAsync(devices =>
         {
-            var devices = await LoadDevicesInternalAsync();
             var device = devices.FirstOrDefault(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
             return device != null && device.IsRevoked;
+        });
+
+    public Task<IReadOnlyList<PairedDevice>> GetAllPairedDevicesAsync() =>
+        QueryDevicesAsync<IReadOnlyList<PairedDevice>>(devices => devices.ToList());
+
+    public Task AddPairedDeviceAsync(PairedDevice device) =>
+        MutateDevicesAsync(devices =>
+        {
+            UpsertDevice(devices, device);
+            return true;
+        });
+
+    public Task RevokeDeviceAsync(string fingerprint) =>
+        MutateDevicesAsync(devices => MarkDeviceRevoked(devices, fingerprint));
+
+    private static void UpsertDevice(List<PairedDevice> devices, PairedDevice device)
+    {
+        int idx = FindDeviceIndex(devices, device.PublicKeyFingerprint);
+        if (idx < 0)
+        {
+            devices.Add(device);
+            return;
+        }
+        devices[idx] = device;
+    }
+
+    private static bool MarkDeviceRevoked(List<PairedDevice> devices, string fingerprint)
+    {
+        int idx = FindDeviceIndex(devices, fingerprint);
+        if (idx < 0) return false;
+        devices[idx] = devices[idx] with { IsRevoked = true };
+        return true;
+    }
+
+    private static int FindDeviceIndex(List<PairedDevice> devices, string fingerprint) =>
+        devices.FindIndex(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
+
+    public Task RemoveDeviceAsync(string fingerprint) =>
+        MutateDevicesAsync(devices =>
+            devices.RemoveAll(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)) > 0);
+
+    private async Task<T> QueryDevicesAsync<T>(Func<List<PairedDevice>, T> query)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var devices = await LoadDevicesInternalAsync();
+            return query(devices);
         }
         finally
         {
@@ -64,71 +98,13 @@ public class JsonPairedDeviceStore : IPairedDeviceStore
         }
     }
 
-    public async Task<IReadOnlyList<PairedDevice>> GetAllPairedDevicesAsync()
+    private async Task MutateDevicesAsync(Func<List<PairedDevice>, bool> mutate)
     {
         await _lock.WaitAsync();
         try
         {
             var devices = await LoadDevicesInternalAsync();
-            return devices.ToList();
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    public async Task AddPairedDeviceAsync(PairedDevice device)
-    {
-        await _lock.WaitAsync();
-        try
-        {
-            var devices = await LoadDevicesInternalAsync();
-            int existingIndex = devices.FindIndex(d => string.Equals(d.PublicKeyFingerprint, device.PublicKeyFingerprint, StringComparison.OrdinalIgnoreCase));
-            if (existingIndex >= 0)
-            {
-                devices[existingIndex] = device;
-            }
-            else
-            {
-                devices.Add(device);
-            }
-
-            await SaveDevicesInternalAsync(devices);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    public async Task RevokeDeviceAsync(string fingerprint)
-    {
-        await _lock.WaitAsync();
-        try
-        {
-            var devices = await LoadDevicesInternalAsync();
-            int existingIndex = devices.FindIndex(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
-            if (existingIndex >= 0)
-            {
-                devices[existingIndex] = devices[existingIndex] with { IsRevoked = true };
-                await SaveDevicesInternalAsync(devices);
-            }
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    public async Task RemoveDeviceAsync(string fingerprint)
-    {
-        await _lock.WaitAsync();
-        try
-        {
-            var devices = await LoadDevicesInternalAsync();
-            int removed = devices.RemoveAll(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
-            if (removed > 0)
+            if (mutate(devices))
             {
                 await SaveDevicesInternalAsync(devices);
             }
