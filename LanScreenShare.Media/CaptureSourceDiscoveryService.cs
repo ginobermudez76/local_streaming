@@ -12,6 +12,27 @@ namespace LanScreenShare.Media
 {
     public class CaptureSourceDiscoveryService
     {
+        private static readonly HashSet<string> ExcludedProcessNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "SearchHost",
+            "StartMenuExperienceHost",
+            "TextInputHost",
+            "ShellExperienceHost",
+            "ApplicationFrameHost"
+        };
+
+        private static bool IsSystemWindowClass(string className, string title)
+        {
+            if (className == "Progman" || className == "WorkerW")
+                return true;
+            if (className == "Shell_TrayWnd" || className == "Shell_SecondaryTrayWnd")
+                return true;
+            if (className == "EdgeUiInputTopWndClass")
+                return true;
+            if (className == "Windows.UI.Core.CoreWindow" && title == "Inicio")
+                return true;
+            return false;
+        }
         public static List<CaptureSource> GetScreenSources()
         {
             var sources = new List<CaptureSource>();
@@ -165,13 +186,8 @@ namespace LanScreenShare.Media
                     GetClassName(hWnd, sbClass, 256);
                     string className = sbClass.ToString();
 
-                    if (className == "Progman" || className == "WorkerW" ||
-                        className == "Shell_TrayWnd" || className == "Shell_SecondaryTrayWnd" ||
-                        className == "Windows.UI.Core.CoreWindow" && title == "Inicio" ||
-                        className == "EdgeUiInputTopWndClass")
-                    {
+                    if (IsSystemWindowClass(className, title))
                         return true;
-                    }
 
                     // Excluir ventanas sin tamaño real (ancho/alto menor a 120px)
                     if (!GetWindowRect(hWnd, out RECT rect))
@@ -190,14 +206,8 @@ namespace LanScreenShare.Media
                         return true;
 
                     // Excluir procesos de sistema de fondo
-                    if (procName.Equals("SearchHost", StringComparison.OrdinalIgnoreCase) ||
-                        procName.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase) ||
-                        procName.Equals("TextInputHost", StringComparison.OrdinalIgnoreCase) ||
-                        procName.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase) ||
-                        procName.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase))
-                    {
+                    if (ExcludedProcessNames.Contains(procName))
                         return true;
-                    }
 
                     sources.Add(new CaptureSource
                     {
@@ -256,6 +266,22 @@ namespace LanScreenShare.Media
             return (int)pid;
         }
 
+        private static uint FindUwpChildProcess(IntPtr hWnd, uint initialPid)
+        {
+            uint realChildPid = 0;
+            EnumChildWindows(hWnd, (childHwnd, _) =>
+            {
+                GetWindowThreadProcessId(childHwnd, out uint cPid);
+                if (cPid != 0 && cPid != initialPid)
+                {
+                    realChildPid = cPid;
+                    return false;
+                }
+                return true;
+            }, IntPtr.Zero);
+            return realChildPid;
+        }
+
         private static uint ResolveEffectiveWindowProcess(IntPtr hWnd, uint initialPid, out string procName)
         {
             uint pid = initialPid;
@@ -264,18 +290,7 @@ namespace LanScreenShare.Media
             // 1. Si es una ventana UWP / MSIX alojada por ApplicationFrameHost.exe, obtener el PID real del hijo CoreWindow
             if (hWnd != IntPtr.Zero && procName.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase))
             {
-                uint realChildPid = 0;
-                EnumChildWindows(hWnd, (childHwnd, _) =>
-                {
-                    GetWindowThreadProcessId(childHwnd, out uint cPid);
-                    if (cPid != 0 && cPid != initialPid)
-                    {
-                        realChildPid = cPid;
-                        return false;
-                    }
-                    return true;
-                }, IntPtr.Zero);
-
+                uint realChildPid = FindUwpChildProcess(hWnd, initialPid);
                 if (realChildPid != 0)
                 {
                     pid = realChildPid;
@@ -299,6 +314,9 @@ namespace LanScreenShare.Media
 
         public static int FindAudioSessionProcessId(string procName, int fallbackPid)
         {
+            if (!OperatingSystem.IsWindows())
+                return fallbackPid;
+
             if (string.IsNullOrEmpty(procName) || procName.Equals("Aplicación", StringComparison.OrdinalIgnoreCase))
                 return fallbackPid;
 
@@ -309,32 +327,9 @@ namespace LanScreenShare.Media
                 var mgr = device.AudioSessionManager;
                 var sessions = mgr.Sessions;
 
-                int activePid = 0;
-                int matchingPid = 0;
-
-                for (int i = 0; i < sessions.Count; i++)
-                {
-                    var s = sessions[i];
-                    uint sPid = s.GetProcessID;
-                    if (sPid == 0) continue;
-
-                    string sName = GetProcessNameSafe(sPid);
-                    if (sName.Equals(procName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (s.State == AudioSessionState.AudioSessionStateActive)
-                        {
-                            activePid = (int)sPid;
-                            break;
-                        }
-                        matchingPid = (int)sPid;
-                    }
-                }
-
-                if (activePid > 0)
-                    return activePid;
-
-                if (matchingPid > 0)
-                    return matchingPid;
+                int detectedPid = ScanSessionsForProcess(sessions, procName);
+                if (detectedPid > 0)
+                    return detectedPid;
             }
             catch
             {
@@ -342,6 +337,28 @@ namespace LanScreenShare.Media
             }
 
             return fallbackPid;
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static int ScanSessionsForProcess(SessionCollection sessions, string procName)
+        {
+            int matchingPid = 0;
+            for (int i = 0; i < sessions.Count; i++)
+            {
+                var s = sessions[i];
+                uint sPid = s.GetProcessID;
+                if (sPid == 0) continue;
+
+                string sName = GetProcessNameSafe(sPid);
+                if (!sName.Equals(procName, StringComparison.OrdinalIgnoreCase)) continue;
+
+                if (s.State == AudioSessionState.AudioSessionStateActive)
+                {
+                    return (int)sPid;
+                }
+                matchingPid = (int)sPid;
+            }
+            return matchingPid;
         }
 
         public static uint FindApplicationRootProcessId(uint pid, string procName)
@@ -375,7 +392,9 @@ namespace LanScreenShare.Media
                 uint current = pid;
                 for (int depth = 0; depth < 10; depth++)
                 {
-                    if (!parentMap.TryGetValue(current, out uint parentPid) || parentPid == 0 || parentPid == current)
+                    if (!parentMap.TryGetValue(current, out uint parentPid))
+                        break;
+                    if (parentPid == 0 || parentPid == current)
                         break;
 
                     if (nameMap.TryGetValue(parentPid, out string? parentName) &&

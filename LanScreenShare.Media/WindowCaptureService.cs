@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -180,7 +180,7 @@ namespace LanScreenShare.Media
                     var frameProcStopwatch = Stopwatch.StartNew();
                     bool forceKeyframe = _forceKeyframeRequested;
                     _forceKeyframeRequested = false;
-                    var frame = CaptureWindowFrame(_hwnd, _quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe);
+                        var frame = CaptureWindowFrame(_hwnd, new WindowCaptureOptions(_quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe));
 
                     if (frame != null)
                     {
@@ -215,7 +215,23 @@ namespace LanScreenShare.Media
             }
         }
 
-        private CapturedFrame? CaptureWindowFrame(IntPtr hwnd, int quality, double scale, int customTargetW = 0, int customTargetH = 0, bool forceKeyframe = false)
+        private readonly record struct WindowCaptureOptions(
+            int Quality,
+            double Scale,
+            int CustomTargetWidth = 0,
+            int CustomTargetHeight = 0,
+            bool ForceKeyframe = false);
+
+        private static bool NeedsResize(int targetW, int targetH, int width, int height) =>
+            targetW > 0 && targetH > 0 && (targetW != width || targetH != height);
+
+        private static bool IsCursorShowing(in CURSORINFO pci) =>
+            pci.flags == CURSOR_SHOWING && pci.hCursor != IntPtr.Zero;
+
+        private static bool IsInsideBounds(int x, int y, int width, int height) =>
+            x >= 0 && x < width && y >= 0 && y < height;
+
+        private CapturedFrame? CaptureWindowFrame(IntPtr hwnd, in WindowCaptureOptions options)
         {
             if (!GetClientRect(hwnd, out RECT clientRect))
                 return null;
@@ -240,7 +256,7 @@ namespace LanScreenShare.Media
             BITMAPINFO bmi = new BITMAPINFO();
             bmi.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
             bmi.bmiHeader.biWidth = width;
-            bmi.bmiHeader.biHeight = -height; // Top-down DIB
+            bmi.bmiHeader.biHeight = -height;
             bmi.bmiHeader.biPlanes = 1;
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB;
@@ -257,15 +273,12 @@ namespace LanScreenShare.Media
 
             try
             {
-                // Intentar capturar con PrintWindow (PW_RENDERFULLCONTENT captura búferes acelerados por DWM/GPU)
                 bool captured = PrintWindow(hwnd, hdcMem, PW_RENDERFULLCONTENT);
                 if (!captured)
                 {
-                    // Fallback a BitBlt directo desde el DC de la ventana
                     BitBlt(hdcMem, 0, 0, width, height, hdcWindow, 0, 0, SRCCOPY);
                 }
 
-                // Dibujar el cursor si está sobre la ventana cliente
                 DrawCursorOnDC(hwnd, hdcMem, width, height);
 
                 int finalWidth = width;
@@ -278,12 +291,11 @@ namespace LanScreenShare.Media
                 SKBitmap bitmapToEncode = skBitmap;
                 SKBitmap? resizedBitmap = null;
 
-                int targetW = customTargetW > 0 ? customTargetW : (scale > 0.2 && scale < 0.99 ? (int)(width * scale) : 0);
-                int targetH = customTargetH > 0 ? customTargetH : (scale > 0.2 && scale < 0.99 ? (int)(height * scale) : 0);
+                int targetW = options.CustomTargetWidth > 0 ? options.CustomTargetWidth : (options.Scale > 0.2 && options.Scale < 0.99 ? (int)(width * options.Scale) : 0);
+                int targetH = options.CustomTargetHeight > 0 ? options.CustomTargetHeight : (options.Scale > 0.2 && options.Scale < 0.99 ? (int)(height * options.Scale) : 0);
 
-                if (targetW > 0 && targetH > 0 && (targetW != width || targetH != height))
+                if (NeedsResize(targetW, targetH, width, height))
                 {
-                    // Remuestreo bilineal de ultra baja latencia (<2ms) optimizado para streaming en tiempo real
                     resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
                     if (resizedBitmap != null)
                     {
@@ -300,33 +312,13 @@ namespace LanScreenShare.Media
                 {
                     if (currentCodec == "h264")
                     {
-                        try
-                        {
-                            _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps, _bitrateMbps * 1_000_000);
-                            int requiredBytes = finalWidth * finalHeight * 4;
-                            if (_reusableBgraBytes == null || _reusableBgraBytes.Length != requiredBytes)
-                            {
-                                _reusableBgraBytes = new byte[requiredBytes];
-                            }
-                            Marshal.Copy(bitmapToEncode.GetPixels(), _reusableBgraBytes, 0, requiredBytes);
-                            encodedBytes = _h264Encoder.EncodeFrame(_reusableBgraBytes, finalWidth, finalHeight, forceKeyframe);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[WindowCapture] Error en H.264, fallback a JPEG: {ex.Message}");
-                            encodedBytes = null;
-                        }
+                        encodedBytes = EncodeH264(bitmapToEncode, finalWidth, finalHeight, options.ForceKeyframe);
                     }
 
                     if (encodedBytes == null || encodedBytes.Length == 0)
                     {
                         currentCodec = "jpeg";
-                        using var image = SKImage.FromBitmap(bitmapToEncode);
-                        if (image != null)
-                        {
-                            using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
-                            encodedBytes = data.ToArray();
-                        }
+                        encodedBytes = EncodeJpeg(bitmapToEncode, options.Quality);
                     }
                 }
                 finally
@@ -355,20 +347,48 @@ namespace LanScreenShare.Media
             }
         }
 
+        private byte[]? EncodeH264(SKBitmap bitmap, int width, int height, bool forceKeyframe)
+        {
+            try
+            {
+                _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps, _bitrateMbps * 1_000_000);
+                int requiredBytes = width * height * 4;
+                if (_reusableBgraBytes == null || _reusableBgraBytes.Length != requiredBytes)
+                {
+                    _reusableBgraBytes = new byte[requiredBytes];
+                }
+                Marshal.Copy(bitmap.GetPixels(), _reusableBgraBytes, 0, requiredBytes);
+                return _h264Encoder.EncodeFrame(_reusableBgraBytes, width, height, forceKeyframe);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WindowCapture] Error en H.264, fallback a JPEG: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static byte[]? EncodeJpeg(SKBitmap bitmap, int quality)
+        {
+            using var image = SKImage.FromBitmap(bitmap);
+            if (image != null)
+            {
+                using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
+                return data?.ToArray();
+            }
+            return null;
+        }
+
         private static void DrawCursorOnDC(IntPtr hwnd, IntPtr hdc, int clientWidth, int clientHeight)
         {
             try
             {
                 CURSORINFO pci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
-                if (GetCursorInfo(out pci) && pci.flags == CURSOR_SHOWING && pci.hCursor != IntPtr.Zero)
+                if (GetCursorInfo(out pci) && IsCursorShowing(pci))
                 {
                     POINT pt = pci.ptScreenPos;
-                    if (ScreenToClient(hwnd, ref pt))
+                    if (ScreenToClient(hwnd, ref pt) && IsInsideBounds(pt.x, pt.y, clientWidth, clientHeight))
                     {
-                        if (pt.x >= 0 && pt.x < clientWidth && pt.y >= 0 && pt.y < clientHeight)
-                        {
-                            DrawIconEx(hdc, pt.x, pt.y, pci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
-                        }
+                        DrawIconEx(hdc, pt.x, pt.y, pci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                     }
                 }
             }
@@ -377,7 +397,6 @@ namespace LanScreenShare.Media
                 // Ignorar error de dibujado de cursor
             }
         }
-
         #region Win32 P/Invoke
 
         private const int PW_RENDERFULLCONTENT = 0x00000002;

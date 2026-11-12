@@ -34,13 +34,151 @@ namespace LanScreenShare.Media
         private AutoResetEvent? _bufferEvent;
         private bool _disposed;
 
+        private static (IntPtr pProp, IntPtr pParams) CreateActivationPropVariant(uint targetPid, bool includeProcess)
+        {
+            var activationParams = new AUDIOCLIENT_ACTIVATION_PARAMS
+            {
+                ActivationType = AUDIOCLIENT_ACTIVATION_TYPE.ProcessLoopback,
+                ProcessLoopbackParams = new AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS
+                {
+                    TargetProcessId = targetPid,
+                    ProcessLoopbackMode = includeProcess
+                        ? PROCESS_LOOPBACK_MODE.IncludeTargetProcessTree
+                        : PROCESS_LOOPBACK_MODE.ExcludeTargetProcessTree
+                }
+            };
+
+            IntPtr pParams = Marshal.AllocHGlobal(Marshal.SizeOf<AUDIOCLIENT_ACTIVATION_PARAMS>());
+            Marshal.StructureToPtr(activationParams, pParams, false);
+
+            var propVariant = new PROPVARIANT
+            {
+                vt = 65, // VT_BLOB
+                blob = new BLOB
+                {
+                    cbSize = Marshal.SizeOf<AUDIOCLIENT_ACTIVATION_PARAMS>(),
+                    pBlobData = pParams
+                }
+            };
+
+            IntPtr pProp = Marshal.AllocHGlobal(Marshal.SizeOf<PROPVARIANT>());
+            Marshal.StructureToPtr(propVariant, pProp, false);
+            return (pProp, pParams);
+        }
+
+        private async Task<IAudioClient?> ActivateProcessLoopbackClientAsync(uint targetPid, bool includeProcess, CancellationToken cancellationToken)
+        {
+            var handler = new AudioInterfaceCompletionHandler();
+            var (pProp, pParams) = CreateActivationPropVariant(targetPid, includeProcess);
+
+            IActivateAudioInterfaceAsyncOperation? asyncOp = null;
+            try
+            {
+                int hr = ActivateAudioInterfaceAsync(
+                    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+                    typeof(IAudioClient).GUID,
+                    pProp,
+                    handler,
+                    out asyncOp);
+
+                if (hr < 0)
+                {
+                    Log($"[ProcessAudio] ActivateAudioInterfaceAsync falló con HRESULT: 0x{hr:X8}");
+                    return null;
+                }
+
+                using var timeoutCts = new CancellationTokenSource(2500);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+                try
+                {
+                    var rawClient = await handler.Task.WaitAsync(linkedCts.Token);
+                    return rawClient as IAudioClient;
+                }
+                catch (Exception ex)
+                {
+                    Log($"[ProcessAudio] Timeout o error esperando activación COM (targetPid={targetPid}): {ex.Message}");
+                    return null;
+                }
+            }
+            finally
+            {
+                GC.KeepAlive(handler);
+                if (asyncOp != null)
+                {
+                    try { Marshal.ReleaseComObject(asyncOp); } catch { }
+                }
+                Marshal.FreeHGlobal(pProp);
+                Marshal.FreeHGlobal(pParams);
+            }
+        }
+
+        private static WAVEFORMATEXTENSIBLE CreateWaveFormatExtensible(int sampleRate) => new()
+        {
+            Format = new WAVEFORMATEX
+            {
+                wFormatTag = 0xFFFE, // WAVE_FORMAT_EXTENSIBLE
+                nChannels = 2,
+                nSamplesPerSec = (uint)sampleRate,
+                nAvgBytesPerSec = (uint)(sampleRate * 8),
+                nBlockAlign = 8,
+                wBitsPerSample = 32,
+                cbSize = 22
+            },
+            wValidBitsPerSample = 32,
+            dwChannelMask = 0x0003, // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT
+            SubFormat = new Guid("00000003-0000-0010-8000-00aa00389b71") // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+        };
+
+        private static int TryInitializeAtRate(IAudioClient audioClient, int sampleRate, long bufferDurationHns, IntPtr pFormat)
+        {
+            var wfExt = CreateWaveFormatExtensible(sampleRate);
+            Marshal.StructureToPtr(wfExt, pFormat, false);
+
+            uint streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK |
+                               AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+                               AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                               AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+
+            int hr = audioClient.Initialize(0, streamFlags, bufferDurationHns, 0, pFormat, IntPtr.Zero);
+            if (hr < 0)
+            {
+                streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+                hr = audioClient.Initialize(0, streamFlags, bufferDurationHns, 0, pFormat, IntPtr.Zero);
+            }
+
+            return hr;
+        }
+
+        private static int InitializeAudioClientFormat(IAudioClient audioClient, out WaveFormat waveFormat)
+        {
+            IntPtr pFormat = Marshal.AllocHGlobal(Marshal.SizeOf<WAVEFORMATEXTENSIBLE>());
+            long bufferDurationHns = 10000000; // 1 segundo (en unidades de 100ns)
+            try
+            {
+                int hr = TryInitializeAtRate(audioClient, 48000, bufferDurationHns, pFormat);
+                if (hr >= 0)
+                {
+                    waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
+                    return hr;
+                }
+
+                Console.WriteLine($"[ProcessAudio] Initialize 48kHz falló con 0x{hr:X8}, reintentando 44.1kHz...");
+                hr = TryInitializeAtRate(audioClient, 44100, bufferDurationHns, pFormat);
+                waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(44100, 2);
+                return hr;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pFormat);
+            }
+        }
+
         public Task<bool> StartAsync(int processId, CancellationToken cancellationToken = default)
         {
             if (IsCapturing)
                 return Task.FromResult(false);
 
-            // Ejecutar la activación e inicialización COM siempre en un hilo MTA del ThreadPool
-            // para evitar bloqueos o problemas de marshaling con el hilo STA de la interfaz gráfica.
             return Task.Run(async () =>
             {
                 bool includeProcess = processId > 0;
@@ -48,228 +186,99 @@ namespace LanScreenShare.Media
 
                 try
                 {
-                    var handler = new AudioInterfaceCompletionHandler();
-                    var activationParams = new AUDIOCLIENT_ACTIVATION_PARAMS
+                    _audioClient = await ActivateProcessLoopbackClientAsync(targetPid, includeProcess, cancellationToken);
+                    if (_audioClient == null)
                     {
-                        ActivationType = AUDIOCLIENT_ACTIVATION_TYPE.ProcessLoopback,
-                        ProcessLoopbackParams = new AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS
-                        {
-                            TargetProcessId = targetPid,
-                            ProcessLoopbackMode = includeProcess
-                                ? PROCESS_LOOPBACK_MODE.IncludeTargetProcessTree
-                                : PROCESS_LOOPBACK_MODE.ExcludeTargetProcessTree
-                        }
-                    };
-
-                IntPtr pParams = Marshal.AllocHGlobal(Marshal.SizeOf<AUDIOCLIENT_ACTIVATION_PARAMS>());
-                Marshal.StructureToPtr(activationParams, pParams, false);
-
-                var propVariant = new PROPVARIANT
-                {
-                    vt = 65, // VT_BLOB
-                    blob = new BLOB
-                    {
-                        cbSize = Marshal.SizeOf<AUDIOCLIENT_ACTIVATION_PARAMS>(),
-                        pBlobData = pParams
-                    }
-                };
-
-                IntPtr pProp = Marshal.AllocHGlobal(Marshal.SizeOf<PROPVARIANT>());
-                Marshal.StructureToPtr(propVariant, pProp, false);
-
-                int hr;
-                object rawClient;
-                IActivateAudioInterfaceAsyncOperation? asyncOp = null;
-                try
-                {
-                    hr = ActivateAudioInterfaceAsync(
-                        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-                        typeof(IAudioClient).GUID,
-                        pProp,
-                        handler,
-                        out asyncOp);
-
-                    if (hr < 0)
-                    {
-                        Log($"[ProcessAudio] ActivateAudioInterfaceAsync falló con HRESULT: 0x{hr:X8}");
+                        Log("[ProcessAudio] El objeto activado no implementa IAudioClient");
                         return false;
                     }
 
-                    using var timeoutCts = new CancellationTokenSource(2500);
-                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-                    try
+                    int hr = InitializeAudioClientFormat(_audioClient, out WaveFormat waveFormat);
+                    if (hr < 0)
                     {
-                        rawClient = await handler.Task.WaitAsync(linkedCts.Token);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log($"[ProcessAudio] Timeout o error esperando activación COM (targetPid={targetPid}): {ex.Message}");
+                        Log($"[ProcessAudio] IAudioClient.Initialize falló con HRESULT: 0x{hr:X8}");
+                        Cleanup();
                         return false;
                     }
-                }
-                finally
-                {
-                    GC.KeepAlive(handler);
-                    if (asyncOp != null)
-                    {
-                        try { Marshal.ReleaseComObject(asyncOp); } catch { }
-                    }
-                    Marshal.FreeHGlobal(pProp);
-                    Marshal.FreeHGlobal(pParams);
-                }
 
-                _audioClient = rawClient as IAudioClient;
-                if (_audioClient == null)
-                {
-                    Log("[ProcessAudio] El objeto activado no implementa IAudioClient");
-                    return false;
-                }
-
-                var wfExt = new WAVEFORMATEXTENSIBLE
-                {
-                    Format = new WAVEFORMATEX
-                    {
-                        wFormatTag = 0xFFFE, // WAVE_FORMAT_EXTENSIBLE
-                        nChannels = 2,
-                        nSamplesPerSec = 48000,
-                        nAvgBytesPerSec = 48000 * 8,
-                        nBlockAlign = 8,
-                        wBitsPerSample = 32,
-                        cbSize = 22
-                    },
-                    wValidBitsPerSample = 32,
-                    dwChannelMask = 0x0003, // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT
-                    SubFormat = new Guid("00000003-0000-0010-8000-00aa00389b71") // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
-                };
-
-                IntPtr pFormat = Marshal.AllocHGlobal(Marshal.SizeOf<WAVEFORMATEXTENSIBLE>());
-                WaveFormat waveFormat;
-                long bufferDurationHns = 10000000; // 1 segundo (en unidades de 100ns)
-                try
-                {
-                    Marshal.StructureToPtr(wfExt, pFormat, false);
-
-                    // 1. Intentar 48kHz con AUTOCONVERTPCM para que Windows resamplee y mezcle transparentemente cualquier formato de la app
-                    uint streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK |
-                                       AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-                                       AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-                                       AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-
-                    hr = _audioClient.Initialize(
-                        0, // AudioClientShareMode.Shared
-                        streamFlags,
-                        bufferDurationHns,
-                        0,
-                        pFormat,
-                        IntPtr.Zero);
-
-                    // 2. Si falla con AUTOCONVERTPCM, intentar 48kHz estándar
+                    _bufferEvent = new AutoResetEvent(false);
+                    hr = _audioClient.SetEventHandle(_bufferEvent.SafeWaitHandle.DangerousGetHandle());
                     if (hr < 0)
                     {
-                        Console.WriteLine($"[ProcessAudio] Initialize 48kHz con AUTOCONVERTPCM falló (0x{hr:X8}), reintentando sin AUTOCONVERTPCM...");
-                        streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
-                        hr = _audioClient.Initialize(
-                            0,
-                            streamFlags,
-                            bufferDurationHns,
-                            0,
-                            pFormat,
-                            IntPtr.Zero);
+                        Log($"[ProcessAudio] SetEventHandle falló con HRESULT: 0x{hr:X8}");
+                        Cleanup();
+                        return false;
                     }
 
-                    // 3. Si aún falla, probar a 44.1kHz con y sin AUTOCONVERTPCM
+                    hr = _audioClient.GetService(typeof(IAudioCaptureClient).GUID, out object rawCaptureClient);
+                    if (hr < 0 || rawCaptureClient == null)
+                    {
+                        Log($"[ProcessAudio] GetService(IAudioCaptureClient) falló con HRESULT: 0x{hr:X8}");
+                        Cleanup();
+                        return false;
+                    }
+
+                    _captureClient = (IAudioCaptureClient)rawCaptureClient;
+                    hr = _audioClient.Start();
                     if (hr < 0)
                     {
-                        Console.WriteLine($"[ProcessAudio] Initialize 48kHz falló con 0x{hr:X8}, reintentando 44.1kHz...");
-                        wfExt.Format.nSamplesPerSec = 44100;
-                        wfExt.Format.nAvgBytesPerSec = 44100 * 8;
-                        Marshal.StructureToPtr(wfExt, pFormat, false);
-
-                        streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK |
-                                      AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-                                      AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-                                      AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-
-                        hr = _audioClient.Initialize(
-                            0,
-                            streamFlags,
-                            bufferDurationHns,
-                            0,
-                            pFormat,
-                            IntPtr.Zero);
-
-                        if (hr < 0)
-                        {
-                            streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
-                            hr = _audioClient.Initialize(
-                                0,
-                                streamFlags,
-                                bufferDurationHns,
-                                0,
-                                pFormat,
-                                IntPtr.Zero);
-                        }
-
-                        waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(44100, 2);
+                        Log($"[ProcessAudio] IAudioClient.Start falló con HRESULT: 0x{hr:X8}");
+                        Cleanup();
+                        return false;
                     }
-                    else
-                    {
-                        waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
-                    }
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(pFormat);
-                }
 
-                if (hr < 0)
+                    _cts = new CancellationTokenSource();
+                    IsCapturing = true;
+                    _captureTask = Task.Run(() => CaptureLoop(waveFormat, _cts.Token));
+                    string modeDesc = includeProcess ? $"PID {processId} (aislado)" : $"Escritorio completo (excluyendo PID {targetPid})";
+                    Log($"[ProcessAudio] Captura iniciada: {modeDesc} ({waveFormat.SampleRate}Hz, {waveFormat.Channels}ch, {waveFormat.BitsPerSample}bits)");
+                    return true;
+                }
+                catch (Exception ex)
                 {
-                    Log($"[ProcessAudio] IAudioClient.Initialize falló con HRESULT: 0x{hr:X8}");
+                    Log($"[ProcessAudio] Error general iniciando captura de proceso: {ex}");
                     Cleanup();
                     return false;
                 }
-
-                _bufferEvent = new AutoResetEvent(false);
-                hr = _audioClient.SetEventHandle(_bufferEvent.SafeWaitHandle.DangerousGetHandle());
-                if (hr < 0)
-                {
-                    Log($"[ProcessAudio] SetEventHandle falló con HRESULT: 0x{hr:X8}");
-                    Cleanup();
-                    return false;
-                }
-
-                hr = _audioClient.GetService(typeof(IAudioCaptureClient).GUID, out object rawCaptureClient);
-                if (hr < 0 || rawCaptureClient == null)
-                {
-                    Log($"[ProcessAudio] GetService(IAudioCaptureClient) falló con HRESULT: 0x{hr:X8}");
-                    Cleanup();
-                    return false;
-                }
-
-                _captureClient = (IAudioCaptureClient)rawCaptureClient;
-                hr = _audioClient.Start();
-                if (hr < 0)
-                {
-                    Log($"[ProcessAudio] IAudioClient.Start falló con HRESULT: 0x{hr:X8}");
-                    Cleanup();
-                    return false;
-                }
-
-                _cts = new CancellationTokenSource();
-                IsCapturing = true;
-                _captureTask = Task.Run(() => CaptureLoop(waveFormat, _cts.Token));
-                string modeDesc = includeProcess ? $"PID {processId} (aislado)" : $"Escritorio completo (excluyendo PID {targetPid})";
-                Log($"[ProcessAudio] Captura iniciada: {modeDesc} ({waveFormat.SampleRate}Hz, {waveFormat.Channels}ch, {waveFormat.BitsPerSample}bits)");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log($"[ProcessAudio] Error general iniciando captura de proceso: {ex}");
-                Cleanup();
-                return false;
-            }
             }, cancellationToken);
+        }
+
+        private static bool IsValidBuffer(int hrGet, IntPtr pData, uint numFrames) =>
+            hrGet >= 0 && pData != IntPtr.Zero && numFrames > 0;
+
+        private bool TryReadAndDispatchPacket(WaveFormat waveFormat, short formatEncoding)
+        {
+            int hrNext = _captureClient!.GetNextPacketSize(out uint packetSize);
+            if (hrNext < 0 || packetSize == 0)
+                return false;
+
+            int hrGet = _captureClient.GetBuffer(out IntPtr pData, out uint numFrames, out uint flags, out _, out _);
+            if (!IsValidBuffer(hrGet, pData, numFrames))
+                return false;
+
+            int byteCount = (int)(numFrames * waveFormat.BlockAlign);
+            byte[] buffer = new byte[byteCount];
+
+            if ((flags & 2) == 0) // AUDCLNT_BUFFERFLAGS_SILENT
+            {
+                Marshal.Copy(pData, buffer, 0, byteCount);
+            }
+
+            _captureClient.ReleaseBuffer(numFrames);
+
+            var chunk = new CapturedAudioChunk
+            {
+                Data = buffer,
+                SampleRate = waveFormat.SampleRate,
+                Channels = waveFormat.Channels,
+                BitsPerSample = waveFormat.BitsPerSample,
+                AudioFormat = formatEncoding,
+                Source = AudioSourceType.Desktop,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            };
+
+            AudioCaptured?.Invoke(this, chunk);
+            return true;
         }
 
         private void CaptureLoop(WaveFormat waveFormat, CancellationToken token)
@@ -286,42 +295,8 @@ namespace LanScreenShare.Media
                 if (index == 1 || token.IsCancellationRequested)
                     break;
 
-                while (!token.IsCancellationRequested)
+                while (!token.IsCancellationRequested && TryReadAndDispatchPacket(waveFormat, formatEncoding))
                 {
-                    int hrNext = _captureClient.GetNextPacketSize(out uint packetSize);
-                    if (hrNext < 0 || packetSize == 0)
-                        break;
-
-                    int hrGet = _captureClient.GetBuffer(out IntPtr pData, out uint numFrames, out uint flags, out _, out _);
-                    if (hrGet < 0 || pData == IntPtr.Zero || numFrames == 0)
-                        break;
-
-                    int byteCount = (int)(numFrames * waveFormat.BlockAlign);
-                    byte[] buffer = new byte[byteCount];
-
-                    if ((flags & 2) != 0) // AUDCLNT_BUFFERFLAGS_SILENT
-                    {
-                        // Buffer ya en ceros
-                    }
-                    else
-                    {
-                        Marshal.Copy(pData, buffer, 0, byteCount);
-                    }
-
-                    _captureClient.ReleaseBuffer(numFrames);
-
-                    var chunk = new CapturedAudioChunk
-                    {
-                        Data = buffer,
-                        SampleRate = waveFormat.SampleRate,
-                        Channels = waveFormat.Channels,
-                        BitsPerSample = waveFormat.BitsPerSample,
-                        AudioFormat = formatEncoding,
-                        Source = AudioSourceType.Desktop,
-                        Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-
-                    AudioCaptured?.Invoke(this, chunk);
                 }
             }
         }
@@ -554,12 +529,15 @@ namespace LanScreenShare.Media
 
             public Task<object> Task => _tcs.Task;
 
+            private static bool IsActivationSuccessful(int hrMethod, int hrActivate, object? unk) =>
+                hrMethod >= 0 && hrActivate >= 0 && unk != null;
+
             public void ActivateCompleted(IActivateAudioInterfaceAsyncOperation activateOperation)
             {
                 try
                 {
                     int hrMethod = activateOperation.GetActivateResult(out int hrActivate, out object ppUnk);
-                    if (hrMethod >= 0 && hrActivate >= 0 && ppUnk != null)
+                    if (IsActivationSuccessful(hrMethod, hrActivate, ppUnk))
                     {
                         _tcs.TrySetResult(ppUnk);
                     }

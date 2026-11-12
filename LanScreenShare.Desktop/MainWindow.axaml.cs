@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -38,37 +38,37 @@ namespace LanScreenShare.Desktop
 {
     public partial class MainWindow : Window
     {
-        private readonly DiscoveryService _discoveryService;
-        private IScreenCaptureService _screenCaptureService;
-        private readonly TcpStreamServer _streamServer;
-        private readonly TcpStreamClient _streamClient;
+        private DiscoveryService _discoveryService = null!;
+        private IScreenCaptureService _screenCaptureService = null!;
+        private TcpStreamServer _streamServer = null!;
+        private TcpStreamClient _streamClient = null!;
 
         // Seguridad, autoridad de sesiones e identidad mTLS
-        private readonly IIdentityKeyStorage _identityKeyStorage;
-        private readonly IPairedDeviceStore _pairedDeviceStore;
-        private readonly ISessionAuthority _sessionAuthority;
+        private IIdentityKeyStorage _identityKeyStorage = null!;
+        private IPairedDeviceStore _pairedDeviceStore = null!;
+        private ISessionAuthority _sessionAuthority = null!;
         private X509Certificate2? _identityCertificate;
         private SslServerAuthenticationOptions? _sslServerOptions;
         private SslClientAuthenticationOptions? _sslClientOptions;
 
         // Servicios de streaming de audio
-        private readonly IAudioCaptureService? _audioCaptureService;
-        private readonly IAudioPlayerService? _audioPlayerService;
-        private readonly IAudioCaptureService? _micCaptureService;
-        private readonly IAudioPlayerService? _micAudioPlayerService;
-        private readonly TcpAudioServer _audioServer;
-        private readonly TcpAudioClient _audioClient;
+        private IAudioCaptureService? _audioCaptureService;
+        private IAudioPlayerService? _audioPlayerService;
+        private IAudioCaptureService? _micCaptureService;
+        private IAudioPlayerService? _micAudioPlayerService;
+        private TcpAudioServer _audioServer = null!;
+        private TcpAudioClient _audioClient = null!;
         private volatile bool _isViewerVoiceChatActive;
         private volatile bool _allowViewerVoiceChat = true;
 
         // Servicios de control remoto (Mouse, Teclado y Portapapeles)
-        private readonly IInputSimulatorService? _inputSimulatorService;
-        private readonly TcpControlServer _controlServer;
-        private readonly TcpControlClient _controlClient;
+        private IInputSimulatorService? _inputSimulatorService;
+        private TcpControlServer _controlServer = null!;
+        private TcpControlClient _controlClient = null!;
         private bool _remoteControlEnabled;
         private volatile bool _allowRemoteControl = true;
         private volatile bool _allowClipboardSync = true;
-        private readonly DispatcherTimer _clipboardSyncTimer;
+        private DispatcherTimer _clipboardSyncTimer = null!;
         private string? _lastLocalClipboardText;
         private string? _lastNetworkClipboardText;
         private bool _isPollingClipboard;
@@ -78,8 +78,8 @@ namespace LanScreenShare.Desktop
         private bool _isGameMode;
         private bool _isRecenteringMouse;
         private DispatcherTimer? _gameModeBannerTimer;
-        private readonly TcpFileTransferServer _fileTransferServer;
-        private readonly TcpFileTransferClient _fileTransferClient;
+        private TcpFileTransferServer _fileTransferServer = null!;
+        private TcpFileTransferClient _fileTransferClient = null!;
         private CancellationTokenSource? _activeTransferCts;
         private string? _lastReceivedFilePath;
         private DispatcherTimer? _fileTransferBannerTimer;
@@ -94,7 +94,7 @@ namespace LanScreenShare.Desktop
         // Pantalla completa y barra superior auto-ocultable
         private bool _isFullscreen;
         private WindowState _previousWindowState = WindowState.Normal;
-        private readonly DispatcherTimer _headerAutoHideTimer;
+        private DispatcherTimer _headerAutoHideTimer = null!;
         private bool _isMouseOverHeaderBar;
 
         // Ventana emergente (Pop-out) y modo de ajuste de pantalla
@@ -102,17 +102,17 @@ namespace LanScreenShare.Desktop
         private bool _isPopoutActive;
         private Stretch _currentStretchMode = Stretch.Uniform;
 
-        // BÃºsqueda de dispositivos
+        // BÃƒÂºsqueda de dispositivos
         private DispatcherTimer? _searchTimer;
 
-        // Control de acceso y aprobaciÃ³n de conexiones
+        // Control de acceso y aprobaciÃƒÂ³n de conexiones
         private volatile bool _requireStreamApproval = false;
         private volatile string _remoteControlMode = "auto";
         private TaskCompletionSource<bool>? _streamApprovalTcs;
         private TaskCompletionSource<bool>? _controlApprovalTcs;
 
         // Decodificador de video por hardware (H.264)
-        private readonly IVideoDecoderService? _h264Decoder;
+        private IVideoDecoderService? _h264Decoder;
         private WriteableBitmap? _viewerWriteableBitmap;
         private byte[]? _latestDecodedBgra;
         private int _latestDecodedWidth;
@@ -128,7 +128,7 @@ namespace LanScreenShare.Desktop
         private int _lastFrameHeight;
         private int _lastHostFps;
         private int _lastHostFrameTimeMs;
-        private readonly DispatcherTimer _metricsTimer;
+        private DispatcherTimer _metricsTimer = null!;
         private AppSettings _appSettings = new();
         private bool _isInitializingSettings = true;
         private bool _isApplyingPreset = false;
@@ -148,1007 +148,17 @@ namespace LanScreenShare.Desktop
 
             _appSettings = SettingsService.Load();
 
-            if (OperatingSystem.IsWindows())
-            {
-                var availableScreens = CaptureSourceDiscoveryService.GetScreenSources();
-                CaptureSource? matched = null;
-
-                if (!string.IsNullOrEmpty(_appSettings.CaptureSourceId) && !_appSettings.CaptureSourceId.StartsWith("window:"))
-                {
-                    matched = availableScreens.FirstOrDefault(s => s.Id == _appSettings.CaptureSourceId);
-                }
-
-                if (matched != null)
-                {
-                    _currentSource = matched;
-                }
-                else if (availableScreens.Count > 0)
-                {
-                    _currentSource = availableScreens.FirstOrDefault(s => s.IsPrimary) ?? availableScreens[0];
-                }
-            }
-
-            if (OperatingSystem.IsWindows())
-            {
-                try
-                {
-                    _h264Decoder = new MediaFoundationH264DecoderService();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[MainWindow] Decodificador H.264 no disponible: {ex.Message}");
-                }
-            }
-
-            _discoveryService = new DiscoveryService();
-            _discoveryService.OnDeviceDiscovered += DiscoveryService_OnDeviceDiscovered;
-
-            // Iniciar con la fuente y motor guardados en configuraciÃ³n
-            _screenCaptureService = CreateCaptureService(_currentSource, _appSettings.Engine);
-
-            _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
-
-            if (OperatingSystem.IsWindows())
-            {
-                _inputSimulatorService = new WindowsInputSimulatorService();
-            }
-            else
-            {
-                _inputSimulatorService = new NullInputSimulatorService();
-            }
-
-            // Inicialización de subsistema de Seguridad, Autoridad de Sesiones y mTLS
-            _identityKeyStorage = IdentityKeyStorageFactory.Create();
-            _pairedDeviceStore = new JsonPairedDeviceStore();
-            _sessionAuthority = new SessionAuthority(_pairedDeviceStore);
-
-            try
-            {
-                _identityCertificate = _identityKeyStorage.GetOrCreateIdentityCertificateAsync().GetAwaiter().GetResult();
-                _sslServerOptions = TlsConfigurationHelper.CreateServerOptions(_identityCertificate, _pairedDeviceStore, OnProvisionalPairingRequested);
-                _sslClientOptions = TlsConfigurationHelper.CreateClientOptions(_identityCertificate, "LanScreenShareHost", _pairedDeviceStore, OnClientProvisionalPairing);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Security] Error inicializando identidad mTLS: {ex.Message}");
-            }
-
-            _streamServer = new TcpStreamServer(_sessionAuthority, _sslServerOptions, _pairedDeviceStore);
-            _streamServer.PairingApprovalCallback = (fingerprint, deviceName, sasFormatted) => RequestPairingApprovalAsync(deviceName, fingerprint, sasFormatted);
-            _streamServer.ClientConnected += StreamServer_ClientConnected;
-            _streamServer.ClientDisconnected += StreamServer_ClientDisconnected;
-            _streamServer.FrameDropped += (s, e) =>
-            {
-                _screenCaptureService?.RequestKeyframe();
-                _abrController.RegisterHostDrop();
-            };
-            _streamServer.TelemetryUpdated += (s, telemetry) =>
-            {
-                _abrController.RegisterTelemetry(telemetry);
-            };
-
-            _abrController.BitrateChanged += (newBitrate, reason) =>
-            {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    if (_isHosting && _screenCaptureService != null && _screenCaptureService.BitrateMbps != newBitrate)
-                    {
-                        _screenCaptureService.BitrateMbps = newBitrate;
-                    }
-                    UpdateAbrUI();
-                });
-            };
-
-            _abrController.FpsChanged += (newFps, reason) =>
-            {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    if (_isHosting && _screenCaptureService != null && _screenCaptureService.TargetFps != newFps)
-                    {
-                        _screenCaptureService.TargetFps = newFps;
-                    }
-                });
-            };
-
-            _abrController.KeyframeRequested += () =>
-            {
-                _screenCaptureService?.RequestKeyframe();
-            };
-
-            _streamClient = new TcpStreamClient();
-            _streamClient.FrameReceived += StreamClient_FrameReceived;
-            _streamClient.StatusChanged += StreamClient_StatusChanged;
-
-            // InicializaciÃ³n de subsistema de Audio
-            _audioServer = new TcpAudioServer(_sessionAuthority, _sslServerOptions);
-            _audioClient = new TcpAudioClient();
-
-            // InicializaciÃ³n de subsistema de Control Remoto
-            _controlServer = new TcpControlServer(_sessionAuthority, _inputSimulatorService, _sslServerOptions);
-            _controlClient = new TcpControlClient();
-
-            // Inicialización de subsistema de Transferencia de Archivos (Puerto 5004)
-            _fileTransferServer = new TcpFileTransferServer(_sessionAuthority, _sslServerOptions);
-            _fileTransferClient = new TcpFileTransferClient();
-
-            _fileTransferServer.TransferProgress += (s, p) => Dispatcher.UIThread.Post(() => ShowFileTransferProgress(p));
-            _fileTransferServer.TransferCompleted += (s, c) => Dispatcher.UIThread.Post(() => ShowFileTransferCompleted(c));
-            _fileTransferServer.TransferError += (s, err) => Dispatcher.UIThread.Post(() => ShowFileTransferError(err));
-
-            _fileTransferClient.TransferProgress += (s, p) => Dispatcher.UIThread.Post(() => ShowFileTransferProgress(p));
-            _fileTransferClient.TransferCompleted += (s, c) => Dispatcher.UIThread.Post(() => ShowFileTransferCompleted(c));
-            _fileTransferClient.TransferError += (s, err) => Dispatcher.UIThread.Post(() => ShowFileTransferError(err));
-
-            _audioCaptureService = AudioServiceFactory.CreateAudioCapture();
-            _audioPlayerService = AudioServiceFactory.CreateAudioPlayer();
-            _micCaptureService = AudioServiceFactory.CreateMicCapture();
-            _micAudioPlayerService = AudioServiceFactory.CreateAudioPlayer();
-
-            _audioCaptureService.AudioCaptured += async (s, chunk) =>
-                {
-                    if (_isHosting && _audioServer.IsRunning)
-                    {
-                        try
-                        {
-                            await _audioServer.BroadcastAudioAsync(chunk);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[Host] Error emitiendo audio: {ex.Message}");
-                        }
-                    }
-                };
-
-                _micCaptureService.AudioCaptured += async (s, chunk) =>
-                {
-                    if (_isHosting && _audioServer.IsRunning)
-                    {
-                        try
-                        {
-                            await _audioServer.BroadcastAudioAsync(chunk);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[Host] Error emitiendo micrófono: {ex.Message}");
-                        }
-                    }
-                    else if (_isViewing && _audioClient.IsConnected && _isViewerVoiceChatActive)
-                    {
-                        try
-                        {
-                            chunk.Source = AudioSourceType.ViewerMicrophone;
-                            await _audioClient.SendAudioChunkAsync(chunk);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[Viewer] Error enviando voz del espectador: {ex.Message}");
-                        }
-                    }
-                };
-
-                _audioServer.ClientAudioReceived += (s, chunk) =>
-                {
-                    // El anfitrión recibe el micrófono del espectador (Intercomunicador bidireccional)
-                    // IMPORTANTE: Usar bandera volatile en memoria; jamás acceder a controles de UI desde el hilo de red
-                    if (_allowViewerVoiceChat && _micAudioPlayerService != null)
-                    {
-                        _micAudioPlayerService.PlayChunk(chunk);
-                    }
-                };
-
-                _audioClient.AudioReceived += (s, chunk) =>
-                {
-                    // La voz/micrófono del intercomunicador nunca se descarta por desfase de video
-                    if (chunk.Source == AudioSourceType.Microphone || chunk.Source == AudioSourceType.ViewerMicrophone)
-                    {
-                        _micAudioPlayerService?.PlayChunk(chunk);
-                        return;
-                    }
-
-                    var syncAction = _avSyncController.ProcessAudioChunk(chunk.Timestamp, out int delayMs);
-                    if (syncAction == AvSyncAction.DropStaleAudio)
-                    {
-                        return; // Descartar muestra obsoleta para resincronizar audio con el flujo de video
-                    }
-
-                    _streamClient?.UpdateAvDrift(_avSyncController.CurrentDriftMs);
-                    _audioPlayerService?.PlayChunk(chunk);
-                };
-
-            _discoveryService.IsRemoteControlAllowedProvider = () => _allowRemoteControl;
-
-            var allowCb = this.FindControl<CheckBox>("AllowRemoteControlCheckBox");
-            var controlAccessPanel = this.FindControl<StackPanel>("ControlAccessModePanel");
-
-            if (allowCb != null)
-            {
-                allowCb.IsChecked = _appSettings.AllowRemoteControl;
-                _allowRemoteControl = _appSettings.AllowRemoteControl;
-                if (controlAccessPanel != null)
-                {
-                    controlAccessPanel.IsVisible = _allowRemoteControl;
-                }
-
-                allowCb.IsCheckedChanged += (s, e) =>
-                {
-                    _allowRemoteControl = allowCb.IsChecked == true;
-                    if (controlAccessPanel != null)
-                    {
-                        controlAccessPanel.IsVisible = _allowRemoteControl;
-                    }
-
-                    if (_isHosting)
-                    {
-                        if (_allowRemoteControl)
-                        {
-                            if (!_controlServer.IsRunning)
-                            {
-                                _ = _controlServer.StartAsync(5003);
-                            }
-                        }
-                        else
-                        {
-                            _controlServer.Stop();
-                        }
-                    }
-                    Console.WriteLine($"[ControlHost] Permiso de control remoto: {_allowRemoteControl}");
-                    SaveCurrentSettings();
-                };
-            }
-
-            _controlServer.InputReceived += (s, input) =>
-            {
-                if (_allowRemoteControl)
-                {
-                    // Inyección gestionada y rastreada directamente por TcpControlServer
-                    // _inputSimulatorService?.SimulateInput(input);
-                }
-            };
-
-            var clipboardSyncCb = this.FindControl<CheckBox>("ClipboardSyncCheckBox");
-            if (clipboardSyncCb != null)
-            {
-                clipboardSyncCb.IsChecked = _appSettings.ClipboardSyncEnabled;
-                _allowClipboardSync = _appSettings.ClipboardSyncEnabled;
-                clipboardSyncCb.IsCheckedChanged += (s, e) =>
-                {
-                    bool enabled = clipboardSyncCb.IsChecked == true;
-                    _allowClipboardSync = enabled;
-                    _appSettings.ClipboardSyncEnabled = enabled;
-                    SaveCurrentSettings();
-                };
-            }
-
-            _controlServer.ClipboardTextReceived += (s, text) =>
-            {
-                if (_isHosting && _allowRemoteControl && _allowClipboardSync)
-                {
-                    ApplyRemoteClipboardText(text);
-                }
-            };
-
-            _controlClient.ClipboardTextReceived += (s, text) =>
-            {
-                if (_isViewing && _remoteControlEnabled && _allowClipboardSync)
-                {
-                    ApplyRemoteClipboardText(text);
-                }
-            };
-
-            _controlServer.ClientConnected += (s, clientId) =>
-            {
-                if (_isHosting && _allowRemoteControl)
-                {
-                    BroadcastHostSourceCatalog();
-                }
-            };
-
-            _controlServer.SourceCatalogRequested += (s, e) =>
-            {
-                if (_isHosting && _allowRemoteControl)
-                {
-                    BroadcastHostSourceCatalog();
-                }
-            };
-
-            _controlServer.SwitchMonitorRequested += (s, requestedIndex) =>
-            {
-                if (_isHosting && _allowRemoteControl)
-                {
-                    HandleRemoteMonitorSwitchOnHost(requestedIndex);
-                }
-            };
-
-            _controlServer.SelectSourceRequested += (s, sourceId) =>
-            {
-                if (_isHosting && _allowRemoteControl)
-                {
-                    HandleRemoteSelectSourceOnHost(sourceId);
-                }
-            };
-
-            _controlClient.MonitorInfoReceived += (s, monitorLabel) =>
-            {
-                if (_isViewing)
-                {
-                    ApplyRemoteMonitorInfo(monitorLabel);
-                }
-            };
-
-            _clipboardSyncTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(750)
-            };
-            _clipboardSyncTimer.Tick += ClipboardSyncTimer_Tick;
-            _clipboardSyncTimer.Start();
-
-            var devicesList = this.FindControl<ListBox>("DevicesList");
-            if (devicesList != null)
-            {
-                devicesList.ItemsSource = Devices;
-            }
-            Devices.CollectionChanged += (s, e) => UpdateDevicesSectionUI();
-            UpdateDevicesSectionUI();
-
-            var hostButton = this.FindControl<Button>("HostButton");
-            if (hostButton != null)
-            {
-                hostButton.Click += HostButton_Click;
-            }
-
-            var centerHostButton = this.FindControl<Button>("CenterHostButton");
-            if (centerHostButton != null)
-            {
-                centerHostButton.Click += HostButton_Click;
-            }
-
-            var centerSelectSourceBtn = this.FindControl<Button>("CenterSelectSourceButton");
-            if (centerSelectSourceBtn != null)
-            {
-                centerSelectSourceBtn.Click += SelectSourceButton_Click;
-            }
-
-            var helpButton = this.FindControl<Button>("HelpButton");
-            if (helpButton != null)
-            {
-                helpButton.Click += (s, e) =>
-                {
-                    UpdateStatus("Ayuda: Presiona 'Transmitir mi pantalla' o 'Buscar dispositivos' en tu red.", "#3B82F6");
-                };
-            }
-
-            var searchButton = this.FindControl<Button>("SearchButton");
-            if (searchButton != null)
-            {
-                searchButton.Click += SearchButton_Click;
-            }
-
-            var collapseLeftBtn = this.FindControl<Button>("CollapseLeftSidebarButton");
-            if (collapseLeftBtn != null)
-            {
-                collapseLeftBtn.Click += (s, e) => SetLeftSidebarCollapsed(true);
-            }
-
-            var expandLeftBtn = this.FindControl<Button>("ExpandLeftSidebarButton");
-            if (expandLeftBtn != null)
-            {
-                expandLeftBtn.Click += (s, e) => SetLeftSidebarCollapsed(false);
-            }
-
-            var collapseRightBtn = this.FindControl<Button>("CollapseRightSidebarButton");
-            if (collapseRightBtn != null)
-            {
-                collapseRightBtn.Click += (s, e) => SetRightSidebarCollapsed(true);
-            }
-
-            var expandRightBtn = this.FindControl<Button>("ExpandRightSidebarButton");
-            if (expandRightBtn != null)
-            {
-                expandRightBtn.Click += (s, e) => SetRightSidebarCollapsed(false);
-            }
-
-            var disconnectButton = this.FindControl<Button>("DisconnectButton");
-            if (disconnectButton != null)
-            {
-                disconnectButton.Click += DisconnectButton_Click;
-            }
-
-            var audioMuteButton = this.FindControl<Button>("AudioMuteButton");
-            if (audioMuteButton != null)
-            {
-                audioMuteButton.Click += (s, e) => ToggleMute();
-            }
-
-            var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
-            if (volumeSlider != null)
-            {
-                volumeSlider.Value = Math.Clamp((int)Math.Round(_appSettings.AudioVolume * 100), 0, 100);
-                volumeSlider.PropertyChanged += (s, e) =>
-                {
-                    if (e.Property.Name == nameof(Slider.Value))
-                    {
-                        SetAudioVolume((float)Math.Clamp(volumeSlider.Value / 100.0, 0.0, 1.0));
-                    }
-                };
-            }
-
-            if (_audioPlayerService != null)
-            {
-                _audioPlayerService.Volume = _appSettings.AudioVolume;
-                _audioPlayerService.IsMuted = _appSettings.AudioMuted;
-                UpdateAudioUI();
-            }
-
-            var micMuteButton = this.FindControl<Button>("MicMuteButton");
-            if (micMuteButton != null)
-            {
-                micMuteButton.Click += (s, e) => ToggleMicMute();
-            }
-
-            var micVolumeSlider = this.FindControl<Slider>("MicVolumeSlider");
-            if (micVolumeSlider != null)
-            {
-                micVolumeSlider.Value = Math.Clamp((int)Math.Round(_appSettings.MicVolume * 100), 0, 100);
-                micVolumeSlider.PropertyChanged += (s, e) =>
-                {
-                    if (e.Property.Name == nameof(Slider.Value))
-                    {
-                        SetMicVolume((float)Math.Clamp(micVolumeSlider.Value / 100.0, 0.0, 1.0));
-                    }
-                };
-            }
-
-            if (_micAudioPlayerService != null)
-            {
-                _micAudioPlayerService.Volume = _appSettings.MicVolume;
-                _micAudioPlayerService.IsMuted = _appSettings.MicMuted;
-                UpdateMicUI();
-            }
-
-            var micShareCb = this.FindControl<CheckBox>("MicShareCheckBox");
-            if (micShareCb != null)
-            {
-                micShareCb.IsChecked = _appSettings.ShareMicrophone;
-                micShareCb.IsCheckedChanged += async (s, e) =>
-                {
-                    bool isChecked = micShareCb.IsChecked == true;
-                    _appSettings.ShareMicrophone = isChecked;
-                    UpdateCanvasFooterAudioStatus();
-                    SaveCurrentSettings();
-
-                    if (_isHosting)
-                    {
-                        if (isChecked)
-                        {
-                            try
-                            {
-                                await _audioServer.StartAsync(5002);
-                                _micCaptureService?.StartCapture();
-                                Console.WriteLine("[Host] Captura de micrófono iniciada dinámicamente.");
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[Host] Error activando micrófono: {ex.Message}");
-                            }
-                        }
-                        else
-                        {
-                            _micCaptureService?.StopCapture();
-                            Console.WriteLine("[Host] Captura de micrófono detenida dinámicamente.");
-                        }
-                    }
-                };
-            }
-
-            var viewerVoiceCb = this.FindControl<CheckBox>("ViewerVoiceChatCheckBox");
-            if (viewerVoiceCb != null)
-            {
-                viewerVoiceCb.IsChecked = _appSettings.ViewerVoiceChatEnabled;
-                _allowViewerVoiceChat = _appSettings.ViewerVoiceChatEnabled;
-                viewerVoiceCb.IsCheckedChanged += (s, e) =>
-                {
-                    bool allowed = viewerVoiceCb.IsChecked == true;
-                    _allowViewerVoiceChat = allowed;
-                    _appSettings.ViewerVoiceChatEnabled = allowed;
-                    if (!allowed)
-                    {
-                        _micAudioPlayerService?.ClearBuffer();
-                    }
-                    SaveCurrentSettings();
-                };
-            }
-
-            var viewerVoiceChatToggle = this.FindControl<ToggleButton>("ViewerVoiceChatToggle");
-            if (viewerVoiceChatToggle != null)
-            {
-                viewerVoiceChatToggle.IsChecked = true;
-                _isViewerVoiceChatActive = true;
-                viewerVoiceChatToggle.IsCheckedChanged += (s, e) =>
-                {
-                    bool active = viewerVoiceChatToggle.IsChecked == true;
-                    _isViewerVoiceChatActive = active;
-                    UpdateViewerVoiceChatUI(active);
-
-                    if (_isViewing && _audioClient.IsConnected)
-                    {
-                        if (active)
-                        {
-                            _micCaptureService?.StartCapture();
-                            Console.WriteLine("[Viewer] Micrófono activado hacia el anfitrión.");
-                        }
-                        else
-                        {
-                            _micCaptureService?.StopCapture();
-                            Console.WriteLine("[Viewer] Micrófono silenciado hacia el anfitrión.");
-                        }
-                    }
-                };
-            }
-
-            var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
-            if (remoteControlBtn != null)
-            {
-                remoteControlBtn.IsCheckedChanged += async (s, e) =>
-                {
-                    if (remoteControlBtn.IsChecked == true)
-                    {
-                        bool connected = await EnsureControlConnectedAsync();
-                        if (!connected)
-                        {
-                            remoteControlBtn.IsChecked = false;
-                            _remoteControlEnabled = false;
-                            return;
-                        }
-
-                        _remoteControlEnabled = true;
-                        remoteControlBtn.Background = new SolidColorBrush(Color.Parse("#2563EB"));
-
-                        var screenImg = this.FindControl<Image>("ScreenImage");
-                        screenImg?.Focus();
-                    }
-                    else
-                    {
-                        _remoteControlEnabled = false;
-                        remoteControlBtn.Background = new SolidColorBrush(Color.Parse("#27272A"));
-
-                        if (_isGameMode)
-                        {
-                            _isGameMode = false;
-                            UpdateGameModeUI();
-                        }
-                    }
-                };
-            }
-
-            var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
-            if (gameModeBtn != null)
-            {
-                gameModeBtn.IsCheckedChanged += (s, e) =>
-                {
-                    if (_isGameMode != (gameModeBtn.IsChecked == true))
-                    {
-                        ToggleGameMode();
-                    }
-                };
-            }
-
-            var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
-            if (switchMonitorBtn != null)
-            {
-                switchMonitorBtn.Click += async (s, e) => await OpenRemoteSourceMenuAsync(switchMonitorBtn);
-            }
-
-            var sendFileBtn = this.FindControl<Button>("SendFileButton");
-            if (sendFileBtn != null)
-            {
-                sendFileBtn.Click += async (s, e) => await PickAndSendFilesAsync();
-            }
-
-            var cancelTransferBtn = this.FindControl<Button>("FileTransferCancelButton");
-            if (cancelTransferBtn != null)
-            {
-                cancelTransferBtn.Click += (s, e) => CancelActiveFileTransfer();
-            }
-
-            var openFolderBtn = this.FindControl<Button>("FileTransferOpenFolderButton");
-            if (openFolderBtn != null)
-            {
-                openFolderBtn.Click += (s, e) => OpenDownloadsFolder();
-            }
-
-            var dismissBannerBtn = this.FindControl<Button>("FileTransferDismissButton");
-            if (dismissBannerBtn != null)
-            {
-                dismissBannerBtn.Click += (s, e) => HideFileTransferBanner();
-            }
-
-            this.AddHandler(DragDrop.DropEvent, MainWindow_Drop);
-            this.AddHandler(DragDrop.DragOverEvent, MainWindow_DragOver);
-
-            this.KeyDown += MainWindow_KeyDown;
-
-            // Controles de Pantalla Completa y Barra Superior Auto-Ocultable
-            _headerAutoHideTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(2.5)
-            };
-            _headerAutoHideTimer.Tick += (s, e) =>
-            {
-                if (_isFullscreen && !_isMouseOverHeaderBar)
-                {
-                    var header = this.FindControl<Border>("StreamHeaderBar");
-                    if (header != null)
-                    {
-                        header.IsVisible = false;
-                    }
-                    _headerAutoHideTimer.Stop();
-                }
-            };
-
-            var headerBar = this.FindControl<Border>("StreamHeaderBar");
-            if (headerBar != null)
-            {
-                headerBar.PointerEntered += (s, e) =>
-                {
-                    _isMouseOverHeaderBar = true;
-                    _headerAutoHideTimer.Stop();
-                };
-
-                headerBar.PointerExited += (s, e) =>
-                {
-                    _isMouseOverHeaderBar = false;
-                    if (_isFullscreen)
-                    {
-                        _headerAutoHideTimer.Stop();
-                        _headerAutoHideTimer.Start();
-                    }
-                };
-            }
-
-            this.AddHandler(InputElement.PointerMovedEvent, MainWindow_GlobalPointerMoved, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
-
-            var fullscreenBtn = this.FindControl<Button>("FullscreenButton");
-            if (fullscreenBtn != null)
-            {
-                fullscreenBtn.Click += (s, e) => ToggleFullscreen();
-            }
-
-            _currentStretchMode = _appSettings.StretchMode == "Fill" ? Stretch.Fill : Stretch.Uniform;
-            var stretchBtn = this.FindControl<Button>("StretchModeButton");
-            if (stretchBtn != null)
-            {
-                stretchBtn.Click += (s, e) => ToggleStretchMode();
-            }
-            var initialScreenImage = this.FindControl<Image>("ScreenImage");
-            if (initialScreenImage != null)
-            {
-                initialScreenImage.Stretch = _currentStretchMode;
-            }
-            var initialStretchBtnText = this.FindControl<TextBlock>("StretchModeButtonText");
-            if (initialStretchBtnText != null)
-            {
-                initialStretchBtnText.Text = _currentStretchMode == Stretch.Uniform ? "Ajustar" : "Llenar";
-            }
-
-            var popoutBtn = this.FindControl<Button>("PopoutWindowButton");
-            if (popoutBtn != null)
-            {
-                popoutBtn.Click += (s, e) => OpenPopoutWindow();
-            }
-
-            var reattachBtn = this.FindControl<Button>("ReattachStreamButton");
-            if (reattachBtn != null)
-            {
-                reattachBtn.Click += (s, e) => ClosePopoutWindow();
-            }
-
-            var exitFloatBtn = this.FindControl<Button>("ExitFullscreenFloatButton");
-            if (exitFloatBtn != null)
-            {
-                exitFloatBtn.Click += (s, e) => SetFullscreen(false);
-            }
-
-            // Modos de acceso y aprobaciÃ³n de conexiones
-            var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
-            if (streamAccessCombo != null)
-            {
-                for (int i = 0; i < streamAccessCombo.Items.Count; i++)
-                {
-                    if (streamAccessCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.StreamAccessMode)
-                    {
-                        streamAccessCombo.SelectedIndex = i;
-                        break;
-                    }
-                }
-                _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
-                streamAccessCombo.SelectionChanged += (s, e) =>
-                {
-                    _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
-                    Console.WriteLine($"[AccessHost] AprobaciÃ³n de stream requerida: {_requireStreamApproval}");
-                    SaveCurrentSettings();
-                };
-            }
-
-            var controlAccessCombo = this.FindControl<ComboBox>("ControlAccessModeComboBox");
-            if (controlAccessCombo != null)
-            {
-                for (int i = 0; i < controlAccessCombo.Items.Count; i++)
-                {
-                    if (controlAccessCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.ControlAccessMode)
-                    {
-                        controlAccessCombo.SelectedIndex = i;
-                        break;
-                    }
-                }
-                _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
-                controlAccessCombo.SelectionChanged += (s, e) =>
-                {
-                    _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
-                    Console.WriteLine($"[AccessHost] Modo de control remoto: {_remoteControlMode}");
-                    SaveCurrentSettings();
-                };
-            }
-
-            // AprobaciÃ³n de conexiÃ³n de espectadores (Streaming)
-            _streamServer.ClientApprovalCallback = async (clientId) =>
-            {
-                if (!_requireStreamApproval)
-                    return true;
-
-                return await RequestStreamApprovalAsync(clientId);
-            };
-
-            var approveStreamBtn = this.FindControl<Button>("ApproveStreamButton");
-            if (approveStreamBtn != null) approveStreamBtn.Click += (s, e) => _streamApprovalTcs?.TrySetResult(true);
-
-            var rejectStreamBtn = this.FindControl<Button>("RejectStreamButton");
-            if (rejectStreamBtn != null) rejectStreamBtn.Click += (s, e) => _streamApprovalTcs?.TrySetResult(false);
-
-            // AprobaciÃ³n de control remoto
-            _controlServer.ClientApprovalCallback = async (clientId) =>
-            {
-                if (!_allowRemoteControl)
-                    return false;
-
-                if (_remoteControlMode == "auto")
-                    return true;
-
-                return await RequestControlApprovalAsync(clientId);
-            };
-
-            var approveControlBtn = this.FindControl<Button>("ApproveControlButton");
-            if (approveControlBtn != null) approveControlBtn.Click += (s, e) => _controlApprovalTcs?.TrySetResult(true);
-
-            var rejectControlBtn = this.FindControl<Button>("RejectControlButton");
-            if (rejectControlBtn != null) rejectControlBtn.Click += (s, e) => _controlApprovalTcs?.TrySetResult(false);
-
-            // Eventos de entrada sobre ScreenImage para control remoto
-            var screenImage = this.FindControl<Image>("ScreenImage");
-            if (screenImage != null)
-            {
-                screenImage.DoubleTapped += (s, e) =>
-                {
-                    // Si el control remoto o el modo juego estÃ¡n activos, no alternar pantalla completa
-                    // para permitir abrir carpetas, archivos y hacer clics rÃ¡pidos en juegos del anfitriÃ³n
-                    if (_remoteControlEnabled || _isGameMode)
-                        return;
-
-                    ToggleFullscreen();
-                };
-                screenImage.PointerMoved += ScreenImage_PointerMoved;
-                screenImage.PointerPressed += ScreenImage_PointerPressed;
-                screenImage.PointerReleased += ScreenImage_PointerReleased;
-                screenImage.PointerWheelChanged += ScreenImage_PointerWheelChanged;
-                screenImage.KeyDown += ScreenImage_KeyDown;
-                screenImage.KeyUp += ScreenImage_KeyUp;
-            }
-
-            // Selector de fuente de transmisiÃ³n (Pantalla completa / Ventana de app)
-            var selectSourceBtn = this.FindControl<Button>("SelectSourceButton");
-            if (selectSourceBtn != null)
-            {
-                selectSourceBtn.Click += SelectSourceButton_Click;
-            }
-            UpdateSourceUI();
-
-            // Controles de ajuste de transmisiÃ³n
-            var engineCombo = this.FindControl<ComboBox>("EngineComboBox");
-            if (engineCombo != null)
-            {
-                for (int i = 0; i < engineCombo.Items.Count; i++)
-                {
-                    if (engineCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.Engine)
-                    {
-                        engineCombo.SelectedIndex = i;
-                        break;
-                    }
-                }
-                engineCombo.SelectionChanged += (s, e) =>
-                {
-                    OnEngineChanged();
-                    SaveCurrentSettings();
-                };
-            }
-
-            var codecCombo = this.FindControl<ComboBox>("CodecComboBox");
-            if (codecCombo != null)
-            {
-                for (int i = 0; i < codecCombo.Items.Count; i++)
-                {
-                    if (codecCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.Codec)
-                    {
-                        codecCombo.SelectedIndex = i;
-                        break;
-                    }
-                }
-                codecCombo.SelectionChanged += (s, e) =>
-                {
-                    string selCodec = GetSelectedCodec();
-                    UpdateQualitySliderForCodec(selCodec);
-                    UpdateHardwareEncoderBadgeUI();
-                    OnSettingChanged();
-                    SaveCurrentSettings();
-                };
-                UpdateHardwareEncoderBadgeUI();
-            }
-
-            var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
-            if (fpsCombo != null)
-            {
-                for (int i = 0; i < fpsCombo.Items.Count; i++)
-                {
-                    if (fpsCombo.Items[i] is ComboBoxItem item && item.Tag as string == _appSettings.Fps.ToString())
-                    {
-                        fpsCombo.SelectedIndex = i;
-                        break;
-                    }
-                }
-                fpsCombo.SelectionChanged += (s, e) =>
-                {
-                    OnSettingChanged();
-                    SaveCurrentSettings();
-                };
-            }
-
-            var qualitySlider = this.FindControl<Slider>("QualitySlider");
-            if (qualitySlider != null)
-            {
-                UpdateQualitySliderForCodec(GetSelectedCodec());
-                qualitySlider.PropertyChanged += (s, e) =>
-                {
-                    if (_isUpdatingQualitySlider) return;
-                    if (e.Property.Name == nameof(Slider.Value))
-                    {
-                        OnSettingChanged();
-                        SaveCurrentSettings();
-                    }
-                };
-            }
-
-            var bitrateCombo = this.FindControl<ComboBox>("BitrateComboBox");
-            if (bitrateCombo != null)
-            {
-                bitrateCombo.SelectionChanged += (s, e) =>
-                {
-                    if (_isUpdatingQualitySlider) return;
-                    if (bitrateCombo.SelectedItem is ComboBoxItem item && item.Tag is string tag && int.TryParse(tag, out int val))
-                    {
-                        var slider = this.FindControl<Slider>("QualitySlider");
-                        if (slider != null && (int)slider.Value != val)
-                        {
-                            slider.Value = val;
-                        }
-                        else
-                        {
-                            OnSettingChanged();
-                            SaveCurrentSettings();
-                        }
-                    }
-                };
-            }
-
-            var abrCb = this.FindControl<CheckBox>("AbrCheckBox");
-            if (abrCb != null)
-            {
-                abrCb.IsChecked = _appSettings.EnableAdaptiveBitrate;
-                _abrController.IsEnabled = _appSettings.EnableAdaptiveBitrate;
-                abrCb.IsCheckedChanged += (s, e) =>
-                {
-                    bool isChecked = abrCb.IsChecked ?? true;
-                    _appSettings.EnableAdaptiveBitrate = isChecked;
-                    _abrController.IsEnabled = isChecked;
-                    if (!isChecked && _screenCaptureService != null)
-                    {
-                        var slider = this.FindControl<Slider>("QualitySlider");
-                        int manualVal = slider != null ? (int)slider.Value : _appSettings.BitrateMbps;
-                        _screenCaptureService.BitrateMbps = manualVal;
-                        _screenCaptureService.TargetFps = GetSelectedFps();
-                    }
-                    UpdateAbrUI();
-                    SaveCurrentSettings();
-                };
-            }
-
-            InitializeResolutionOptions();
-
-            var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
-            if (scaleCombo != null)
-            {
-                scaleCombo.SelectionChanged += (s, e) =>
-                {
-                    OnSettingChanged();
-                    SaveCurrentSettings();
-                };
-            }
-
-            var audioShareCb = this.FindControl<CheckBox>("AudioShareCheckBox");
-            // Presets y Ajustes Avanzados
-            var presetQualityBtn = this.FindControl<Button>("PresetQualityButton");
-            if (presetQualityBtn != null) presetQualityBtn.Click += (s, e) => ApplyTransmissionPreset("quality");
-            var presetBalancedBtn = this.FindControl<Button>("PresetBalancedButton");
-            if (presetBalancedBtn != null) presetBalancedBtn.Click += (s, e) => ApplyTransmissionPreset("balanced");
-            var presetSpeedBtn = this.FindControl<Button>("PresetSpeedButton");
-            if (presetSpeedBtn != null) presetSpeedBtn.Click += (s, e) => ApplyTransmissionPreset("speed");
-            var toggleAdvBtn = this.FindControl<Button>("ToggleAdvancedSettingsButton");
-            if (toggleAdvBtn != null)
-            {
-                toggleAdvBtn.Click += (s, e) =>
-                {
-                    _appSettings.ShowAdvancedSettings = !_appSettings.ShowAdvancedSettings;
-                    UpdateAdvancedSettingsVisibility();
-                    SaveCurrentSettings();
-                };
-            }
-            UpdateAdvancedSettingsVisibility();
-            if (audioShareCb != null)
-            {
-                audioShareCb.IsChecked = _appSettings.ShareAudio;
-                audioShareCb.IsCheckedChanged += async (s, e) =>
-                {
-                    bool isChecked = audioShareCb.IsChecked == true;
-                    _appSettings.ShareAudio = isChecked;
-                    UpdateCanvasFooterAudioStatus();
-                    SaveCurrentSettings();
-
-                    if (_isHosting)
-                    {
-                        if (isChecked)
-                        {
-                            try
-                            {
-                                await _audioServer.StartAsync(5002);
-                                int targetPid = GetTargetAudioProcessId();
-                                _audioCaptureService?.StartCapture(targetPid);
-                                Console.WriteLine($"[Host] Captura de audio iniciada dinámicamente (PID {targetPid}).");
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[Host] Error activando audio: {ex.Message}");
-                            }
-                        }
-                        else
-                        {
-                            _audioCaptureService?.StopCapture();
-                            Console.WriteLine("[Host] Captura de audio detenida dinámicamente.");
-                        }
-                    }
-                };
-            }
-            UpdateCanvasFooterAudioStatus();
-
-            // Temporizador de métricas (1 segundo)
-            _metricsTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(1)
-            };
-            _metricsTimer.Tick += MetricsTimer_Tick;
-            _metricsTimer.Start();
-
-            // Indicador de permisos de Administrador para control de juegos/launchers
-            UpdateAdminStatusUI();
-
-            this.Closing += MainWindow_Closing;
-
+            InitializeCaptureAndDiscovery();
+            InitializeSecuritySubsystem();
+            InitializeStreamingSubsystem();
+            InitializeAudioSubsystem();
+            InitializeControlSubsystem();
+            InitializeFileTransferSubsystem();
+            InitializeDisplayAndWindowControls();
+            InitializeAudioControls();
+            InitializeAccessAndApproval();
+            InitializeEncoderAndSettingsControls();
+            InitializeTimersAndLifecycle();
             if (!string.IsNullOrEmpty(_appSettings.TransmissionPreset) && _appSettings.TransmissionPreset != "custom")
             {
                 ApplyTransmissionPreset(_appSettings.TransmissionPreset, save: false);
@@ -1200,8 +210,7 @@ namespace LanScreenShare.Desktop
             double offsetX = (controlBounds.Width - renderedW) / 2.0;
             double offsetY = (controlBounds.Height - renderedH) / 2.0;
 
-            if (pos.X < offsetX || pos.X > offsetX + renderedW ||
-                pos.Y < offsetY || pos.Y > offsetY + renderedH)
+            if (IsOutsideBounds(pos.X, offsetX, renderedW) || IsOutsideBounds(pos.Y, offsetY, renderedH))
             {
                 return false;
             }
@@ -1211,20 +220,21 @@ namespace LanScreenShare.Desktop
             return true;
         }
 
+        private static bool IsOutsideBounds(double pos, double offset, double size) =>
+            pos < offset || pos > offset + size;
+
         private void MainWindow_KeyDown(object? sender, KeyEventArgs e)
         {
-            if (e.Key == Key.L &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            bool hasCtrlAlt = e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+
+            if (e.Key == Key.L && hasCtrlAlt)
             {
                 ToggleGameMode();
                 e.Handled = true;
                 return;
             }
 
-            if (e.Key == Key.M &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            if (e.Key == Key.M && hasCtrlAlt)
             {
                 _ = RequestRemoteMonitorSwitchAsync();
                 e.Handled = true;
@@ -1273,13 +283,13 @@ namespace LanScreenShare.Desktop
 
                 if (pos.Y <= headerHeight)
                 {
-                    // Mantener visible mientras el cursor estÃ© interactuando con la barra
+                    // Mantener visible mientras el cursor estÃƒÂ© interactuando con la barra
                     _headerAutoHideTimer.Stop();
                     _headerAutoHideTimer.Start();
                 }
                 else if (pos.Y > headerHeight + 25)
                 {
-                    // Si el cursor baja a la zona de transmisiÃ³n, ocultar la barra
+                    // Si el cursor baja a la zona de transmisiÃƒÂ³n, ocultar la barra
                     headerBar.IsVisible = false;
                     _headerAutoHideTimer.Stop();
                 }
@@ -1418,37 +428,41 @@ namespace LanScreenShare.Desktop
             SaveCurrentSettings();
         }
 
-        private void ToggleMute()
+        private static void ToggleAudioMuteHelper(IAudioPlayerService? service, Action updateUi, Action saveSettings)
         {
-            if (_audioPlayerService != null)
+            if (service != null)
             {
-                _audioPlayerService.IsMuted = !_audioPlayerService.IsMuted;
-                if (!_audioPlayerService.IsMuted && _audioPlayerService.Volume <= 0.01f)
+                service.IsMuted = !service.IsMuted;
+                if (!service.IsMuted && service.Volume <= 0.01f)
                 {
-                    _audioPlayerService.Volume = 0.5f;
+                    service.Volume = 0.5f;
                 }
-                UpdateAudioUI();
-                SaveCurrentSettings();
+                updateUi();
+                saveSettings();
             }
         }
 
-        private void SetAudioVolume(float vol)
+        private static void SetAudioVolumeHelper(IAudioPlayerService? service, float vol, Action updateUi, Action saveSettings)
         {
-            if (_audioPlayerService != null)
+            if (service != null)
             {
-                _audioPlayerService.Volume = vol;
+                service.Volume = vol;
                 if (vol <= 0.01f)
                 {
-                    _audioPlayerService.IsMuted = true;
+                    service.IsMuted = true;
                 }
-                else if (_audioPlayerService.IsMuted)
+                else if (service.IsMuted)
                 {
-                    _audioPlayerService.IsMuted = false;
+                    service.IsMuted = false;
                 }
-                UpdateAudioUI();
-                SaveCurrentSettings();
+                updateUi();
+                saveSettings();
             }
         }
+
+        private void ToggleMute() => ToggleAudioMuteHelper(_audioPlayerService, UpdateAudioUI, SaveCurrentSettings);
+
+        private void SetAudioVolume(float vol) => SetAudioVolumeHelper(_audioPlayerService, vol, UpdateAudioUI, SaveCurrentSettings);
 
         private void UpdateAudioUI()
         {
@@ -1481,37 +495,9 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void ToggleMicMute()
-        {
-            if (_micAudioPlayerService != null)
-            {
-                _micAudioPlayerService.IsMuted = !_micAudioPlayerService.IsMuted;
-                if (!_micAudioPlayerService.IsMuted && _micAudioPlayerService.Volume <= 0.01f)
-                {
-                    _micAudioPlayerService.Volume = 0.5f;
-                }
-                UpdateMicUI();
-                SaveCurrentSettings();
-            }
-        }
+        private void ToggleMicMute() => ToggleAudioMuteHelper(_micAudioPlayerService, UpdateMicUI, SaveCurrentSettings);
 
-        private void SetMicVolume(float vol)
-        {
-            if (_micAudioPlayerService != null)
-            {
-                _micAudioPlayerService.Volume = vol;
-                if (vol <= 0.01f)
-                {
-                    _micAudioPlayerService.IsMuted = true;
-                }
-                else if (_micAudioPlayerService.IsMuted)
-                {
-                    _micAudioPlayerService.IsMuted = false;
-                }
-                UpdateMicUI();
-                SaveCurrentSettings();
-            }
-        }
+        private void SetMicVolume(float vol) => SetAudioVolumeHelper(_micAudioPlayerService, vol, UpdateMicUI, SaveCurrentSettings);
 
         private void UpdateMicUI()
         {
@@ -1720,7 +706,7 @@ namespace LanScreenShare.Desktop
         private bool OnProvisionalPairingRequested(string fingerprint, X509Certificate2 clientCert)
         {
             // Permitir el establecimiento del canal TLS seguro.
-            // La autorización interactiva y verificación SAS se ejecuta en el canal de aplicación en TcpStreamServer.
+            // La autorizaciÃ³n interactiva y verificaciÃ³n SAS se ejecuta en el canal de aplicaciÃ³n en TcpStreamServer.
             return true;
         }
 
@@ -1743,10 +729,10 @@ namespace LanScreenShare.Desktop
                 var sasText = this.FindControl<TextBlock>("StreamApprovalSasCode");
 
                 if (title != null) title.Text = $"Emparejamiento: {deviceName}";
-                if (subtitle != null) subtitle.Text = "Compara este cÃ³digo fuera de banda antes de aprobar:";
+                if (subtitle != null) subtitle.Text = "Compara este cÃƒÂ³digo fuera de banda antes de aprobar:";
                 if (sasText != null)
                 {
-                    sasText.Text = $"CÃ³digo SAS: {sasFormatted}";
+                    sasText.Text = $"CÃƒÂ³digo SAS: {sasFormatted}";
                     sasText.IsVisible = true;
                 }
                 if (banner != null) banner.IsVisible = true;
@@ -1771,17 +757,20 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private async Task<bool> RequestStreamApprovalAsync(string clientId)
+        private async Task<bool> RequestApprovalBannerAsync(
+            string bannerName,
+            string subtitleName,
+            string subtitleText,
+            Action<TaskCompletionSource<bool>> setTcs)
         {
-            _streamApprovalTcs?.TrySetResult(false);
             var tcs = new TaskCompletionSource<bool>();
-            _streamApprovalTcs = tcs;
+            setTcs(tcs);
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                var banner = this.FindControl<Border>("StreamApprovalBanner");
-                var subtitle = this.FindControl<TextBlock>("StreamApprovalSubtitle");
-                if (subtitle != null) subtitle.Text = $"El dispositivo '{clientId}' solicita ver tu pantalla.";
+                var banner = this.FindControl<Border>(bannerName);
+                var subtitle = this.FindControl<TextBlock>(subtitleName);
+                if (subtitle != null) subtitle.Text = subtitleText;
                 if (banner != null) banner.IsVisible = true;
             });
 
@@ -1796,41 +785,30 @@ namespace LanScreenShare.Desktop
             {
                 Dispatcher.UIThread.Post(() =>
                 {
-                    var banner = this.FindControl<Border>("StreamApprovalBanner");
+                    var banner = this.FindControl<Border>(bannerName);
                     if (banner != null) banner.IsVisible = false;
                 });
             }
         }
 
-        private async Task<bool> RequestControlApprovalAsync(string clientId)
+        private Task<bool> RequestStreamApprovalAsync(string clientId)
+        {
+            _streamApprovalTcs?.TrySetResult(false);
+            return RequestApprovalBannerAsync(
+                "StreamApprovalBanner",
+                "StreamApprovalSubtitle",
+                $"El dispositivo '{clientId}' solicita ver tu pantalla.",
+                tcs => _streamApprovalTcs = tcs);
+        }
+
+        private Task<bool> RequestControlApprovalAsync(string clientId)
         {
             _controlApprovalTcs?.TrySetResult(false);
-            var tcs = new TaskCompletionSource<bool>();
-            _controlApprovalTcs = tcs;
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                var banner = this.FindControl<Border>("ControlApprovalBanner");
-                var subtitle = this.FindControl<TextBlock>("ControlApprovalSubtitle");
-                if (subtitle != null) subtitle.Text = $"El dispositivo '{clientId}' solicita controlar tu mouse y teclado.";
-                if (banner != null) banner.IsVisible = true;
-            });
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
-            using var reg = cts.Token.Register(() => tcs.TrySetResult(false));
-
-            try
-            {
-                return await tcs.Task;
-            }
-            finally
-            {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    var banner = this.FindControl<Border>("ControlApprovalBanner");
-                    if (banner != null) banner.IsVisible = false;
-                });
-            }
+            return RequestApprovalBannerAsync(
+                "ControlApprovalBanner",
+                "ControlApprovalSubtitle",
+                $"El dispositivo '{clientId}' solicita controlar tu mouse y teclado.",
+                tcs => _controlApprovalTcs = tcs);
         }
 
         private async Task<bool> EnsureControlConnectedAsync()
@@ -1841,7 +819,7 @@ namespace LanScreenShare.Desktop
             if (string.IsNullOrEmpty(_currentConnectedDeviceIp))
                 return false;
 
-            UpdateStatus("Solicitando acceso de control remoto al anfitriÃ³n...", "#F59E0B");
+            UpdateStatus("Solicitando acceso de control remoto al anfitriÃƒÂ³n...", "#F59E0B");
 
             try
             {
@@ -1857,7 +835,7 @@ namespace LanScreenShare.Desktop
                 }
                 _popoutWindow?.SetRemoteControlState(true);
                 _ = _controlClient.RequestSourceCatalogAsync();
-                UpdateStatus($"Conectado a {_currentConnectedDeviceName} • Control remoto activo", "#22C55E");
+                UpdateStatus($"Conectado a {_currentConnectedDeviceName} â€¢ Control remoto activo", "#22C55E");
                 return true;
             }
             catch (Exception ex)
@@ -1939,7 +917,7 @@ namespace LanScreenShare.Desktop
                         bannerIcon.Data = (this.FindResource("Icon3dRotation") as StreamGeometry)!;
                         bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
                     }
-                    bannerText.Text = "Modo Juego 3D Activo â€” Presiona Ctrl + Alt + L para liberar el mouse";
+                    bannerText.Text = "Modo Juego 3D Activo Ã¢â‚¬â€ Presiona Ctrl + Alt + L para liberar el mouse";
                     bannerText.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
                 }
             }
@@ -1959,7 +937,7 @@ namespace LanScreenShare.Desktop
                         bannerIcon.Data = (this.FindResource("IconLockOpen") as StreamGeometry)!;
                         bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
                     }
-                    bannerText.Text = "Mouse Liberado â€” Presiona Ctrl + Alt + L para recapturar";
+                    bannerText.Text = "Mouse Liberado Ã¢â‚¬â€ Presiona Ctrl + Alt + L para recapturar";
                     bannerText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
 
                     _gameModeBannerTimer?.Stop();
@@ -2051,33 +1029,13 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void ScreenImage_PointerPressed(object? sender, PointerPressedEventArgs e)
+        private void DispatchPointerButtonEvent(PointerEventArgs e, InputEventType eventType, RemoteMouseButton button)
         {
-            if (!_remoteControlEnabled || !_controlClient.IsConnected)
-                return;
-
-            if (IsPointerOverFullscreenHeader(e))
-                return;
-
-            var screenImage = this.FindControl<Image>("ScreenImage");
-            screenImage?.Focus();
-
-            var point = e.GetCurrentPoint(screenImage);
-            var props = point.Properties;
-
-            RemoteMouseButton button = props.IsLeftButtonPressed ? RemoteMouseButton.Left
-                : props.IsRightButtonPressed ? RemoteMouseButton.Right
-                : props.IsMiddleButtonPressed ? RemoteMouseButton.Middle
-                : RemoteMouseButton.None;
-
-            if (button == RemoteMouseButton.None)
-                return;
-
             if (_isGameMode)
             {
                 _ = _controlClient.SendInputAsync(new RemoteInputMessage
                 {
-                    Type = InputEventType.MouseDown,
+                    Type = eventType,
                     Button = button,
                     NormalizedX = -1f,
                     NormalizedY = -1f
@@ -2090,7 +1048,7 @@ namespace LanScreenShare.Desktop
             {
                 _ = _controlClient.SendInputAsync(new RemoteInputMessage
                 {
-                    Type = InputEventType.MouseDown,
+                    Type = eventType,
                     Button = button,
                     NormalizedX = x,
                     NormalizedY = y
@@ -2099,47 +1057,43 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void ScreenImage_PointerReleased(object? sender, PointerReleasedEventArgs e)
+        private void ScreenImage_PointerPressed(object? sender, PointerPressedEventArgs e)
         {
-            if (!_remoteControlEnabled || !_controlClient.IsConnected)
-                return;
-
-            if (IsPointerOverFullscreenHeader(e))
+            if (!_remoteControlEnabled || !_controlClient.IsConnected || IsPointerOverFullscreenHeader(e))
                 return;
 
             var screenImage = this.FindControl<Image>("ScreenImage");
-            var point = e.GetCurrentPoint(screenImage);
-            var props = point.Properties;
+            screenImage?.Focus();
 
-            RemoteMouseButton button = props.PointerUpdateKind == PointerUpdateKind.LeftButtonReleased ? RemoteMouseButton.Left
-                : props.PointerUpdateKind == PointerUpdateKind.RightButtonReleased ? RemoteMouseButton.Right
-                : props.PointerUpdateKind == PointerUpdateKind.MiddleButtonReleased ? RemoteMouseButton.Middle
-                : RemoteMouseButton.Left;
+            var props = e.GetCurrentPoint(screenImage).Properties;
+            RemoteMouseButton button = props.IsLeftButtonPressed ? RemoteMouseButton.Left
+                : props.IsRightButtonPressed ? RemoteMouseButton.Right
+                : props.IsMiddleButtonPressed ? RemoteMouseButton.Middle
+                : RemoteMouseButton.None;
 
-            if (_isGameMode)
+            if (button != RemoteMouseButton.None)
             {
-                _ = _controlClient.SendInputAsync(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseUp,
-                    Button = button,
-                    NormalizedX = -1f,
-                    NormalizedY = -1f
-                });
-                e.Handled = true;
+                DispatchPointerButtonEvent(e, InputEventType.MouseDown, button);
+            }
+        }
+
+        private void ScreenImage_PointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (!_remoteControlEnabled || !_controlClient.IsConnected || IsPointerOverFullscreenHeader(e))
                 return;
-            }
 
-            if (TryGetNormalizedCoordinates(e, out float x, out float y))
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            var props = e.GetCurrentPoint(screenImage).Properties;
+
+            RemoteMouseButton button = props.PointerUpdateKind switch
             {
-                _ = _controlClient.SendInputAsync(new RemoteInputMessage
-                {
-                    Type = InputEventType.MouseUp,
-                    Button = button,
-                    NormalizedX = x,
-                    NormalizedY = y
-                });
-                e.Handled = true;
-            }
+                PointerUpdateKind.LeftButtonReleased => RemoteMouseButton.Left,
+                PointerUpdateKind.RightButtonReleased => RemoteMouseButton.Right,
+                PointerUpdateKind.MiddleButtonReleased => RemoteMouseButton.Middle,
+                _ => RemoteMouseButton.Left
+            };
+
+            DispatchPointerButtonEvent(e, InputEventType.MouseUp, button);
         }
 
         private void ScreenImage_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
@@ -2194,18 +1148,16 @@ namespace LanScreenShare.Desktop
                 return;
             }
 
-            if (e.Key == Key.L &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            bool hasCtrlAlt = e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+
+            if (e.Key == Key.L && hasCtrlAlt)
             {
                 ToggleGameMode();
                 e.Handled = true;
                 return;
             }
 
-            if (e.Key == Key.M &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            if (e.Key == Key.M && hasCtrlAlt)
             {
                 _ = RequestRemoteMonitorSwitchAsync();
                 e.Handled = true;
@@ -2229,9 +1181,9 @@ namespace LanScreenShare.Desktop
 
         private void ScreenImage_KeyUp(object? sender, KeyEventArgs e)
         {
-            if ((e.Key == Key.L || e.Key == Key.M) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            bool hasCtrlAlt = e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            bool isHotKey = (e.Key == Key.L || e.Key == Key.M);
+            if (isHotKey && hasCtrlAlt)
             {
                 e.Handled = true;
                 return;
@@ -2254,40 +1206,49 @@ namespace LanScreenShare.Desktop
 
         private static int ConvertAvaloniaKeyToWin32Vk(Key key)
         {
-            if (key >= Key.A && key <= Key.Z)
-                return (int)key - (int)Key.A + 0x41;
-
-            if (key >= Key.D0 && key <= Key.D9)
-                return (int)key - (int)Key.D0 + 0x30;
-
-            if (key >= Key.NumPad0 && key <= Key.NumPad9)
-                return (int)key - (int)Key.NumPad0 + 0x60;
-
-            if (key >= Key.F1 && key <= Key.F12)
-                return (int)key - (int)Key.F1 + 0x70;
-
-            return key switch
+            if (TryConvertRangeKey(key, Key.A, Key.Z, 0x41, out int vk) ||
+                TryConvertRangeKey(key, Key.D0, Key.D9, 0x30, out vk) ||
+                TryConvertRangeKey(key, Key.NumPad0, Key.NumPad9, 0x60, out vk) ||
+                TryConvertRangeKey(key, Key.F1, Key.F12, 0x70, out vk))
             {
-                Key.Back => 0x08,
-                Key.Tab => 0x09,
-                Key.Return or Key.Enter => 0x0D,
-                Key.Escape => 0x1B,
-                Key.Space => 0x20,
-                Key.Left => 0x25,
-                Key.Up => 0x26,
-                Key.Right => 0x27,
-                Key.Down => 0x28,
-                Key.Delete => 0x2E,
-                Key.LeftShift or Key.RightShift => 0x10,
-                Key.LeftCtrl or Key.RightCtrl => 0x11,
-                Key.LeftAlt or Key.RightAlt => 0x12,
-                Key.Home => 0x24,
-                Key.End => 0x23,
-                Key.PageUp => 0x21,
-                Key.PageDown => 0x22,
-                _ => 0
-            };
+                return vk;
+            }
+
+            return ConvertSpecialKeyToVk(key);
         }
+
+        private static bool TryConvertRangeKey(Key key, Key start, Key end, int baseVk, out int vk)
+        {
+            if (key >= start && key <= end)
+            {
+                vk = (int)key - (int)start + baseVk;
+                return true;
+            }
+            vk = 0;
+            return false;
+        }
+
+        private static int ConvertSpecialKeyToVk(Key key) => key switch
+        {
+            Key.Back => 0x08,
+            Key.Tab => 0x09,
+            Key.Return or Key.Enter => 0x0D,
+            Key.Escape => 0x1B,
+            Key.Space => 0x20,
+            Key.Left => 0x25,
+            Key.Up => 0x26,
+            Key.Right => 0x27,
+            Key.Down => 0x28,
+            Key.Delete => 0x2E,
+            Key.LeftShift or Key.RightShift => 0x10,
+            Key.LeftCtrl or Key.RightCtrl => 0x11,
+            Key.LeftAlt or Key.RightAlt => 0x12,
+            Key.Home => 0x24,
+            Key.End => 0x23,
+            Key.PageUp => 0x21,
+            Key.PageDown => 0x22,
+            _ => 0
+        };
 
         #endregion
 
@@ -2316,11 +1277,7 @@ namespace LanScreenShare.Desktop
         private int GetSelectedFps()
         {
             var combo = this.FindControl<ComboBox>("FpsComboBox");
-            if (combo?.SelectedItem is ComboBoxItem item && item.Tag is string tag && int.TryParse(tag, out int fps))
-            {
-                return fps;
-            }
-            return 30;
+            return TryGetSelectedItemTagAsInt(combo, out int fps) ? fps : 30;
         }
 
         private void InitializeResolutionOptions(CaptureSource? source = null)
@@ -2373,14 +1330,14 @@ namespace LanScreenShare.Desktop
 
             var items = new List<ComboBoxItem>();
 
-            // 1. Resolución nativa como primera opción
+            // 1. ResoluciÃ³n nativa como primera opciÃ³n
             items.Add(new ComboBoxItem
             {
-                Content = $"{nativeW} × {nativeH} · Nativa",
+                Content = $"{nativeW} Ã— {nativeH} Â· Nativa",
                 Tag = $"{nativeW}x{nativeH}"
             });
 
-            // 2. Si es configuración multi-pantalla extendida (aspecto muy ancho > 2.2)
+            // 2. Si es configuraciÃ³n multi-pantalla extendida (aspecto muy ancho > 2.2)
             if (nativeAspect > 2.2)
             {
                 var ratios = new (double s, string label)[]
@@ -2397,7 +1354,7 @@ namespace LanScreenShare.Desktop
                     {
                         items.Add(new ComboBoxItem
                         {
-                            Content = $"{scaledW} × {scaledH} · {rLabel}",
+                            Content = $"{scaledW} Ã— {scaledH} Â· {rLabel}",
                             Tag = $"{scaledW}x{scaledH}"
                         });
                     }
@@ -2405,7 +1362,7 @@ namespace LanScreenShare.Desktop
             }
             else
             {
-                // Filtrar resoluciones menores compatibles con la relación de aspecto
+                // Filtrar resoluciones menores compatibles con la relaciÃ³n de aspecto
                 foreach (var (w, h, label) in commonResolutions)
                 {
                     if (w >= nativeW && h >= nativeH)
@@ -2419,7 +1376,7 @@ namespace LanScreenShare.Desktop
                     {
                         items.Add(new ComboBoxItem
                         {
-                            Content = $"{w} × {h} · {label}",
+                            Content = $"{w} Ã— {h} Â· {label}",
                             Tag = $"{w}x{h}"
                         });
                     }
@@ -2475,7 +1432,7 @@ namespace LanScreenShare.Desktop
         private IScreenCaptureService CreateCaptureService(CaptureSource source, string engine)
         {
             var captureService = CaptureServiceFactory.Create(source, engine);
-            if (captureService is DxgiScreenCaptureService dxgi)
+            if (OperatingSystem.IsWindows() && captureService is DxgiScreenCaptureService dxgi)
             {
                 dxgi.CaptureFailed += (s, ex) =>
                 {
@@ -2484,7 +1441,7 @@ namespace LanScreenShare.Desktop
                         if (_isHosting && _screenCaptureService is DxgiScreenCaptureService)
                         {
                             UpdateStatus($"DXGI no disponible en esta pantalla ({ex.Message}), cambiando a GDI...", "#F59E0B");
-                            SwitchCaptureSource(_currentSource, "gdi", GetSelectedFps(), _appSettings.Quality, 1.0, GetSelectedCodec(), 0, 0, _appSettings.BitrateMbps);
+                            SwitchCaptureSource(_currentSource, "gdi", new CaptureProfile(GetSelectedFps(), _appSettings.Quality, 1.0, GetSelectedCodec(), 0, 0, _appSettings.BitrateMbps));
                         }
                     });
                 };
@@ -2521,7 +1478,7 @@ namespace LanScreenShare.Desktop
                 int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
                 GetSelectedResolution(out int targetW, out int targetH, out double scale);
 
-                SwitchCaptureSource(source, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+                SwitchCaptureSource(source, engine, new CaptureProfile(fps, quality, scale, codec, targetW, targetH, bitrateMbps));
 
                 bool shareAudio = this.FindControl<CheckBox>("AudioShareCheckBox")?.IsChecked ?? true;
                 if (shareAudio && _audioCaptureService != null)
@@ -2552,7 +1509,7 @@ namespace LanScreenShare.Desktop
             {
                 sourceSubText.Text = _currentSource.Type switch
                 {
-                    CaptureSourceType.Window => "Aplicación",
+                    CaptureSourceType.Window => "AplicaciÃ³n",
                     CaptureSourceType.AllScreens => "Escritorio extendido",
                     _ => _currentSource.IsPrimary ? "Principal" : "Secundaria"
                 };
@@ -2619,7 +1576,7 @@ namespace LanScreenShare.Desktop
             var micIcon = this.FindControl<PathIcon>("CanvasMicStatusIcon");
             if (micText != null)
             {
-                micText.Text = shareMic ? "Micrófono activado" : "Micrófono desactivado";
+                micText.Text = shareMic ? "MicrÃ³fono activado" : "MicrÃ³fono desactivado";
                 micText.Foreground = new SolidColorBrush(Color.Parse(shareMic ? "#94A3B8" : "#64748B"));
             }
             if (micIcon != null)
@@ -2710,15 +1667,20 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void SwitchCaptureSource(CaptureSource source, string engine, int fps, int quality, double scale, string codec, int targetW = 0, int targetH = 0, int bitrateMbps = 8)
+        public readonly record struct CaptureProfile(int Fps, int Quality, double Scale, string Codec, int TargetWidth = 0, int TargetHeight = 0, int BitrateMbps = 8);
+
+        private void SwitchCaptureSource(CaptureSource source, string engine, in CaptureProfile profile)
         {
             _screenCaptureService.StopCapture();
             _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
             _screenCaptureService.Dispose();
 
+            int fps = profile.Fps;
+            int bitrateMbps = profile.BitrateMbps;
+
             _abrController.BaseFps = fps;
             _abrController.MaxBitrateMbps = Math.Max(bitrateMbps, _appSettings.MaxAdaptiveBitrateMbps);
-            if (_abrController.IsEnabled && codec == "h264")
+            if (_abrController.IsEnabled && profile.Codec == "h264")
             {
                 bitrateMbps = _abrController.CurrentBitrateMbps;
                 fps = _abrController.TargetFps;
@@ -2726,7 +1688,7 @@ namespace LanScreenShare.Desktop
 
             _screenCaptureService = CreateCaptureService(source, engine);
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
-            _screenCaptureService.StartCapture(fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+            _screenCaptureService.StartCapture(fps, profile.Quality, profile.Scale, profile.Codec, profile.TargetWidth, profile.TargetHeight, bitrateMbps);
             UpdateAbrUI();
         }
 
@@ -2742,7 +1704,7 @@ namespace LanScreenShare.Desktop
                 int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
                 GetSelectedResolution(out int targetW, out int targetH, out double scale);
 
-                SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+                SwitchCaptureSource(_currentSource, engine, new CaptureProfile(fps, quality, scale, codec, targetW, targetH, bitrateMbps));
                 string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
                 UpdateStatus($"Cambiado a motor {engineName} ({codec.ToUpper()}) en caliente", "#22C55E");
             }
@@ -2811,7 +1773,7 @@ namespace LanScreenShare.Desktop
             {
                 if (targetW > 0 && targetH > 0)
                 {
-                    scaleLabel.Text = $"{targetW} × {targetH}";
+                    scaleLabel.Text = $"{targetW} Ã— {targetH}";
                 }
                 else
                 {
@@ -2893,8 +1855,64 @@ namespace LanScreenShare.Desktop
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Settings] Error al guardar configuraciÃ³n actual: {ex.Message}");
+                Console.WriteLine($"[Settings] Error al guardar configuraciÃƒÂ³n actual: {ex.Message}");
             }
+        }
+
+        private static string FormatTransferRate(long bytes)
+        {
+            double kbPerSec = bytes / 1024.0;
+            return kbPerSec >= 1024 ? $"{(kbPerSec / 1024.0):F1} MB/s" : $"{kbPerSec:F0} KB/s";
+        }
+
+        private void GetActiveRttAndQualityColor(out int rtt, out string qualityColor)
+        {
+            rtt = 0;
+            if (_isHosting)
+            {
+                rtt = _streamServer.CurrentRttMs;
+            }
+            else if (_streamClient != null && _streamClient.IsConnected)
+            {
+                rtt = _streamClient.CurrentTelemetry.RttMs;
+            }
+
+            qualityColor = rtt <= 0 ? "#10B981"
+                : rtt < 30 ? "#10B981"
+                : rtt < 60 ? "#3B82F6"
+                : rtt < 90 ? "#F59E0B"
+                : "#EF4444";
+        }
+
+        private string FormatFpsInfo(long frames)
+        {
+            if (_isHosting)
+                return $"Host: {frames} FPS";
+
+            return _lastHostFps > 0
+                ? $"Host: {_lastHostFps} FPS ({_lastHostFrameTimeMs} ms) • Red: {frames} FPS"
+                : $"{frames} FPS";
+        }
+
+        private string FormatCodecTag()
+        {
+            if (!_isHosting || _screenCaptureService == null) return "";
+            string encDesc = _screenCaptureService.ActiveEncoderDescription ?? _screenCaptureService.Codec.ToUpper();
+            return _screenCaptureService.IsHardwareAccelerated ? $" • ⚡ {encDesc}" : $" • {encDesc}";
+        }
+
+        private string FormatAbrTag()
+        {
+            if (!_isHosting || !_abrController.IsEnabled) return "";
+            string stateIcon = _abrController.CurrentState switch
+            {
+                AbrNetworkState.Optimal => "⚡",
+                AbrNetworkState.Moderate => "⚖️",
+                AbrNetworkState.Congested => "⚠️",
+                AbrNetworkState.SevereCongestion => "🚨",
+                _ => "⚡"
+            };
+            return $" • ABR: {_abrController.CurrentBitrateMbps} Mbps {stateIcon}";
         }
 
         private void MetricsTimer_Tick(object? sender, EventArgs e)
@@ -2906,125 +1924,56 @@ namespace LanScreenShare.Desktop
             var statsText = this.FindControl<TextBlock>("StatsText");
             var statsDot = this.FindControl<Avalonia.Controls.Shapes.Ellipse>("StatsQualityDot");
 
-            if (_isHosting || (_streamClient != null && _streamClient.IsConnected))
+            if (!_isHosting && (_streamClient == null || !_streamClient.IsConnected))
             {
-                if (statsBadge != null && statsText != null)
+                if (statsBadge != null) statsBadge.IsVisible = false;
+                return;
+            }
+
+            if (statsBadge != null && statsText != null)
+            {
+                statsBadge.IsVisible = true;
+                string transferRate = FormatTransferRate(bytes);
+                GetActiveRttAndQualityColor(out int rtt, out string qualityColor);
+                string rttTag = rtt > 0 ? $"RTT: {rtt} ms • " : "";
+
+                if (statsDot != null && Avalonia.Media.Color.TryParse(qualityColor, out var parsedColor))
                 {
-                    statsBadge.IsVisible = true;
-                    double kbPerSec = bytes / 1024.0;
-                    string transferRate = kbPerSec >= 1024
-                        ? $"{(kbPerSec / 1024.0):F1} MB/s"
-                        : $"{kbPerSec:F0} KB/s";
-
-                    string rttTag = "";
-                    string qualityColor = "#10B981";
-
-                    if (_isHosting)
-                    {
-                        int rtt = _streamServer.CurrentRttMs;
-                        if (rtt > 0)
-                        {
-                            rttTag = $"RTT: {rtt} ms • ";
-                            qualityColor = rtt < 30 ? "#10B981" : (rtt < 60 ? "#3B82F6" : (rtt < 90 ? "#F59E0B" : "#EF4444"));
-                        }
-                    }
-                    else if (_streamClient != null && _streamClient.IsConnected)
-                    {
-                        int rtt = _streamClient.CurrentTelemetry.RttMs;
-                        if (rtt > 0)
-                        {
-                            rttTag = $"RTT: {rtt} ms • ";
-                            qualityColor = rtt < 30 ? "#10B981" : (rtt < 60 ? "#3B82F6" : (rtt < 90 ? "#F59E0B" : "#EF4444"));
-                        }
-                    }
-
-                    if (statsDot != null && Avalonia.Media.Color.TryParse(qualityColor, out var parsedColor))
-                    {
-                        statsDot.Fill = new Avalonia.Media.SolidColorBrush(parsedColor);
-                    }
-
-                    string fpsInfo = _isHosting
-                        ? $"Host: {frames} FPS"
-                        : (_lastHostFps > 0
-                            ? $"Host: {_lastHostFps} FPS ({_lastHostFrameTimeMs} ms) • Red: {frames} FPS"
-                            : $"{frames} FPS");
-
-                    string res = _lastFrameWidth > 0 ? $" • {_lastFrameWidth}x{_lastFrameHeight}" : "";
-                    string engineTag = _isHosting
-                        ? (_screenCaptureService is DxgiScreenCaptureService ? " • DXGI GPU" : " • GDI CPU")
-                        : "";
-
-                    string codecTag = "";
-                    if (_isHosting && _screenCaptureService != null)
-                    {
-                        string encDesc = _screenCaptureService.ActiveEncoderDescription ?? _screenCaptureService.Codec.ToUpper();
-                        codecTag = _screenCaptureService.IsHardwareAccelerated
-                            ? $" • ⚡ {encDesc}"
-                            : $" • {encDesc}";
-                    }
-
-                    string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient != null && _streamClient.IsConnected && _audioClient.IsConnected)
-                        ? " • Audio"
-                        : "";
-
-                    string controlTag = _controlClient.IsConnected && _remoteControlEnabled
-                        ? " • Control Activo"
-                        : "";
-
-                    string dropsTag = "";
-                    if (_isHosting && _streamServer.DroppedFramesCount > 0)
-                    {
-                        dropsTag = $" • Descartados: {_streamServer.DroppedFramesCount}";
-                    }
-
-                    string avSyncTag = "";
-                    if (!_isHosting && _audioClient.IsConnected)
-                    {
-                        int drift = _avSyncController.CurrentDriftMs;
-                        avSyncTag = $" • A/V: {drift} ms";
-                    }
-
-                    string abrTag = "";
-                    if (_isHosting && _abrController.IsEnabled)
-                    {
-                        string stateIcon = _abrController.CurrentState switch
-                        {
-                            AbrNetworkState.Optimal => "⚡",
-                            AbrNetworkState.Moderate => "⚖️",
-                            AbrNetworkState.Congested => "⚠️",
-                            AbrNetworkState.SevereCongestion => "🚨",
-                            _ => "⚡"
-                        };
-                        abrTag = $" • ABR: {_abrController.CurrentBitrateMbps} Mbps {stateIcon}";
-                    }
-
-                    statsText.Text = $"{rttTag}{fpsInfo} • {transferRate}{res}{engineTag}{codecTag}{abrTag}{audioTag}{avSyncTag}{controlTag}{dropsTag}";
-
-                    if (_isPopoutActive && _popoutWindow != null)
-                    {
-                        _popoutWindow.UpdateMetrics(statsText.Text, qualityColor);
-                    }
+                    statsDot.Fill = new Avalonia.Media.SolidColorBrush(parsedColor);
                 }
 
-                if (_isViewing && _lastFrameWidth > 0 && _lastFrameHeight > 0)
+                string fpsInfo = FormatFpsInfo(frames);
+                string res = _lastFrameWidth > 0 ? $" • {_lastFrameWidth}x{_lastFrameHeight}" : "";
+                string engineTag = _isHosting
+                    ? (_screenCaptureService is DxgiScreenCaptureService ? " • DXGI GPU" : " • GDI CPU")
+                    : "";
+                string codecTag = FormatCodecTag();
+                string audioTag = (_isHosting && _audioServer.IsRunning) || (_streamClient != null && _streamClient.IsConnected && _audioClient.IsConnected)
+                    ? " • Audio"
+                    : "";
+                string controlTag = _controlClient.IsConnected && _remoteControlEnabled ? " • Control Activo" : "";
+                string dropsTag = (_isHosting && _streamServer.DroppedFramesCount > 0) ? $" • Descartados: {_streamServer.DroppedFramesCount}" : "";
+                string avSyncTag = (!_isHosting && _audioClient.IsConnected) ? $" • A/V: {_avSyncController.CurrentDriftMs} ms" : "";
+                string abrTag = FormatAbrTag();
+
+                statsText.Text = $"{rttTag}{fpsInfo} • {transferRate}{res}{engineTag}{codecTag}{abrTag}{audioTag}{avSyncTag}{controlTag}{dropsTag}";
+
+                if (_isPopoutActive && _popoutWindow != null)
                 {
-                    var canvasSpecs = this.FindControl<TextBlock>("CanvasSpecsText");
-                    if (canvasSpecs != null)
-                    {
-                        int displayFps = frames > 0 ? (int)frames : (_lastHostFps > 0 ? _lastHostFps : 0);
-                        canvasSpecs.Text = $"{_lastFrameWidth} × {_lastFrameHeight} · {displayFps} fps";
-                    }
+                    _popoutWindow.UpdateMetrics(statsText.Text, qualityColor);
                 }
             }
-            else
+
+            if (_isViewing && _lastFrameWidth > 0 && _lastFrameHeight > 0)
             {
-                if (statsBadge != null)
+                var canvasSpecs = this.FindControl<TextBlock>("CanvasSpecsText");
+                if (canvasSpecs != null)
                 {
-                    statsBadge.IsVisible = false;
+                    int displayFps = frames > 0 ? (int)frames : (_lastHostFps > 0 ? _lastHostFps : 0);
+                    canvasSpecs.Text = $"{_lastFrameWidth} × {_lastFrameHeight} · {displayFps} fps";
                 }
             }
         }
-
         private void ResetMetrics()
         {
             Interlocked.Exchange(ref _metricFramesCount, 0);
@@ -3054,7 +2003,7 @@ namespace LanScreenShare.Desktop
             var centerHostBtnText = this.FindControl<TextBlock>("CenterHostButtonText");
 
             var bg = new SolidColorBrush(Color.Parse(isHosting ? "#DC2626" : "#3B82F6"));
-            string label = isHosting ? "Detener transmisión" : "Transmitir mi pantalla";
+            string label = isHosting ? "Detener transmisiÃ³n" : "Transmitir mi pantalla";
 
             if (hostBtn != null) hostBtn.Background = bg;
             if (hostBtnText != null) hostBtnText.Text = label;
@@ -3080,7 +2029,7 @@ namespace LanScreenShare.Desktop
             }
             else
             {
-                if (badgeText != null) badgeText.Text = "Sin transmisión";
+                if (badgeText != null) badgeText.Text = "Sin transmisiÃ³n";
                 if (badgeDot != null) badgeDot.Fill = new SolidColorBrush(Color.Parse("#7C8B9E"));
             }
         }
@@ -3094,7 +2043,7 @@ namespace LanScreenShare.Desktop
                 {
                     if (_isViewing)
                     {
-                        await HandleViewerDisconnectedAsync("Iniciando transmisión local...");
+                        await HandleViewerDisconnectedAsync("Iniciando transmisiÃ³n local...");
                     }
 
                     _isHosting = true;
@@ -3115,7 +2064,7 @@ namespace LanScreenShare.Desktop
                     _abrController.MinBitrateMbps = _appSettings.MinAdaptiveBitrateMbps;
                     _abrController.IsEnabled = _appSettings.EnableAdaptiveBitrate;
                     UpdateAbrUI();
-                    SwitchCaptureSource(_currentSource, engine, fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+                    SwitchCaptureSource(_currentSource, engine, new CaptureProfile(fps, quality, scale, codec, targetW, targetH, bitrateMbps));
                     _inputSimulatorService?.SetTargetSource(_currentSource);
 
                     // 2. Iniciar servidor y captura de audio (Puerto 5002)
@@ -3139,7 +2088,7 @@ namespace LanScreenShare.Desktop
                         Console.WriteLine($"[Audio] Advertencia iniciando audio: {ex.Message}");
                     }
 
-                    // 3. Iniciar servidor de control remoto (Puerto 5003) si está habilitado
+                    // 3. Iniciar servidor de control remoto (Puerto 5003) si estÃ¡ habilitado
                     if (_allowRemoteControl)
                     {
                         await _controlServer.StartAsync(5003);
@@ -3162,18 +2111,18 @@ namespace LanScreenShare.Desktop
                     var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
                     var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
                     if (placeholderTitle != null) placeholderTitle.Text = "Transmitiendo tu pantalla";
-                    if (placeholderSubtitle != null) placeholderSubtitle.Text = "Tu pantalla está siendo compartida en tu red local.\nLos equipos conectados la verán en tiempo real.";
+                    if (placeholderSubtitle != null) placeholderSubtitle.Text = "Tu pantalla estÃ¡ siendo compartida en tu red local.\nLos equipos conectados la verÃ¡n en tiempo real.";
 
                     UpdateHostButtonsUI(true);
                     UpdateStreamStateBadge();
 
                     string engineName = engine == "dxgi" ? "DirectX DXGI" : "GDI BitBlt";
-                    UpdateStatus($"Transmitiendo {_currentSource.Name} ({engineName}) · Esperando visores", "#22C55E");
+                    UpdateStatus($"Transmitiendo {_currentSource.Name} ({engineName}) Â· Esperando visores", "#22C55E");
                 }
                 catch (Exception ex)
                 {
                     _isHosting = false;
-                    UpdateStatus($"Error al iniciar transmisión: {ex.Message}", "#EF4444");
+                    UpdateStatus($"Error al iniciar transmisiÃ³n: {ex.Message}", "#EF4444");
                 }
             }
             else
@@ -3201,12 +2150,12 @@ namespace LanScreenShare.Desktop
                 var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
                 var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
                 if (placeholderTitle != null) placeholderTitle.Text = "Todo listo para compartir";
-                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Comparte una pantalla o una aplicación con otros equipos.\nTú eliges qué mostrar y quién puede controlarlo.";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Comparte una pantalla o una aplicaciÃ³n con otros equipos.\nTÃº eliges quÃ© mostrar y quiÃ©n puede controlarlo.";
 
                 UpdateHostButtonsUI(false);
                 UpdateStreamStateBadge();
 
-                UpdateStatus("Sin conexión activa", "#34D399");
+                UpdateStatus("Sin conexiÃ³n activa", "#34D399");
             }
         }
 
@@ -3234,7 +2183,7 @@ namespace LanScreenShare.Desktop
                 {
                     sendFileBtn.IsVisible = count > 0;
                 }
-                UpdateStatus($"Transmitiendo pantalla · {count} espectador(es) conectado(s)", "#22C55E");
+                UpdateStatus($"Transmitiendo pantalla Â· {count} espectador(es) conectado(s)", "#22C55E");
             });
         }
 
@@ -3253,11 +2202,11 @@ namespace LanScreenShare.Desktop
 
                     if (count > 0)
                     {
-                        UpdateStatus($"Transmitiendo pantalla · {count} espectador(es) conectado(s)", "#22C55E");
+                        UpdateStatus($"Transmitiendo pantalla Â· {count} espectador(es) conectado(s)", "#22C55E");
                     }
                     else
                     {
-                        UpdateStatus("Transmitiendo pantalla · Esperando visores", "#22C55E");
+                        UpdateStatus("Transmitiendo pantalla Â· Esperando visores", "#22C55E");
                     }
                 }
             });
@@ -3319,7 +2268,7 @@ namespace LanScreenShare.Desktop
             if (localInfo != null)
             {
                 localInfo.Text = Devices.Count > 0
-                    ? $"Listo para transmitir o recibir · {Devices.Count} detectado(s)"
+                    ? $"Listo para transmitir o recibir Â· {Devices.Count} detectado(s)"
                     : "Listo para transmitir o recibir";
             }
         }
@@ -3346,7 +2295,7 @@ namespace LanScreenShare.Desktop
                 localInfo.Text = "Buscando equipos en tu red local (UDP 5000)...";
             }
 
-            // Auto-detener búsqueda después de 10 segundos para no quedar en bucle
+            // Auto-detener bÃºsqueda despuÃ©s de 10 segundos para no quedar en bucle
             _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
             _searchTimer.Tick += (s, args) =>
             {
@@ -3426,8 +2375,8 @@ namespace LanScreenShare.Desktop
             var placeholderTitle = this.FindControl<TextBlock>("PlaceholderTitleText");
             var placeholderSubtitle = this.FindControl<TextBlock>("PlaceholderSubtitleText");
             var placeholderActions = this.FindControl<StackPanel>("PlaceholderActionsPanel");
-            if (placeholderTitle != null) placeholderTitle.Text = "Conectando al anfitrión...";
-            if (placeholderSubtitle != null) placeholderSubtitle.Text = $"Estableciendo conexión segura con {device.Name} ({device.IPAddress})...";
+            if (placeholderTitle != null) placeholderTitle.Text = "Conectando al anfitriÃ³n...";
+            if (placeholderSubtitle != null) placeholderSubtitle.Text = $"Estableciendo conexiÃ³n segura con {device.Name} ({device.IPAddress})...";
             if (placeholderActions != null) placeholderActions.IsVisible = false;
 
             try
@@ -3500,7 +2449,7 @@ namespace LanScreenShare.Desktop
                     remoteControlBtn.IsVisible = _currentDeviceAllowsRemoteControl;
                     remoteControlBtn.IsChecked = false;
                     remoteControlBtn.IsEnabled = true;
-                    ToolTip.SetTip(remoteControlBtn, "Habilitar interacción con mouse y teclado");
+                    ToolTip.SetTip(remoteControlBtn, "Habilitar interacciÃ³n con mouse y teclado");
                 }
 
                 var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
@@ -3527,7 +2476,7 @@ namespace LanScreenShare.Desktop
 
                 var handshake = (_streamClient as TcpStreamClient)?.ActiveSessionHandshake;
 
-                // 2. Conectar flujo de audio en segundo plano sin demorar la visualización de video
+                // 2. Conectar flujo de audio en segundo plano sin demorar la visualizaciÃ³n de video
                 _ = Task.Run(async () =>
                 {
                     try
@@ -3537,7 +2486,7 @@ namespace LanScreenShare.Desktop
                         if (_isViewerVoiceChatActive)
                         {
                             _micCaptureService?.StartCapture();
-                            Console.WriteLine("[Viewer] Micrófono de retorno conectado e iniciado.");
+                            Console.WriteLine("[Viewer] MicrÃ³fono de retorno conectado e iniciado.");
                         }
                         Dispatcher.UIThread.Post(UpdateAudioUI);
                     }
@@ -3584,108 +2533,12 @@ namespace LanScreenShare.Desktop
             {
                 if (frame.Format == "h264")
                 {
-                    if (_h264Decoder != null && _h264Decoder.TryDecodeFrame(frame.Data, frame.Width, frame.Height, out byte[] bgraPixels, out int decW, out int decH))
-                    {
-                        lock (_bitmapLock)
-                        {
-                            if (_latestDecodedBgra == null || _latestDecodedBgra.Length != bgraPixels.Length)
-                            {
-                                _latestDecodedBgra = new byte[bgraPixels.Length];
-                            }
-                            Buffer.BlockCopy(bgraPixels, 0, _latestDecodedBgra, 0, bgraPixels.Length);
-                            _latestDecodedWidth = decW;
-                            _latestDecodedHeight = decH;
-                        }
-
-                        if (Interlocked.Exchange(ref _isUiRenderPending, 1) == 0)
-                        {
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                Interlocked.Exchange(ref _isUiRenderPending, 0);
-                                try
-                                {
-                                    lock (_bitmapLock)
-                                    {
-                                        if (_latestDecodedBgra == null || _latestDecodedWidth <= 0 || _latestDecodedHeight <= 0)
-                                            return;
-
-                                        if (_viewerWriteableBitmap == null ||
-                                            _viewerWriteableBitmap.PixelSize.Width != _latestDecodedWidth ||
-                                            _viewerWriteableBitmap.PixelSize.Height != _latestDecodedHeight)
-                                        {
-                                            _viewerWriteableBitmap?.Dispose();
-                                            _viewerWriteableBitmap = new WriteableBitmap(
-                                                new PixelSize(_latestDecodedWidth, _latestDecodedHeight),
-                                                new Vector(96, 96),
-                                                PixelFormat.Bgra8888,
-                                                AlphaFormat.Premul);
-                                        }
-
-                                        using (var fb = _viewerWriteableBitmap.Lock())
-                                        {
-                                            int copyLength = Math.Min(_latestDecodedBgra.Length, fb.RowBytes * _latestDecodedHeight);
-                                            Marshal.Copy(_latestDecodedBgra, 0, fb.Address, copyLength);
-                                        }
-                                    }
-
-                                    var screenImage = this.FindControl<Image>("ScreenImage");
-                                    if (screenImage != null)
-                                    {
-                                        if (screenImage.Source != _viewerWriteableBitmap)
-                                        {
-                                            screenImage.Source = _viewerWriteableBitmap;
-                                        }
-                                        screenImage.InvalidateVisual();
-                                    }
-
-                                    if (_isPopoutActive && _popoutWindow != null && _viewerWriteableBitmap != null)
-                                    {
-                                        _popoutWindow.UpdateFrame(_viewerWriteableBitmap);
-                                    }
-
-                                    var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
-                                    if (placeholder != null && placeholder.IsVisible)
-                                    {
-                                        placeholder.IsVisible = false;
-                                    }
-
-                                    UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName} (H.264 GPU)", "#22C55E");
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine($"[StreamViewer] Error renderizando frame H.264: {ex.Message}");
-                                }
-                            }, DispatcherPriority.Render);
-                        }
-                    }
-                    // Si es formato H.264, jamás caer a decodificación Bitmap JPEG
-                    return;
+                    HandleH264FrameReceived(frame);
                 }
-
-                using var ms = new MemoryStream(frame.Data);
-                var bitmap = new Bitmap(ms);
-
-                Dispatcher.UIThread.Post(() =>
+                else
                 {
-                    var screenImage = this.FindControl<Image>("ScreenImage");
-                    if (screenImage != null)
-                    {
-                        screenImage.Source = bitmap;
-                    }
-
-                    if (_isPopoutActive && _popoutWindow != null)
-                    {
-                        _popoutWindow.UpdateFrame(bitmap);
-                    }
-
-                    var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
-                    if (placeholder != null && placeholder.IsVisible)
-                    {
-                        placeholder.IsVisible = false;
-                    }
-
-                    UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName} (JPEG)", "#22C55E");
-                });
+                    HandleJpegFrameReceived(frame);
+                }
             }
             catch (Exception ex)
             {
@@ -3693,6 +2546,107 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void HandleH264FrameReceived(CapturedFrame frame)
+        {
+            if (_h264Decoder == null || !_h264Decoder.TryDecodeFrame(frame.Data, frame.Width, frame.Height, out byte[] bgraPixels, out int decW, out int decH))
+            {
+                return;
+            }
+
+            lock (_bitmapLock)
+            {
+                if (_latestDecodedBgra == null || _latestDecodedBgra.Length != bgraPixels.Length)
+                {
+                    _latestDecodedBgra = new byte[bgraPixels.Length];
+                }
+                Buffer.BlockCopy(bgraPixels, 0, _latestDecodedBgra, 0, bgraPixels.Length);
+                _latestDecodedWidth = decW;
+                _latestDecodedHeight = decH;
+            }
+
+            if (Interlocked.Exchange(ref _isUiRenderPending, 1) == 0)
+            {
+                Dispatcher.UIThread.Post(RenderLatestH264Frame, DispatcherPriority.Render);
+            }
+        }
+
+        private void RenderLatestH264Frame()
+        {
+            Interlocked.Exchange(ref _isUiRenderPending, 0);
+            try
+            {
+                lock (_bitmapLock)
+                {
+                    if (_latestDecodedBgra == null || _latestDecodedWidth <= 0 || _latestDecodedHeight <= 0)
+                        return;
+
+                    EnsureViewerWriteableBitmap(_latestDecodedWidth, _latestDecodedHeight);
+
+                    using var fb = _viewerWriteableBitmap!.Lock();
+                    int copyLength = Math.Min(_latestDecodedBgra.Length, fb.RowBytes * _latestDecodedHeight);
+                    Marshal.Copy(_latestDecodedBgra, 0, fb.Address, copyLength);
+                }
+
+                ApplyViewerFrameToUi(_viewerWriteableBitmap, "H.264 GPU");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[StreamViewer] Error renderizando frame H.264: {ex.Message}");
+            }
+        }
+
+        private void EnsureViewerWriteableBitmap(int width, int height)
+        {
+            if (_viewerWriteableBitmap != null &&
+                _viewerWriteableBitmap.PixelSize.Width == width &&
+                _viewerWriteableBitmap.PixelSize.Height == height)
+            {
+                return;
+            }
+
+            _viewerWriteableBitmap?.Dispose();
+            _viewerWriteableBitmap = new WriteableBitmap(
+                new PixelSize(width, height),
+                new Vector(96, 96),
+                PixelFormat.Bgra8888,
+                AlphaFormat.Premul);
+        }
+
+        private void HandleJpegFrameReceived(CapturedFrame frame)
+        {
+            using var ms = new MemoryStream(frame.Data);
+            var bitmap = new Bitmap(ms);
+
+            Dispatcher.UIThread.Post(() => ApplyViewerFrameToUi(bitmap, "JPEG"));
+        }
+
+        private void ApplyViewerFrameToUi(IImage? frameImage, string codecLabel)
+        {
+            if (frameImage == null) return;
+
+            var screenImage = this.FindControl<Image>("ScreenImage");
+            if (screenImage != null)
+            {
+                if (screenImage.Source != frameImage)
+                {
+                    screenImage.Source = frameImage;
+                }
+                screenImage.InvalidateVisual();
+            }
+
+            if (_isPopoutActive && _popoutWindow != null)
+            {
+                _popoutWindow.UpdateFrame(frameImage);
+            }
+
+            var placeholder = this.FindControl<StackPanel>("PlaceholderPanel");
+            if (placeholder != null && placeholder.IsVisible)
+            {
+                placeholder.IsVisible = false;
+            }
+
+            UpdateStatus($"Recibiendo pantalla de {_currentConnectedDeviceName} ({codecLabel})", "#22C55E");
+        }
         private void StreamClient_StatusChanged(object? sender, string status)
         {
             Dispatcher.UIThread.Post(() =>
@@ -3705,7 +2659,7 @@ namespace LanScreenShare.Desktop
 
                 if (!_streamClient.IsConnected)
                 {
-                    // Si éramos visores activos y se perdió o finalizó la transmisión
+                    // Si Ã©ramos visores activos y se perdiÃ³ o finalizÃ³ la transmisiÃ³n
                     if (!_isHosting && _isViewing)
                     {
                         HandleViewerDisconnected(status);
@@ -3770,7 +2724,7 @@ namespace LanScreenShare.Desktop
 
         private async void DisconnectButton_Click(object? sender, RoutedEventArgs? e = null)
         {
-            await HandleViewerDisconnectedAsync("Te has desconectado de la transmisión.");
+            await HandleViewerDisconnectedAsync("Te has desconectado de la transmisiÃ³n.");
         }
 
         private void HandleViewerDisconnected(string reason)
@@ -3843,23 +2797,23 @@ namespace LanScreenShare.Desktop
 
             if (reason.Contains("finaliz", StringComparison.OrdinalIgnoreCase))
             {
-                if (placeholderTitle != null) placeholderTitle.Text = "Transmisión Finalizada";
-                if (placeholderSubtitle != null) placeholderSubtitle.Text = "El anfitrión ha finalizado la transmisión.\nPuedes iniciar tu propia transmisión o conectarte a otro equipo.";
-                UpdateStatus("El anfitrión ha finalizado la transmisión", "#F59E0B");
+                if (placeholderTitle != null) placeholderTitle.Text = "TransmisiÃ³n Finalizada";
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "El anfitriÃ³n ha finalizado la transmisiÃ³n.\nPuedes iniciar tu propia transmisiÃ³n o conectarte a otro equipo.";
+                UpdateStatus("El anfitriÃ³n ha finalizado la transmisiÃ³n", "#F59E0B");
             }
             else if (reason.Contains("perdida", StringComparison.OrdinalIgnoreCase) ||
                      reason.Contains("error", StringComparison.OrdinalIgnoreCase) ||
                      reason.Contains("No se pudo", StringComparison.OrdinalIgnoreCase))
             {
-                if (placeholderTitle != null) placeholderTitle.Text = "Conexión Perdida";
+                if (placeholderTitle != null) placeholderTitle.Text = "ConexiÃ³n Perdida";
                 if (placeholderSubtitle != null) placeholderSubtitle.Text = reason;
                 UpdateStatus(reason, "#EF4444");
             }
             else
             {
                 if (placeholderTitle != null) placeholderTitle.Text = "Todo listo para compartir";
-                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Comparte una pantalla o una aplicación con otros equipos.\nTú eliges qué mostrar y quién puede controlarlo.";
-                UpdateStatus("Sin conexión activa", "#34D399");
+                if (placeholderSubtitle != null) placeholderSubtitle.Text = "Comparte una pantalla o una aplicaciÃ³n con otros equipos.\nTÃº eliges quÃ© mostrar y quiÃ©n puede controlarlo.";
+                UpdateStatus("Sin conexiÃ³n activa", "#34D399");
             }
 
             HideViewerControls();
@@ -4053,7 +3007,7 @@ namespace LanScreenShare.Desktop
                 {
                     items.Add(new MenuItem
                     {
-                        Header = "PANTALLAS DEL ANFITRIÓN",
+                        Header = "PANTALLAS DEL ANFITRIÃ“N",
                         IsEnabled = false,
                         FontSize = 10,
                         FontWeight = FontWeight.Bold,
@@ -4064,7 +3018,7 @@ namespace LanScreenShare.Desktop
                     {
                         bool isActive = s.Id == catalog.ActiveSourceId ||
                                         (!string.IsNullOrEmpty(s.Name) && s.Name == _currentRemoteMonitorLabel);
-                        string prefix = isActive ? "✓ 🖥️ " : "    🖥️ ";
+                        string prefix = isActive ? "âœ“ ðŸ–¥ï¸ " : "    ðŸ–¥ï¸ ";
                         string subtitle = !string.IsNullOrWhiteSpace(s.Subtitle) ? $" ({s.Subtitle})" : string.Empty;
 
                         var menuItem = new MenuItem
@@ -4100,7 +3054,7 @@ namespace LanScreenShare.Desktop
                     {
                         bool isActive = w.Id == catalog.ActiveSourceId ||
                                         (!string.IsNullOrEmpty(w.Name) && w.Name == _currentRemoteMonitorLabel);
-                        string prefix = isActive ? "✓ 🪟 " : "    🪟 ";
+                        string prefix = isActive ? "âœ“ ðŸªŸ " : "    ðŸªŸ ";
                         string displayName = w.Name.Length > 45 ? w.Name[..42] + "..." : w.Name;
 
                         var menuItem = new MenuItem
@@ -4121,8 +3075,8 @@ namespace LanScreenShare.Desktop
                 items.Add(new MenuItem
                 {
                     Header = _controlClient.IsConnected
-                        ? "⏳ Consultando pantallas y ventanas del anfitrión..."
-                        : "⏳ Conectando control remoto para listar fuentes...",
+                        ? "â³ Consultando pantallas y ventanas del anfitriÃ³n..."
+                        : "â³ Conectando control remoto para listar fuentes...",
                     IsEnabled = false,
                     Foreground = new SolidColorBrush(Color.Parse("#94A3B8"))
                 });
@@ -4132,7 +3086,7 @@ namespace LanScreenShare.Desktop
 
             var cycleItem = new MenuItem
             {
-                Header = "⏭ Alternar siguiente fuente (Ctrl+Alt+M)",
+                Header = "â­ Alternar siguiente fuente (Ctrl+Alt+M)",
                 Foreground = new SolidColorBrush(Color.Parse("#38BDF8")),
                 FontWeight = FontWeight.SemiBold
             };
@@ -4141,7 +3095,7 @@ namespace LanScreenShare.Desktop
 
             var refreshItem = new MenuItem
             {
-                Header = "🔄 Actualizar lista de fuentes",
+                Header = "ðŸ”„ Actualizar lista de fuentes",
                 Foreground = new SolidColorBrush(Color.Parse("#CBD5E1"))
             };
             refreshItem.Click += async (_, _) =>
@@ -4238,7 +3192,7 @@ namespace LanScreenShare.Desktop
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[ControlHost] Error enviando catálogo de fuentes: {ex.Message}");
+                    Console.WriteLine($"[ControlHost] Error enviando catÃ¡logo de fuentes: {ex.Message}");
                     _ = _controlServer.BroadcastMonitorInfoAsync(_currentSource.Name);
                 }
             });
@@ -4287,8 +3241,8 @@ namespace LanScreenShare.Desktop
                     .Concat(rawSources.Where(s => s.Type == CaptureSourceType.AllScreens))
                     .ToList();
 
-                // Si el anfitrión solo tiene 1 pantalla física, incluir también las ventanas abiertas
-                // para que el botón/atajo permita alternar entre Pantalla 1 y las aplicaciones abiertas
+                // Si el anfitriÃ³n solo tiene 1 pantalla fÃ­sica, incluir tambiÃ©n las ventanas abiertas
+                // para que el botÃ³n/atajo permita alternar entre Pantalla 1 y las aplicaciones abiertas
                 if (candidateSources.Count <= 1)
                 {
                     int currentPid = Environment.ProcessId;
@@ -4344,7 +3298,7 @@ namespace LanScreenShare.Desktop
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[ControlViewer] Error parseando catálogo de monitores: {ex.Message}");
+                        Console.WriteLine($"[ControlViewer] Error parseando catÃ¡logo de monitores: {ex.Message}");
                     }
                 }
 
@@ -4370,7 +3324,7 @@ namespace LanScreenShare.Desktop
                     if (canvasTitle != null)
                     {
                         canvasTitle.Text = !string.IsNullOrEmpty(_currentConnectedDeviceName)
-                            ? $"{_currentConnectedDeviceName} · {monitorLabel}"
+                            ? $"{_currentConnectedDeviceName} Â· {monitorLabel}"
                             : monitorLabel;
                     }
 
@@ -4596,7 +3550,7 @@ namespace LanScreenShare.Desktop
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("[FileTransfer] Envío de archivo cancelado por el usuario.");
+                Console.WriteLine("[FileTransfer] EnvÃ­o de archivo cancelado por el usuario.");
             }
             catch (Exception ex)
             {
@@ -4629,7 +3583,7 @@ namespace LanScreenShare.Desktop
             if (subtitle != null)
             {
                 double speedMb = p.SpeedBytesPerSec / (1024.0 * 1024.0);
-                subtitle.Text = $"{p.FileName} — {p.Percent:0}% ({speedMb:0.1} MB/s)";
+                subtitle.Text = $"{p.FileName} â€” {p.Percent:0}% ({speedMb:0.1} MB/s)";
             }
 
             var progressBar = this.FindControl<ProgressBar>("FileTransferProgressBar");
@@ -4650,41 +3604,45 @@ namespace LanScreenShare.Desktop
             if (dismissBtn != null) dismissBtn.IsVisible = false;
         }
 
-        private void ShowFileTransferCompleted(FileTransferCompleted c)
+        private readonly record struct TransferBannerConfig(
+            string Title,
+            string TitleColorHex,
+            string Subtitle,
+            bool ShowProgressBar = false,
+            int ProgressVal = 0,
+            string ProgressColorHex = "#10B981",
+            bool ShowOpenFolder = false);
+
+        private void ShowFileTransferStatusBanner(in TransferBannerConfig cfg)
         {
             _fileTransferBannerTimer?.Stop();
-            _lastReceivedFilePath = c.FilePath;
 
             var banner = this.FindControl<Border>("FileTransferBanner");
             if (banner != null) banner.IsVisible = true;
 
-            var title = this.FindControl<TextBlock>("FileTransferBannerTitle");
-            if (title != null)
+            var titleBlock = this.FindControl<TextBlock>("FileTransferBannerTitle");
+            if (titleBlock != null)
             {
-                title.Text = c.IsUpload ? "Archivo enviado con éxito" : "Archivo recibido";
-                title.Foreground = new SolidColorBrush(Color.Parse("#34D399"));
+                titleBlock.Text = cfg.Title;
+                titleBlock.Foreground = new SolidColorBrush(Color.Parse(cfg.TitleColorHex));
             }
 
-            var subtitle = this.FindControl<TextBlock>("FileTransferBannerSubtitle");
-            if (subtitle != null)
-            {
-                double mb = c.FileSize / (1024.0 * 1024.0);
-                subtitle.Text = $"{c.FileName} ({mb:0.1} MB) — Completado";
-            }
+            var subtitleBlock = this.FindControl<TextBlock>("FileTransferBannerSubtitle");
+            if (subtitleBlock != null) subtitleBlock.Text = cfg.Subtitle;
 
             var progressBar = this.FindControl<ProgressBar>("FileTransferProgressBar");
             if (progressBar != null)
             {
-                progressBar.IsVisible = true;
-                progressBar.Value = 100;
-                progressBar.Foreground = new SolidColorBrush(Color.Parse("#10B981"));
+                progressBar.IsVisible = cfg.ShowProgressBar;
+                if (cfg.ShowProgressBar)
+                {
+                    progressBar.Value = cfg.ProgressVal;
+                    progressBar.Foreground = new SolidColorBrush(Color.Parse(cfg.ProgressColorHex));
+                }
             }
 
             var openFolderBtn = this.FindControl<Button>("FileTransferOpenFolderButton");
-            if (openFolderBtn != null)
-            {
-                openFolderBtn.IsVisible = !string.IsNullOrEmpty(c.FilePath) && File.Exists(c.FilePath);
-            }
+            if (openFolderBtn != null) openFolderBtn.IsVisible = cfg.ShowOpenFolder;
 
             var cancelBtn = this.FindControl<Button>("FileTransferCancelButton");
             if (cancelBtn != null) cancelBtn.IsVisible = false;
@@ -4692,65 +3650,33 @@ namespace LanScreenShare.Desktop
             var dismissBtn = this.FindControl<Button>("FileTransferDismissButton");
             if (dismissBtn != null) dismissBtn.IsVisible = true;
 
-            _fileTransferBannerTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(6)
-            };
+            _fileTransferBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
             _fileTransferBannerTimer.Tick += (s, e) =>
             {
                 _fileTransferBannerTimer.Stop();
                 HideFileTransferBanner();
             };
             _fileTransferBannerTimer.Start();
+        }
+
+        private void ShowFileTransferCompleted(FileTransferCompleted c)
+        {
+            _lastReceivedFilePath = c.FilePath;
+            string title = c.IsUpload ? "Archivo enviado con éxito" : "Archivo recibido";
+            double mb = c.FileSize / (1024.0 * 1024.0);
+            string subtitle = $"{c.FileName} ({mb:0.1} MB) — Completado";
+            bool canOpen = !string.IsNullOrEmpty(c.FilePath) && File.Exists(c.FilePath);
+
+            ShowFileTransferStatusBanner(new TransferBannerConfig(
+                title, "#34D399", subtitle,
+                ShowProgressBar: true, ProgressVal: 100, ProgressColorHex: "#10B981", ShowOpenFolder: canOpen));
         }
 
         private void ShowFileTransferError(FileTransferError err)
         {
-            _fileTransferBannerTimer?.Stop();
-
-            var banner = this.FindControl<Border>("FileTransferBanner");
-            if (banner != null) banner.IsVisible = true;
-
-            var title = this.FindControl<TextBlock>("FileTransferBannerTitle");
-            if (title != null)
-            {
-                title.Text = "Error en transferencia";
-                title.Foreground = new SolidColorBrush(Color.Parse("#F87171"));
-            }
-
-            var subtitle = this.FindControl<TextBlock>("FileTransferBannerSubtitle");
-            if (subtitle != null)
-            {
-                subtitle.Text = $"{err.FileName}: {err.ErrorMessage}";
-            }
-
-            var progressBar = this.FindControl<ProgressBar>("FileTransferProgressBar");
-            if (progressBar != null)
-            {
-                progressBar.IsVisible = false;
-            }
-
-            var openFolderBtn = this.FindControl<Button>("FileTransferOpenFolderButton");
-            if (openFolderBtn != null) openFolderBtn.IsVisible = false;
-
-            var cancelBtn = this.FindControl<Button>("FileTransferCancelButton");
-            if (cancelBtn != null) cancelBtn.IsVisible = false;
-
-            var dismissBtn = this.FindControl<Button>("FileTransferDismissButton");
-            if (dismissBtn != null) dismissBtn.IsVisible = true;
-
-            _fileTransferBannerTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(6)
-            };
-            _fileTransferBannerTimer.Tick += (s, e) =>
-            {
-                _fileTransferBannerTimer.Stop();
-                HideFileTransferBanner();
-            };
-            _fileTransferBannerTimer.Start();
+            ShowFileTransferStatusBanner(new TransferBannerConfig(
+                "Error en transferencia", "#F87171", $"{err.FileName}: {err.ErrorMessage}"));
         }
-
         private void CancelActiveFileTransfer()
         {
             try

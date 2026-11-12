@@ -185,7 +185,7 @@ namespace LanScreenShare.Media
                         var frameProcStopwatch = Stopwatch.StartNew();
                         bool forceKeyframe = _forceKeyframeRequested;
                         _forceKeyframeRequested = false;
-                        var frame = CaptureDesktopFrame(_quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe);
+                        var frame = CaptureDesktopFrame(new ScreenCaptureOptions(_quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe));
                         if (frame != null)
                         {
                             frameProcStopwatch.Stop();
@@ -243,14 +243,22 @@ namespace LanScreenShare.Media
             _captureTask = null;
         }
 
-        private CapturedFrame? CaptureDesktopFrame(int quality, double scale, int customTargetW = 0, int customTargetH = 0, bool forceKeyframe = false)
-        {
-            int left;
-            int top;
-            int width;
-            int height;
+        private readonly record struct ScreenCaptureOptions(
+            int Quality,
+            double Scale,
+            int CustomTargetWidth = 0,
+            int CustomTargetHeight = 0,
+            bool ForceKeyframe = false);
 
-            if (_captureAllScreens || (_captureWidth <= 0 || _captureHeight <= 0))
+        private static bool NeedsResize(int targetW, int targetH, int width, int height) =>
+            targetW > 0 && targetH > 0 && (targetW != width || targetH != height);
+
+        private bool ShouldCaptureVirtualScreen() =>
+            _captureAllScreens || _captureWidth <= 0 || _captureHeight <= 0;
+
+        private void GetCaptureBounds(out int left, out int top, out int width, out int height)
+        {
+            if (ShouldCaptureVirtualScreen())
             {
                 left = GetSystemMetrics(SM_XVIRTUALSCREEN);
                 top = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -272,6 +280,11 @@ namespace LanScreenShare.Media
                 width = _captureWidth;
                 height = _captureHeight;
             }
+        }
+
+        private CapturedFrame? CaptureDesktopFrame(in ScreenCaptureOptions options)
+        {
+            GetCaptureBounds(out int left, out int top, out int width, out int height);
 
             if (width <= 0 || height <= 0)
                 return null;
@@ -305,10 +318,7 @@ namespace LanScreenShare.Media
 
             IntPtr hOld = SelectObject(hdcDest, hBitmap);
 
-            // Copiar el contenido de la pantalla al DC de destino
             BitBlt(hdcDest, 0, 0, width, height, hdcSrc, left, top, SRCCOPY | CAPTUREBLT);
-
-            // Dibujar el cursor del mouse sobre el fotograma capturado
             DrawMouseCursor(hdcDest, left, top);
 
             int finalWidth = width;
@@ -317,81 +327,58 @@ namespace LanScreenShare.Media
             try
             {
                 var imageInfo = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
-                using (var skBitmap = new SKBitmap())
+                using var skBitmap = new SKBitmap();
+                skBitmap.InstallPixels(imageInfo, pBits);
+
+                SKBitmap bitmapToEncode = skBitmap;
+                SKBitmap? resizedBitmap = null;
+
+                int targetW = options.CustomTargetWidth > 0 ? options.CustomTargetWidth : (options.Scale > 0.2 && options.Scale < 0.99 ? (int)(width * options.Scale) : 0);
+                int targetH = options.CustomTargetHeight > 0 ? options.CustomTargetHeight : (options.Scale > 0.2 && options.Scale < 0.99 ? (int)(height * options.Scale) : 0);
+
+                if (NeedsResize(targetW, targetH, width, height))
                 {
-                    skBitmap.InstallPixels(imageInfo, pBits);
-
-                    SKBitmap bitmapToEncode = skBitmap;
-                    SKBitmap? resizedBitmap = null;
-
-                    int targetW = customTargetW > 0 ? customTargetW : (scale > 0.2 && scale < 0.99 ? (int)(width * scale) : 0);
-                    int targetH = customTargetH > 0 ? customTargetH : (scale > 0.2 && scale < 0.99 ? (int)(height * scale) : 0);
-
-                    if (targetW > 0 && targetH > 0 && (targetW != width || targetH != height))
+                    resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                    if (resizedBitmap != null)
                     {
-                        // Remuestreo bilineal de ultra baja latencia (<2ms) optimizado para streaming en tiempo real
-                        resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
-                        if (resizedBitmap != null)
-                        {
-                            bitmapToEncode = resizedBitmap;
-                            finalWidth = targetW;
-                            finalHeight = targetH;
-                        }
+                        bitmapToEncode = resizedBitmap;
+                        finalWidth = targetW;
+                        finalHeight = targetH;
                     }
+                }
 
-                    byte[]? encodedBytes = null;
-                    string currentCodec = _codec;
+                byte[]? encodedBytes = null;
+                string currentCodec = _codec;
 
-                    try
+                try
+                {
+                    if (currentCodec == "h264")
                     {
-                        if (currentCodec == "h264")
-                        {
-                            try
-                            {
-                                _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps, _bitrateMbps * 1_000_000);
-                                int requiredBytes = finalWidth * finalHeight * 4;
-                                if (_reusableBgraBytes == null || _reusableBgraBytes.Length != requiredBytes)
-                                {
-                                    _reusableBgraBytes = new byte[requiredBytes];
-                                }
-                                Marshal.Copy(bitmapToEncode.GetPixels(), _reusableBgraBytes, 0, requiredBytes);
-                                encodedBytes = _h264Encoder.EncodeFrame(_reusableBgraBytes, finalWidth, finalHeight, forceKeyframe);
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[GDI] H.264 error, fallback automático a JPEG: {ex.Message}");
-                                encodedBytes = null;
-                            }
-                        }
-
-                        if (encodedBytes == null || encodedBytes.Length == 0)
-                        {
-                            currentCodec = "jpeg";
-                            using var image = SKImage.FromBitmap(bitmapToEncode);
-                            if (image != null)
-                            {
-                                using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
-                                encodedBytes = data.ToArray();
-                            }
-                        }
-                    }
-                    finally
-                    {
-                        resizedBitmap?.Dispose();
+                        encodedBytes = EncodeH264(bitmapToEncode, finalWidth, finalHeight, options.ForceKeyframe);
                     }
 
                     if (encodedBytes == null || encodedBytes.Length == 0)
-                        return null;
-
-                    return new CapturedFrame
                     {
-                        Data = encodedBytes,
-                        Width = finalWidth,
-                        Height = finalHeight,
-                        Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        Format = currentCodec
-                    };
+                        currentCodec = "jpeg";
+                        encodedBytes = EncodeJpeg(bitmapToEncode, options.Quality);
+                    }
                 }
+                finally
+                {
+                    resizedBitmap?.Dispose();
+                }
+
+                if (encodedBytes == null || encodedBytes.Length == 0)
+                    return null;
+
+                return new CapturedFrame
+                {
+                    Data = encodedBytes,
+                    Width = finalWidth,
+                    Height = finalHeight,
+                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Format = currentCodec
+                };
             }
             finally
             {
@@ -400,6 +387,37 @@ namespace LanScreenShare.Media
                 DeleteDC(hdcDest);
                 ReleaseDC(IntPtr.Zero, hdcSrc);
             }
+        }
+
+        private byte[]? EncodeH264(SKBitmap bitmap, int width, int height, bool forceKeyframe)
+        {
+            try
+            {
+                _h264Encoder ??= new MediaFoundationH264EncoderService(_targetFps, _bitrateMbps * 1_000_000);
+                int requiredBytes = width * height * 4;
+                if (_reusableBgraBytes == null || _reusableBgraBytes.Length != requiredBytes)
+                {
+                    _reusableBgraBytes = new byte[requiredBytes];
+                }
+                Marshal.Copy(bitmap.GetPixels(), _reusableBgraBytes, 0, requiredBytes);
+                return _h264Encoder.EncodeFrame(_reusableBgraBytes, width, height, forceKeyframe);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[GDI] H.264 error, fallback automático a JPEG: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static byte[]? EncodeJpeg(SKBitmap bitmap, int quality)
+        {
+            using var image = SKImage.FromBitmap(bitmap);
+            if (image != null)
+            {
+                using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
+                return data?.ToArray();
+            }
+            return null;
         }
 
         private static void DrawMouseCursor(IntPtr hdcDest, int screenLeft, int screenTop)

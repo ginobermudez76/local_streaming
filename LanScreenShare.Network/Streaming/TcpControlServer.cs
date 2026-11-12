@@ -65,6 +65,8 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
+        private sealed record ControlClientContext(string ClientId, TcpClient Client, Stream Stream, string? SessionId);
+
         public Task StartAsync(int port = 5003, CancellationToken cancellationToken = default)
         {
             if (IsRunning)
@@ -79,180 +81,203 @@ namespace LanScreenShare.Network.Streaming
 
             Console.WriteLine($"[ControlServer] Servidor de control remoto (LSI2) escuchando en puerto {port}...");
 
-            _ = Task.Run(async () =>
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        var client = await _listener.AcceptTcpClientAsync(token);
-                        client.NoDelay = true;
-
-                        _ = Task.Run(async () =>
-                        {
-                            var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
-
-                            try
-                            {
-                                Stream stream = client.GetStream();
-                                string? assignedSessionId = null;
-
-                                // 1. Negociación mTLS si está habilitada
-                                if (_sslServerOptions != null)
-                                {
-                                    var sslStream = new SslStream(stream, false);
-                                    using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
-
-                                    await sslStream.AuthenticateAsServerAsync(_sslServerOptions, linkedCts.Token);
-
-                                    if (sslStream.RemoteCertificate == null)
-                                    {
-                                        Console.WriteLine($"[ControlServer] Conexión rechazada para {clientId}: Falta certificado de cliente.");
-                                        client.Close();
-                                        return;
-                                    }
-
-                                    using var peerCert = new X509Certificate2(sslStream.RemoteCertificate);
-                                    string peerFingerprint = TlsConfigurationHelper.ComputeFingerprint(peerCert);
-
-                                    // 2. Leer mensaje de fijación de canal (CHANNEL_ATTACH, 37 bytes)
-                                    byte[] attachBuffer = new byte[ChannelAttachmentMessage.MessageSize];
-                                    await ReadExactBytesAsync(sslStream, attachBuffer, 0, attachBuffer.Length, linkedCts.Token);
-
-                                    if (!ChannelAttachmentMessage.TryDeserialize(
-                                            attachBuffer,
-                                            out string reqSessionId,
-                                            out string reqTokenId,
-                                            out var reqChannel,
-                                            out string? attachError))
-                                    {
-                                        Console.WriteLine($"[ControlServer] Error en CHANNEL_ATTACH de {clientId}: {attachError}");
-                                        client.Close();
-                                        return;
-                                    }
-
-                                    if (_sessionAuthority != null)
-                                    {
-                                        var status = _sessionAuthority.TryAttachChannel(
-                                            reqTokenId,
-                                            reqSessionId,
-                                            peerFingerprint,
-                                            reqChannel);
-
-                                        if (status != AttachmentStatus.Success)
-                                        {
-                                            await sslStream.WriteAsync(new byte[] { (byte)status }, linkedCts.Token);
-                                            Console.WriteLine($"[ControlServer] Rechazado CHANNEL_ATTACH ({status}) para {clientId}");
-                                            client.Close();
-                                            return;
-                                        }
-
-                                        assignedSessionId = reqSessionId;
-                                    }
-
-                                    stream = sslStream;
-                                }
-
-                                if (ClientApprovalCallback != null)
-                                {
-                                    bool approved = false;
-                                    try
-                                    {
-                                        approved = await ClientApprovalCallback(clientId);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"[ControlServer] Error evaluando aprobación para {clientId}: {ex.Message}");
-                                        approved = false;
-                                    }
-
-                                    if (!approved)
-                                    {
-                                        Console.WriteLine($"[ControlServer] Control remoto denegado por el anfitrión para: {clientId}");
-                                        if (_sslServerOptions != null && _sessionAuthority != null)
-                                        {
-                                            try { await stream.WriteAsync(new byte[] { (byte)AttachmentStatus.SessionNotFound }, token); } catch { }
-                                        }
-                                        try { client.Close(); } catch { }
-                                        return;
-                                    }
-                                }
-
-                                if (_sessionAuthority != null && assignedSessionId != null)
-                                {
-                                    if (!_sessionAuthority.TryAcquireControl(assignedSessionId, out string? acquireError))
-                                    {
-                                        Console.WriteLine($"[ControlServer] Conflicto de controlador único para {clientId}: {acquireError}");
-                                        if (_sslServerOptions != null)
-                                        {
-                                            try { await stream.WriteAsync(new byte[] { (byte)AttachmentStatus.SessionNotFound }, token); } catch { }
-                                        }
-                                        try { client.Close(); } catch { }
-                                        return;
-                                    }
-                                }
-
-                                _clients[clientId] = (stream, client, assignedSessionId, new SemaphoreSlim(1, 1));
-
-                                if (_sslServerOptions != null && _sessionAuthority != null && assignedSessionId != null)
-                                {
-                                    await stream.WriteAsync(new byte[] { (byte)AttachmentStatus.Success }, token);
-                                }
-
-                                Console.WriteLine($"[ControlServer] Controlador LSI2 conectado: {clientId}");
-                                ClientConnected?.Invoke(this, clientId);
-
-                                await ProcessClientInputAsync(clientId, client, stream, assignedSessionId, token);
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[ControlServer] Error inicializando cliente {clientId}: {ex.Message}");
-                                RemoveClient(clientId);
-                            }
-                        }, token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ControlServer] Error aceptando cliente de control: {ex.Message}");
-                    }
-                }
-            }, token);
-
+            _ = Task.Run(async () => await AcceptLoopAsync(token), token);
             return Task.CompletedTask;
         }
 
-        private async Task ProcessClientInputAsync(
-            string clientId,
-            TcpClient client,
-            Stream stream,
-            string? sessionId,
-            CancellationToken token)
+        private async Task AcceptLoopAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    var client = await _listener!.AcceptTcpClientAsync(token);
+                    client.NoDelay = true;
+                    _ = Task.Run(async () => await HandleIncomingClientAsync(client, token), token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ControlServer] Error aceptando cliente de control: {ex.Message}");
+                }
+            }
+        }
+
+        private async Task HandleIncomingClientAsync(TcpClient client, CancellationToken token)
+        {
+            var clientId = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
+
+            try
+            {
+                Stream stream = client.GetStream();
+                string? assignedSessionId = null;
+
+                if (_sslServerOptions != null)
+                {
+                    var (sslStream, sessionId, success) = await NegotiateTlsSessionAsync(client, stream, clientId, token);
+                    if (!success || sslStream == null)
+                        return;
+
+                    stream = sslStream;
+                    assignedSessionId = sessionId;
+                }
+
+                if (!await IsClientApprovedAsync(client, stream, clientId, token))
+                    return;
+
+                if (!TryAcquireControlSession(client, stream, clientId, assignedSessionId))
+                    return;
+
+                _clients[clientId] = (stream, client, assignedSessionId, new SemaphoreSlim(1, 1));
+
+                if (_sslServerOptions != null && assignedSessionId != null)
+                {
+                    await stream.WriteAsync(new byte[] { (byte)AttachmentStatus.Success }, token);
+                }
+
+                Console.WriteLine($"[ControlServer] Controlador LSI2 conectado: {clientId}");
+                ClientConnected?.Invoke(this, clientId);
+
+                var ctx = new ControlClientContext(clientId, client, stream, assignedSessionId);
+                await ProcessClientInputAsync(ctx, token);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlServer] Error inicializando cliente {clientId}: {ex.Message}");
+                RemoveClient(clientId);
+            }
+        }
+
+        private async Task<(SslStream? SslStream, string? SessionId, bool Success)> NegotiateTlsSessionAsync(
+            TcpClient client, Stream stream, string clientId, CancellationToken token)
+        {
+            var sslStream = new SslStream(stream, false);
+            using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
+
+            await sslStream.AuthenticateAsServerAsync(_sslServerOptions!, linkedCts.Token);
+
+            if (sslStream.RemoteCertificate == null)
+            {
+                Console.WriteLine($"[ControlServer] Conexión rechazada para {clientId}: Falta certificado de cliente.");
+                client.Close();
+                return (null, null, false);
+            }
+
+            using var peerCert = new X509Certificate2(sslStream.RemoteCertificate);
+            string peerFingerprint = TlsConfigurationHelper.ComputeFingerprint(peerCert);
+
+            byte[] attachBuffer = new byte[ChannelAttachmentMessage.MessageSize];
+            await ReadExactBytesAsync(sslStream, attachBuffer, linkedCts.Token);
+
+            if (!ChannelAttachmentMessage.TryDeserialize(
+                    attachBuffer,
+                    out string reqSessionId,
+                    out string reqTokenId,
+                    out var reqChannel,
+                    out string? attachError))
+            {
+                Console.WriteLine($"[ControlServer] Error en CHANNEL_ATTACH de {clientId}: {attachError}");
+                client.Close();
+                return (null, null, false);
+            }
+
+            if (_sessionAuthority != null)
+            {
+                var status = _sessionAuthority.TryAttachChannel(reqTokenId, reqSessionId, peerFingerprint, reqChannel);
+                if (status != AttachmentStatus.Success)
+                {
+                    await sslStream.WriteAsync(new byte[] { (byte)status }, linkedCts.Token);
+                    Console.WriteLine($"[ControlServer] Rechazado CHANNEL_ATTACH ({status}) para {clientId}");
+                    client.Close();
+                    return (null, null, false);
+                }
+            }
+
+            return (sslStream, reqSessionId, true);
+        }
+
+        private async Task<bool> IsClientApprovedAsync(TcpClient client, Stream stream, string clientId, CancellationToken token)
+        {
+            if (ClientApprovalCallback == null) return true;
+
+            bool approved;
+            try
+            {
+                approved = await ClientApprovalCallback(clientId);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlServer] Error evaluando aprobación para {clientId}: {ex.Message}");
+                approved = false;
+            }
+
+            if (!approved)
+            {
+                Console.WriteLine($"[ControlServer] Control remoto denegado por el anfitrión para: {clientId}");
+                if (_sslServerOptions != null && _sessionAuthority != null)
+                {
+                    try { await stream.WriteAsync(new byte[] { (byte)AttachmentStatus.SessionNotFound }, token); } catch { }
+                }
+                try { client.Close(); } catch { }
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool TryAcquireControlSession(TcpClient client, Stream stream, string clientId, string? assignedSessionId)
+        {
+            if (_sessionAuthority == null || assignedSessionId == null)
+                return true;
+
+            if (!_sessionAuthority.TryAcquireControl(assignedSessionId, out string? acquireError))
+            {
+                Console.WriteLine($"[ControlServer] Conflicto de controlador único para {clientId}: {acquireError}");
+                if (_sslServerOptions != null)
+                {
+                    try { stream.Write(new byte[] { (byte)AttachmentStatus.SessionNotFound }); } catch { }
+                }
+                try { client.Close(); } catch { }
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool IsAuthorizedSession(string? sessionId)
+        {
+            if (_sessionAuthority == null || sessionId == null)
+                return true;
+
+            return _sessionAuthority.ActiveControllerSessionId == sessionId;
+        }
+
+        private async Task ProcessClientInputAsync(ControlClientContext ctx, CancellationToken token)
         {
             byte[] packetBuffer = new byte[Lsi2ControlPacket.PacketSize];
 
             try
             {
-                while (!token.IsCancellationRequested && client.Connected)
+                while (!token.IsCancellationRequested && ctx.Client.Connected)
                 {
-                    await ReadExactBytesAsync(stream, packetBuffer, 0, Lsi2ControlPacket.PacketSize, token);
+                    await ReadExactBytesAsync(ctx.Stream, packetBuffer, token);
 
                     if (!Lsi2ControlPacket.TryReadPacket(
                             packetBuffer,
-                            out ulong sequenceNumber,
-                            out ulong timestamp,
+                            out _,
+                            out _,
                             out var input,
                             out string? protocolError))
                     {
-                        Console.WriteLine($"[ControlServer] Error de protocolo de {clientId}: {protocolError}. Desconectando.");
+                        Console.WriteLine($"[ControlServer] Error de protocolo de {ctx.ClientId}: {protocolError}. Desconectando.");
                         break;
                     }
 
@@ -260,161 +285,28 @@ namespace LanScreenShare.Network.Streaming
 
                     if (input.Type == InputEventType.ClipboardText)
                     {
-                        int payloadLength = input.KeyCode;
-                        if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
-                        {
-                            Console.WriteLine($"[ControlServer] Longitud de portapapeles inválida ({payloadLength}) de {clientId}. Desconectando.");
+                        if (!await HandleClipboardTextPacketAsync(ctx, input, token))
                             break;
-                        }
-
-                        byte[] textBytes = new byte[payloadLength];
-                        await ReadExactBytesAsync(stream, textBytes, 0, payloadLength, token);
-
-                        if (_sessionAuthority != null && sessionId != null)
-                        {
-                            string? activeCtrl = _sessionAuthority.ActiveControllerSessionId;
-                            if (activeCtrl != sessionId)
-                            {
-                                continue;
-                            }
-                        }
-
-                        string text = Encoding.UTF8.GetString(textBytes);
-                        input.ClipboardText = text;
-
-                        try
-                        {
-                            InputReceived?.Invoke(this, input);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ControlServer] Error en InputReceived (portapapeles): {ex.Message}");
-                        }
-
-                        try
-                        {
-                            ClipboardTextReceived?.Invoke(this, text);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ControlServer] Error en ClipboardTextReceived: {ex.Message}");
-                        }
-
                         continue;
                     }
 
                     if (input.Type == InputEventType.SelectSource)
                     {
-                        int payloadLength = input.KeyCode;
-                        if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
-                        {
-                            Console.WriteLine($"[ControlServer] Longitud de ID de fuente inválida ({payloadLength}) de {clientId}. Desconectando.");
+                        if (!await HandleSelectSourcePacketAsync(ctx, input, token))
                             break;
-                        }
-
-                        byte[] sourceBytes = new byte[payloadLength];
-                        await ReadExactBytesAsync(stream, sourceBytes, 0, payloadLength, token);
-
-                        if (_sessionAuthority != null && sessionId != null)
-                        {
-                            string? activeCtrl = _sessionAuthority.ActiveControllerSessionId;
-                            if (activeCtrl != sessionId)
-                            {
-                                continue;
-                            }
-                        }
-
-                        string sourceId = Encoding.UTF8.GetString(sourceBytes);
-                        input.ClipboardText = sourceId;
-
-                        try
-                        {
-                            InputReceived?.Invoke(this, input);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ControlServer] Error en InputReceived (SelectSource): {ex.Message}");
-                        }
-
-                        try
-                        {
-                            SelectSourceRequested?.Invoke(this, sourceId);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ControlServer] Error en SelectSourceRequested: {ex.Message}");
-                        }
-
                         continue;
                     }
 
                     if (input.Type == InputEventType.SwitchMonitor)
                     {
-                        if (_sessionAuthority != null && sessionId != null)
-                        {
-                            string? activeCtrl = _sessionAuthority.ActiveControllerSessionId;
-                            if (activeCtrl != sessionId)
-                            {
-                                continue;
-                            }
-                        }
-
-                        try
-                        {
-                            InputReceived?.Invoke(this, input);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ControlServer] Error en InputReceived (cambio de monitor): {ex.Message}");
-                        }
-
-                        try
-                        {
-                            if (input.KeyCode == -2)
-                            {
-                                SourceCatalogRequested?.Invoke(this, EventArgs.Empty);
-                            }
-                            else
-                            {
-                                SwitchMonitorRequested?.Invoke(this, input.KeyCode);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ControlServer] Error en SwitchMonitorRequested: {ex.Message}");
-                        }
-
+                        HandleSwitchMonitorPacket(ctx, input);
                         continue;
                     }
 
-                    // Si hay SessionAuthority configurada, comprobar que la sesión es el controlador activo
-                    if (_sessionAuthority != null && sessionId != null)
-                    {
-                        string? activeCtrl = _sessionAuthority.ActiveControllerSessionId;
-                        if (activeCtrl != sessionId)
-                        {
-                            // No tiene el control remoto activo concedido
-                            continue;
-                        }
-                    }
+                    if (!IsAuthorizedSession(ctx.SessionId))
+                        continue;
 
-                    try
-                    {
-                        InputReceived?.Invoke(this, input);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ControlServer] Error en InputReceived: {ex.Message}");
-                    }
-
-                    try
-                    {
-                        _inputSimulator?.SimulateInput(input);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ControlServer] Error simulando entrada: {ex.Message}");
-                    }
+                    DispatchInputSafe(input);
                 }
             }
             catch (OperationCanceledException)
@@ -423,11 +315,111 @@ namespace LanScreenShare.Network.Streaming
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ControlServer] Conexión de control finalizada ({clientId}): {ex.Message}");
+                Console.WriteLine($"[ControlServer] Conexión de control finalizada ({ctx.ClientId}): {ex.Message}");
             }
             finally
             {
-                RemoveClient(clientId);
+                RemoveClient(ctx.ClientId);
+            }
+        }
+
+        private async Task<bool> HandleClipboardTextPacketAsync(ControlClientContext ctx, RemoteInputMessage input, CancellationToken token)
+        {
+            int payloadLength = input.KeyCode;
+            if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
+            {
+                Console.WriteLine($"[ControlServer] Longitud de portapapeles inválida ({payloadLength}) de {ctx.ClientId}. Desconectando.");
+                return false;
+            }
+
+            byte[] textBytes = new byte[payloadLength];
+            await ReadExactBytesAsync(ctx.Stream, textBytes, token);
+
+            if (!IsAuthorizedSession(ctx.SessionId))
+                return true;
+
+            string text = Encoding.UTF8.GetString(textBytes);
+            input.ClipboardText = text;
+
+            try { InputReceived?.Invoke(this, input); }
+            catch (Exception ex) { Console.WriteLine($"[ControlServer] Error en InputReceived (portapapeles): {ex.Message}"); }
+
+            try { ClipboardTextReceived?.Invoke(this, text); }
+            catch (Exception ex) { Console.WriteLine($"[ControlServer] Error en ClipboardTextReceived: {ex.Message}"); }
+
+            return true;
+        }
+
+        private async Task<bool> HandleSelectSourcePacketAsync(ControlClientContext ctx, RemoteInputMessage input, CancellationToken token)
+        {
+            int payloadLength = input.KeyCode;
+            if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
+            {
+                Console.WriteLine($"[ControlServer] Longitud de ID de fuente inválida ({payloadLength}) de {ctx.ClientId}. Desconectando.");
+                return false;
+            }
+
+            byte[] sourceBytes = new byte[payloadLength];
+            await ReadExactBytesAsync(ctx.Stream, sourceBytes, token);
+
+            if (!IsAuthorizedSession(ctx.SessionId))
+                return true;
+
+            string sourceId = Encoding.UTF8.GetString(sourceBytes);
+            input.ClipboardText = sourceId;
+
+            try { InputReceived?.Invoke(this, input); }
+            catch (Exception ex) { Console.WriteLine($"[ControlServer] Error en InputReceived (SelectSource): {ex.Message}"); }
+
+            try { SelectSourceRequested?.Invoke(this, sourceId); }
+            catch (Exception ex) { Console.WriteLine($"[ControlServer] Error en SelectSourceRequested: {ex.Message}"); }
+
+            return true;
+        }
+
+        private void HandleSwitchMonitorPacket(ControlClientContext ctx, RemoteInputMessage input)
+        {
+            if (!IsAuthorizedSession(ctx.SessionId))
+                return;
+
+            try { InputReceived?.Invoke(this, input); }
+            catch (Exception ex) { Console.WriteLine($"[ControlServer] Error en InputReceived (cambio de monitor): {ex.Message}"); }
+
+            try
+            {
+                if (input.KeyCode == -2)
+                {
+                    SourceCatalogRequested?.Invoke(this, EventArgs.Empty);
+                }
+                else
+                {
+                    SwitchMonitorRequested?.Invoke(this, input.KeyCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlServer] Error en SwitchMonitorRequested: {ex.Message}");
+            }
+        }
+
+        private void DispatchInputSafe(RemoteInputMessage input)
+        {
+            try
+            {
+                InputReceived?.Invoke(this, input);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlServer] Error en InputReceived: {ex.Message}");
+            }
+
+            try
+            {
+                _inputSimulator?.SimulateInput(input);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlServer] Error simulando entrada: {ex.Message}");
             }
         }
 
@@ -443,8 +435,9 @@ namespace LanScreenShare.Network.Streaming
 
         private async Task BroadcastTextPayloadAsync(InputEventType payloadType, string text)
         {
-            if (!IsRunning || _clients.IsEmpty || string.IsNullOrEmpty(text))
-                return;
+            if (!IsRunning) return;
+            if (_clients.IsEmpty) return;
+            if (string.IsNullOrEmpty(text)) return;
 
             byte[] utf8Bytes = Encoding.UTF8.GetBytes(text);
             if (utf8Bytes.Length == 0 || utf8Bytes.Length > Lsi2ControlPacket.MaxClipboardPayloadBytes)
@@ -497,12 +490,13 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
-        private static async Task ReadExactBytesAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken token)
+        private static async Task ReadExactBytesAsync(Stream stream, Memory<byte> buffer, CancellationToken token)
         {
             int totalBytesRead = 0;
+            int count = buffer.Length;
             while (totalBytesRead < count)
             {
-                int bytesRead = await stream.ReadAsync(buffer.AsMemory(offset + totalBytesRead, count - totalBytesRead), token);
+                int bytesRead = await stream.ReadAsync(buffer.Slice(totalBytesRead, count - totalBytesRead), token);
                 if (bytesRead == 0)
                 {
                     throw new EndOfStreamException("Cliente desconectó canal de control.");

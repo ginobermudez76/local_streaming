@@ -145,103 +145,23 @@ namespace LanScreenShare.Network.Streaming
                     switch (type)
                     {
                         case FileTransferPacketType.Offer:
-                        {
-                            byte[] jsonBytes = new byte[payloadLength];
-                            await FileTransferPacket.ReadExactBytesAsync(_stream, jsonBytes, 0, (int)payloadLength, ct);
-                            var offer = JsonSerializer.Deserialize<FileTransferOfferDto>(jsonBytes);
-                            if (offer != null && !string.IsNullOrWhiteSpace(offer.TransferId))
-                            {
-                                await HandleInboundOfferAsync(offer, ct);
-                            }
+                            await HandleOfferPacketAsync(payloadLength, ct);
                             break;
-                        }
                         case FileTransferPacketType.Accept:
-                        {
-                            byte[] jsonBytes = new byte[payloadLength];
-                            await FileTransferPacket.ReadExactBytesAsync(_stream, jsonBytes, 0, (int)payloadLength, ct);
-                            var accept = JsonSerializer.Deserialize<FileTransferAcceptDto>(jsonBytes);
-                            if (accept != null && _outboundAcceptSignals.TryGetValue(accept.TransferId, out var tcs))
-                            {
-                                tcs.TrySetResult(true);
-                            }
+                            await HandleAcceptPacketAsync(payloadLength, ct);
                             break;
-                        }
                         case FileTransferPacketType.Reject:
-                        {
-                            byte[] jsonBytes = new byte[payloadLength];
-                            await FileTransferPacket.ReadExactBytesAsync(_stream, jsonBytes, 0, (int)payloadLength, ct);
-                            var reject = JsonSerializer.Deserialize<FileTransferRejectDto>(jsonBytes);
-                            if (reject != null && _outboundAcceptSignals.TryGetValue(reject.TransferId, out var tcs))
-                            {
-                                tcs.TrySetResult(false);
-                            }
+                            await HandleRejectPacketAsync(payloadLength, ct);
                             break;
-                        }
                         case FileTransferPacketType.Chunk:
-                        {
-                            byte[] metaBuffer = new byte[24];
-                            await FileTransferPacket.ReadExactBytesAsync(_stream, metaBuffer, 0, 24, ct);
-
-                            Guid transferId = new(metaBuffer.AsSpan(0, 16));
-                            long offset = BinaryPrimitives.ReadInt64BigEndian(metaBuffer.AsSpan(16, 8));
-                            int dataLength = (int)(payloadLength - 24);
-
-                            byte[] chunkData = ArrayPool<byte>.Shared.Rent(dataLength);
-                            try
-                            {
-                                await FileTransferPacket.ReadExactBytesAsync(_stream, chunkData, 0, dataLength, ct);
-
-                                string idStr = transferId.ToString("D");
-                                if (_inboundTransfers.TryGetValue(idStr, out var inbound))
-                                {
-                                    await HandleInboundChunkAsync(inbound, offset, chunkData.AsMemory(0, dataLength));
-                                }
-                            }
-                            finally
-                            {
-                                ArrayPool<byte>.Shared.Return(chunkData);
-                            }
+                            await HandleChunkPacketAsync(payloadLength, ct);
                             break;
-                        }
                         case FileTransferPacketType.Complete:
-                        {
-                            byte[] jsonBytes = new byte[payloadLength];
-                            await FileTransferPacket.ReadExactBytesAsync(_stream, jsonBytes, 0, (int)payloadLength, ct);
-                            var complete = JsonSerializer.Deserialize<FileTransferCompleteDto>(jsonBytes);
-                            if (complete != null && _inboundTransfers.TryRemove(complete.TransferId, out var inbound))
-                            {
-                                inbound.Dispose();
-                                TransferCompleted?.Invoke(this, new FileTransferCompleted
-                                {
-                                    TransferId = inbound.TransferId,
-                                    FileName = inbound.OriginalFileName,
-                                    FilePath = inbound.DestinationPath,
-                                    FileSize = inbound.FileSize,
-                                    IsUpload = false
-                                });
-                                Console.WriteLine($"[FileTransferClient] Archivo recibido con éxito: {inbound.DestinationPath} ({inbound.FileSize} bytes)");
-                            }
+                            await HandleCompletePacketAsync(payloadLength, ct);
                             break;
-                        }
                         case FileTransferPacketType.Cancel:
-                        {
-                            byte[] jsonBytes = new byte[payloadLength];
-                            await FileTransferPacket.ReadExactBytesAsync(_stream, jsonBytes, 0, (int)payloadLength, ct);
-                            var cancel = JsonSerializer.Deserialize<FileTransferCancelDto>(jsonBytes);
-                            if (cancel != null && _inboundTransfers.TryRemove(cancel.TransferId, out var inbound))
-                            {
-                                inbound.Dispose();
-                                try { if (File.Exists(inbound.DestinationPath)) File.Delete(inbound.DestinationPath); } catch { }
-                                TransferError?.Invoke(this, new FileTransferError
-                                {
-                                    TransferId = inbound.TransferId,
-                                    FileName = inbound.OriginalFileName,
-                                    ErrorMessage = cancel.Reason ?? "Transferencia cancelada por el remitente.",
-                                    IsUpload = false
-                                });
-                            }
+                            await HandleCancelPacketAsync(payloadLength, ct);
                             break;
-                        }
                     }
                 }
             }
@@ -257,6 +177,107 @@ namespace LanScreenShare.Network.Streaming
                 }
                 _inboundTransfers.Clear();
                 Disconnected?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        private static async Task<T?> ReadJsonDtoAsync<T>(Stream stream, uint payloadLength, CancellationToken ct)
+        {
+            byte[] jsonBytes = new byte[payloadLength];
+            await FileTransferPacket.ReadExactBytesAsync(stream, jsonBytes, 0, (int)payloadLength, ct);
+            return JsonSerializer.Deserialize<T>(jsonBytes);
+        }
+
+        private async Task HandleOfferPacketAsync(uint payloadLength, CancellationToken ct)
+        {
+            if (_stream == null) return;
+            var offer = await ReadJsonDtoAsync<FileTransferOfferDto>(_stream, payloadLength, ct);
+            if (offer != null && !string.IsNullOrWhiteSpace(offer.TransferId))
+            {
+                await HandleInboundOfferAsync(offer, ct);
+            }
+        }
+
+        private async Task HandleAcceptPacketAsync(uint payloadLength, CancellationToken ct)
+        {
+            if (_stream == null) return;
+            var accept = await ReadJsonDtoAsync<FileTransferAcceptDto>(_stream, payloadLength, ct);
+            if (accept != null && _outboundAcceptSignals.TryGetValue(accept.TransferId, out var tcs))
+            {
+                tcs.TrySetResult(true);
+            }
+        }
+
+        private async Task HandleRejectPacketAsync(uint payloadLength, CancellationToken ct)
+        {
+            if (_stream == null) return;
+            var reject = await ReadJsonDtoAsync<FileTransferRejectDto>(_stream, payloadLength, ct);
+            if (reject != null && _outboundAcceptSignals.TryGetValue(reject.TransferId, out var tcs))
+            {
+                tcs.TrySetResult(false);
+            }
+        }
+
+        private async Task HandleChunkPacketAsync(uint payloadLength, CancellationToken ct)
+        {
+            if (_stream == null) return;
+            byte[] metaBuffer = new byte[24];
+            await FileTransferPacket.ReadExactBytesAsync(_stream, metaBuffer, 0, 24, ct);
+
+            Guid transferId = new(metaBuffer.AsSpan(0, 16));
+            long offset = BinaryPrimitives.ReadInt64BigEndian(metaBuffer.AsSpan(16, 8));
+            int dataLength = (int)(payloadLength - 24);
+
+            byte[] chunkData = ArrayPool<byte>.Shared.Rent(dataLength);
+            try
+            {
+                await FileTransferPacket.ReadExactBytesAsync(_stream, chunkData, 0, dataLength, ct);
+
+                string idStr = transferId.ToString("D");
+                if (_inboundTransfers.TryGetValue(idStr, out var inbound))
+                {
+                    await HandleInboundChunkAsync(inbound, offset, chunkData.AsMemory(0, dataLength));
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(chunkData);
+            }
+        }
+
+        private async Task HandleCompletePacketAsync(uint payloadLength, CancellationToken ct)
+        {
+            if (_stream == null) return;
+            var complete = await ReadJsonDtoAsync<FileTransferCompleteDto>(_stream, payloadLength, ct);
+            if (complete != null && _inboundTransfers.TryRemove(complete.TransferId, out var inbound))
+            {
+                inbound.Dispose();
+                TransferCompleted?.Invoke(this, new FileTransferCompleted
+                {
+                    TransferId = inbound.TransferId,
+                    FileName = inbound.OriginalFileName,
+                    FilePath = inbound.DestinationPath,
+                    FileSize = inbound.FileSize,
+                    IsUpload = false
+                });
+                Console.WriteLine($"[FileTransferClient] Archivo recibido con éxito: {inbound.DestinationPath} ({inbound.FileSize} bytes)");
+            }
+        }
+
+        private async Task HandleCancelPacketAsync(uint payloadLength, CancellationToken ct)
+        {
+            if (_stream == null) return;
+            var cancel = await ReadJsonDtoAsync<FileTransferCancelDto>(_stream, payloadLength, ct);
+            if (cancel != null && _inboundTransfers.TryRemove(cancel.TransferId, out var inbound))
+            {
+                inbound.Dispose();
+                try { if (File.Exists(inbound.DestinationPath)) File.Delete(inbound.DestinationPath); } catch { }
+                TransferError?.Invoke(this, new FileTransferError
+                {
+                    TransferId = inbound.TransferId,
+                    FileName = inbound.OriginalFileName,
+                    ErrorMessage = cancel.Reason ?? "Transferencia cancelada por el remitente.",
+                    IsUpload = false
+                });
             }
         }
 

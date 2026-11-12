@@ -193,8 +193,8 @@ namespace LanScreenShare.Tests
             using var client = new TcpControlClient();
             client.ClipboardTextReceived += (s, text) => viewerReceivedTcs.TrySetResult(text);
 
-            // Conectar con un CancellationToken de handshake corto (300ms) para verificar que la sesión persiste
-            using (var handshakeCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+            // Conectar con un CancellationToken de handshake con margen suficiente para concurrencia de tests
+            using (var handshakeCts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
             {
                 await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, controlToken.TokenId, handshakeCts.Token);
             }

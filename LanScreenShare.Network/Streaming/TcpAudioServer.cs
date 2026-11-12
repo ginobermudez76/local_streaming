@@ -126,7 +126,7 @@ namespace LanScreenShare.Network.Streaming
 
                                     // 2. Leer mensaje de fijación de canal (CHANNEL_ATTACH, 37 bytes)
                                     byte[] attachBuffer = new byte[ChannelAttachmentMessage.MessageSize];
-                                    await ReadExactBytesAsync(sslStream, attachBuffer, 0, attachBuffer.Length, linkedCts.Token);
+                                    await ReadExactBytesAsync(sslStream, attachBuffer, linkedCts.Token);
 
                                     if (!ChannelAttachmentMessage.TryDeserialize(
                                             attachBuffer,
@@ -208,7 +208,7 @@ namespace LanScreenShare.Network.Streaming
                 while (!token.IsCancellationRequested && client.Connected)
                 {
                     // Leer encabezado de audio recibido del cliente (ej: micrófono del visor)
-                    await ReadExactBytesAsync(stream, headerBuffer, 0, 28, token);
+                    await ReadExactBytesAsync(stream, headerBuffer, token);
 
                     uint magic;
                     int dataLength;
@@ -232,14 +232,20 @@ namespace LanScreenShare.Network.Streaming
                         timestamp = reader.ReadInt64();
                     }
 
-                    if (magic != AudioHeaderMagic || dataLength <= 0 || dataLength > 10 * 1024 * 1024)
+                    if (magic != AudioHeaderMagic)
                     {
-                        Console.WriteLine($"[AudioServer] Paquete de audio inválido recibido del cliente {clientId} (Magic: {magic:X}, Length: {dataLength})");
+                        Console.WriteLine($"[AudioServer] Paquete de audio con Magic inválido ({magic:X}) de {clientId}");
+                        break;
+                    }
+
+                    if (dataLength <= 0 || dataLength > 10 * 1024 * 1024)
+                    {
+                        Console.WriteLine($"[AudioServer] Longitud de audio inválida ({dataLength}) de {clientId}");
                         break;
                     }
 
                     byte[] audioData = new byte[dataLength];
-                    await ReadExactBytesAsync(stream, audioData, 0, dataLength, token);
+                    await ReadExactBytesAsync(stream, audioData, token);
 
                     var chunk = new CapturedAudioChunk
                     {
@@ -280,12 +286,13 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
-        private static async Task ReadExactBytesAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken token)
+        private static async Task ReadExactBytesAsync(Stream stream, Memory<byte> buffer, CancellationToken token)
         {
             int totalBytesRead = 0;
+            int count = buffer.Length;
             while (totalBytesRead < count)
             {
-                int bytesRead = await stream.ReadAsync(buffer.AsMemory(offset + totalBytesRead, count - totalBytesRead), token);
+                int bytesRead = await stream.ReadAsync(buffer.Slice(totalBytesRead, count - totalBytesRead), token);
                 if (bytesRead == 0)
                 {
                     throw new EndOfStreamException("Cliente desconectó canal de audio.");
@@ -296,8 +303,9 @@ namespace LanScreenShare.Network.Streaming
 
         public async Task BroadcastAudioAsync(CapturedAudioChunk chunk)
         {
-            if (!IsRunning || _clients.IsEmpty || chunk.Data == null || chunk.Data.Length == 0)
-                return;
+            if (!IsRunning) return;
+            if (_clients.IsEmpty) return;
+            if (chunk.Data == null || chunk.Data.Length == 0) return;
 
             byte[] packet;
             using (var ms = new MemoryStream(28 + chunk.Data.Length))

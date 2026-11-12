@@ -247,18 +247,26 @@ namespace LanScreenShare.Core.Services
                 }
 
                 // 4. Evaluar congestión moderada
-                if (rtt >= RttThresholdCongestionMs || (rtt > _baselineRttMs + 20 && rtt > 30))
+                if (IsModerateCongestion(rtt))
                 {
                     HandleModerateCongestion($"RTT elevado ({rtt} ms)", now);
                     return;
                 }
 
                 // 5. Evaluar condiciones óptimas para incremento aditivo
-                if (rtt < RttThresholdOptimalMs && (now - _lastAdjustmentTimeMs >= IncreaseCooldownMs))
+                if (rtt < RttThresholdOptimalMs && now - _lastAdjustmentTimeMs >= IncreaseCooldownMs)
                 {
                     HandleOptimalNetwork(telemetry, now);
                 }
             }
+        }
+
+        private bool IsModerateCongestion(int rtt)
+        {
+            if (rtt >= RttThresholdCongestionMs)
+                return true;
+
+            return rtt > 30 && rtt > _baselineRttMs + 20;
         }
 
         private void HandleSevereCongestion(string reason, long now)

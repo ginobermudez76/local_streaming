@@ -27,6 +27,15 @@ namespace LanScreenShare.Desktop
             InitializeComponent();
             _initialSourceId = initialSourceId;
 
+            InitializeHeaderAndKeyboard();
+            InitializeLists();
+            InitializeTabsAndActions();
+
+            LoadSources();
+        }
+
+        private void InitializeHeaderAndKeyboard()
+        {
             var headerDrag = this.FindControl<Grid>("HeaderDragGrid");
             if (headerDrag != null)
             {
@@ -53,7 +62,10 @@ namespace LanScreenShare.Desktop
                     e.Handled = true;
                 }
             };
+        }
 
+        private void InitializeLists()
+        {
             var screensList = this.FindControl<ListBox>("ScreensListBox");
             if (screensList != null)
             {
@@ -69,75 +81,53 @@ namespace LanScreenShare.Desktop
                 windowsList.SelectionChanged += WindowsList_SelectionChanged;
                 windowsList.DoubleTapped += (s, e) => ConfirmSelection();
             }
-
-            var screensTabBtn = this.FindControl<Button>("ScreensTabButton");
-            if (screensTabBtn != null)
-            {
-                screensTabBtn.Click += (s, e) => SwitchTab(isWindowsTab: false);
-            }
-
-            var windowsTabBtn = this.FindControl<Button>("WindowsTabButton");
-            if (windowsTabBtn != null)
-            {
-                windowsTabBtn.Click += (s, e) => SwitchTab(isWindowsTab: true);
-            }
-
-            var refreshBtn = this.FindControl<Button>("RefreshWindowsButton");
-            if (refreshBtn != null)
-            {
-                refreshBtn.Click += (s, e) =>
-                {
-                    var prevId = (windowsList?.SelectedItem as CaptureSource)?.Id;
-                    LoadWindows();
-                    UpdateCountLabel();
-                    if (windowsList != null && _windows.Count > 0)
-                    {
-                        var match = prevId != null ? _windows.FirstOrDefault(w => w.Id == prevId) : null;
-                        windowsList.SelectedItem = match ?? _windows[0];
-                    }
-                };
-            }
-
-            var closeBtn = this.FindControl<Button>("CloseButton");
-            if (closeBtn != null)
-            {
-                closeBtn.Click += (s, e) =>
-                {
-                    SelectedSource = null;
-                    Close(null);
-                };
-            }
-
-            var cancelBtn = this.FindControl<Button>("CancelButton");
-            if (cancelBtn != null)
-            {
-                cancelBtn.Click += (s, e) =>
-                {
-                    SelectedSource = null;
-                    Close(null);
-                };
-            }
-
-            var selectBtn = this.FindControl<Button>("SelectButton");
-            if (selectBtn != null)
-            {
-                selectBtn.Click += (s, e) => ConfirmSelection();
-            }
-
-            LoadSources();
         }
 
-        private void SwitchTab(bool isWindowsTab)
+        private void InitializeTabsAndActions()
         {
-            _isWindowsTabActive = isWindowsTab;
-
             var screensTabBtn = this.FindControl<Button>("ScreensTabButton");
-            var screensTabIcon = this.FindControl<PathIcon>("ScreensTabIcon");
-            var screensTabText = this.FindControl<TextBlock>("ScreensTabText");
+            if (screensTabBtn != null) screensTabBtn.Click += (s, e) => SwitchTab(isWindowsTab: false);
 
             var windowsTabBtn = this.FindControl<Button>("WindowsTabButton");
-            var windowsTabIcon = this.FindControl<PathIcon>("WindowsTabIcon");
-            var windowsTabText = this.FindControl<TextBlock>("WindowsTabText");
+            if (windowsTabBtn != null) windowsTabBtn.Click += (s, e) => SwitchTab(isWindowsTab: true);
+
+            var refreshBtn = this.FindControl<Button>("RefreshWindowsButton");
+            if (refreshBtn != null) refreshBtn.Click += (s, e) => RefreshWindowsList();
+
+            var closeBtn = this.FindControl<Button>("CloseButton");
+            if (closeBtn != null) closeBtn.Click += (s, e) => CancelAndClose();
+
+            var cancelBtn = this.FindControl<Button>("CancelButton");
+            if (cancelBtn != null) cancelBtn.Click += (s, e) => CancelAndClose();
+
+            var selectBtn = this.FindControl<Button>("SelectButton");
+            if (selectBtn != null) selectBtn.Click += (s, e) => ConfirmSelection();
+        }
+
+        private void CancelAndClose()
+        {
+            SelectedSource = null;
+            Close(null);
+        }
+
+        private void RefreshWindowsList()
+        {
+            var windowsList = this.FindControl<ListBox>("WindowsListBox");
+            var prevId = (windowsList?.SelectedItem as CaptureSource)?.Id;
+            LoadWindows();
+            UpdateCountLabel();
+            if (windowsList != null && _windows.Count > 0)
+            {
+                var match = prevId != null ? _windows.FirstOrDefault(w => w.Id == prevId) : null;
+                windowsList.SelectedItem = match ?? _windows[0];
+            }
+        }
+
+        private void SetTabButtonVisuals(string tabPrefix, bool isActive)
+        {
+            var tabBtn = this.FindControl<Button>($"{tabPrefix}TabButton");
+            var tabIcon = this.FindControl<PathIcon>($"{tabPrefix}TabIcon");
+            var tabText = this.FindControl<TextBlock>($"{tabPrefix}TabText");
 
             var activeBg = new SolidColorBrush(Color.Parse("#1E3252"));
             var inactiveBg = Brushes.Transparent;
@@ -145,13 +135,15 @@ namespace LanScreenShare.Desktop
             var activeTextBrush = new SolidColorBrush(Color.Parse("#F8FAFC"));
             var inactiveBrush = new SolidColorBrush(Color.Parse("#8B9BB0"));
 
-            if (screensTabBtn != null) screensTabBtn.Background = !isWindowsTab ? activeBg : inactiveBg;
-            if (screensTabIcon != null) screensTabIcon.Foreground = !isWindowsTab ? activeIconBrush : inactiveBrush;
-            if (screensTabText != null) screensTabText.Foreground = !isWindowsTab ? activeTextBrush : inactiveBrush;
+            if (tabBtn != null) tabBtn.Background = isActive ? activeBg : inactiveBg;
+            if (tabIcon != null) tabIcon.Foreground = isActive ? activeIconBrush : inactiveBrush;
+            if (tabText != null) tabText.Foreground = isActive ? activeTextBrush : inactiveBrush;
+        }
 
-            if (windowsTabBtn != null) windowsTabBtn.Background = isWindowsTab ? activeBg : inactiveBg;
-            if (windowsTabIcon != null) windowsTabIcon.Foreground = isWindowsTab ? activeIconBrush : inactiveBrush;
-            if (windowsTabText != null) windowsTabText.Foreground = isWindowsTab ? activeTextBrush : inactiveBrush;
+        private void UpdateTabVisuals(bool isWindowsTab)
+        {
+            SetTabButtonVisuals("Screens", !isWindowsTab);
+            SetTabButtonVisuals("Windows", isWindowsTab);
 
             var screensScroll = this.FindControl<ScrollViewer>("ScreensScrollViewer");
             var windowsScroll = this.FindControl<ScrollViewer>("WindowsScrollViewer");
@@ -160,42 +152,55 @@ namespace LanScreenShare.Desktop
             if (screensScroll != null) screensScroll.IsVisible = !isWindowsTab;
             if (windowsScroll != null) windowsScroll.IsVisible = isWindowsTab;
             if (refreshBtn != null) refreshBtn.IsVisible = isWindowsTab;
+        }
 
-            UpdateCountLabel();
+        private void SelectActiveWindowTab()
+        {
+            var windowsList = this.FindControl<ListBox>("WindowsListBox");
+            if (windowsList?.SelectedItem is CaptureSource winSource)
+            {
+                SelectedSource = winSource;
+                UpdateStatusText(winSource);
+            }
+            else if (windowsList != null && _windows.Count > 0)
+            {
+                windowsList.SelectedIndex = 0;
+            }
+        }
 
+        private void SelectActiveScreenTab()
+        {
+            var screensList = this.FindControl<ListBox>("ScreensListBox");
+            if (screensList?.SelectedItem is CaptureSource scrSource)
+            {
+                SelectedSource = scrSource;
+                UpdateStatusText(scrSource);
+            }
+            else if (screensList != null && _screens.Count > 0)
+            {
+                var primary = _screens.FirstOrDefault(s => s.IsPrimary) ?? _screens[0];
+                screensList.SelectedItem = primary;
+            }
+        }
+
+        private void UpdateTabSelection(bool isWindowsTab)
+        {
             if (isWindowsTab)
             {
-                var windowsList = this.FindControl<ListBox>("WindowsListBox");
-                if (windowsList != null)
-                {
-                    if (windowsList.SelectedItem is CaptureSource winSource)
-                    {
-                        SelectedSource = winSource;
-                        UpdateStatusText(winSource);
-                    }
-                    else if (_windows.Count > 0)
-                    {
-                        windowsList.SelectedIndex = 0;
-                    }
-                }
+                SelectActiveWindowTab();
             }
             else
             {
-                var screensList = this.FindControl<ListBox>("ScreensListBox");
-                if (screensList != null)
-                {
-                    if (screensList.SelectedItem is CaptureSource scrSource)
-                    {
-                        SelectedSource = scrSource;
-                        UpdateStatusText(scrSource);
-                    }
-                    else if (_screens.Count > 0)
-                    {
-                        var primary = _screens.FirstOrDefault(s => s.IsPrimary) ?? _screens[0];
-                        screensList.SelectedItem = primary;
-                    }
-                }
+                SelectActiveScreenTab();
             }
+        }
+
+        private void SwitchTab(bool isWindowsTab)
+        {
+            _isWindowsTabActive = isWindowsTab;
+            UpdateTabVisuals(isWindowsTab);
+            UpdateCountLabel();
+            UpdateTabSelection(isWindowsTab);
         }
 
         private void UpdateCountLabel()
@@ -217,33 +222,46 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private bool TrySelectInitialWindow(string initialId)
+        {
+            var windowsList = this.FindControl<ListBox>("WindowsListBox");
+            var windowMatch = _windows.FirstOrDefault(w => w.Id == initialId);
+            if (windowMatch != null)
+            {
+                if (windowsList != null) windowsList.SelectedItem = windowMatch;
+                SwitchTab(isWindowsTab: true);
+                return true;
+            }
+            return false;
+        }
+
+        private bool TrySelectInitialScreen(string initialId)
+        {
+            var screensList = this.FindControl<ListBox>("ScreensListBox");
+            var screenMatch = _screens.FirstOrDefault(s => s.Id == initialId);
+            if (screenMatch != null)
+            {
+                if (screensList != null) screensList.SelectedItem = screenMatch;
+                SwitchTab(isWindowsTab: false);
+                return true;
+            }
+            return false;
+        }
+
+        private bool TrySelectInitialSource(string initialId) =>
+            TrySelectInitialWindow(initialId) || TrySelectInitialScreen(initialId);
+
         private void LoadSources()
         {
             LoadScreens();
             LoadWindows();
 
-            var screensList = this.FindControl<ListBox>("ScreensListBox");
-            var windowsList = this.FindControl<ListBox>("WindowsListBox");
-
-            if (!string.IsNullOrEmpty(_initialSourceId))
+            if (!string.IsNullOrEmpty(_initialSourceId) && TrySelectInitialSource(_initialSourceId))
             {
-                var windowMatch = _windows.FirstOrDefault(w => w.Id == _initialSourceId);
-                if (windowMatch != null)
-                {
-                    if (windowsList != null) windowsList.SelectedItem = windowMatch;
-                    SwitchTab(isWindowsTab: true);
-                    return;
-                }
-
-                var screenMatch = _screens.FirstOrDefault(s => s.Id == _initialSourceId);
-                if (screenMatch != null)
-                {
-                    if (screensList != null) screensList.SelectedItem = screenMatch;
-                    SwitchTab(isWindowsTab: false);
-                    return;
-                }
+                return;
             }
 
+            var screensList = this.FindControl<ListBox>("ScreensListBox");
             if (_screens.Count > 0 && screensList != null)
             {
                 var primary = _screens.FirstOrDefault(s => s.IsPrimary) ?? _screens[0];

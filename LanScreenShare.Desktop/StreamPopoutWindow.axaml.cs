@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -36,7 +36,7 @@ namespace LanScreenShare.Desktop
         private bool _isRecenteringMouse;
         private bool _isFullscreen;
         private WindowState _previousWindowState = WindowState.Normal;
-        private readonly DispatcherTimer _headerAutoHideTimer;
+        private DispatcherTimer _headerAutoHideTimer = null!;
         private bool _isMouseOverHeaderBar;
         private DispatcherTimer? _gameModeBannerTimer;
         private Stretch _currentStretch = Stretch.Uniform;
@@ -46,20 +46,22 @@ namespace LanScreenShare.Desktop
         public StreamPopoutWindow()
         {
             InitializeComponent();
+            InitializeHeaderAndAutoHide();
+            InitializeScreenImageEvents();
+            InitializeRemoteControlButtons();
+            InitializeAudioControls();
+            InitializeWindowButtons();
+        }
 
-            _headerAutoHideTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(2.5)
-            };
+        private void InitializeHeaderAndAutoHide()
+        {
+            _headerAutoHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
             _headerAutoHideTimer.Tick += (s, e) =>
             {
                 if (_isFullscreen && !_isMouseOverHeaderBar)
                 {
                     var header = this.FindControl<Border>("StreamHeaderBar");
-                    if (header != null)
-                    {
-                        header.IsVisible = false;
-                    }
+                    if (header != null) header.IsVisible = false;
                     _headerAutoHideTimer.Stop();
                 }
             };
@@ -72,7 +74,6 @@ namespace LanScreenShare.Desktop
                     _isMouseOverHeaderBar = true;
                     _headerAutoHideTimer.Stop();
                 };
-
                 headerBar.PointerExited += (s, e) =>
                 {
                     _isMouseOverHeaderBar = false;
@@ -85,17 +86,16 @@ namespace LanScreenShare.Desktop
             }
 
             this.AddHandler(InputElement.PointerMovedEvent, Popout_GlobalPointerMoved, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        }
 
+        private void InitializeScreenImageEvents()
+        {
             var screenImage = this.FindControl<Image>("ScreenImage");
             if (screenImage != null)
             {
                 screenImage.DoubleTapped += (s, e) =>
                 {
-                    // Si el control remoto o el modo juego están activos, no alternar pantalla completa
-                    // para permitir abrir carpetas, archivos y hacer clics rápidos en juegos del anfitrión
-                    if (_isRemoteControlEnabled || _isGameMode)
-                        return;
-
+                    if (_isRemoteControlEnabled || _isGameMode) return;
                     ToggleFullscreen();
                 };
                 screenImage.PointerMoved += ScreenImage_PointerMoved;
@@ -105,23 +105,20 @@ namespace LanScreenShare.Desktop
                 screenImage.KeyDown += ScreenImage_KeyDown;
                 screenImage.KeyUp += ScreenImage_KeyUp;
             }
+        }
 
+        private void InitializeRemoteControlButtons()
+        {
             var remoteControlBtn = this.FindControl<ToggleButton>("RemoteControlButton");
             if (remoteControlBtn != null)
             {
-                remoteControlBtn.IsCheckedChanged += (s, e) =>
-                {
-                    RemoteControlToggled?.Invoke(remoteControlBtn.IsChecked == true);
-                };
+                remoteControlBtn.IsCheckedChanged += (s, e) => RemoteControlToggled?.Invoke(remoteControlBtn.IsChecked == true);
             }
 
             var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
             if (gameModeBtn != null)
             {
-                gameModeBtn.IsCheckedChanged += (s, e) =>
-                {
-                    GameModeToggled?.Invoke();
-                };
+                gameModeBtn.IsCheckedChanged += (s, e) => GameModeToggled?.Invoke();
             }
 
             var switchMonitorBtn = this.FindControl<Button>("SwitchMonitorButton");
@@ -138,12 +135,12 @@ namespace LanScreenShare.Desktop
 
             this.AddHandler(DragDrop.DropEvent, Popout_Drop);
             this.AddHandler(DragDrop.DragOverEvent, Popout_DragOver);
+        }
 
+        private void InitializeAudioControls()
+        {
             var muteBtn = this.FindControl<Button>("AudioMuteButton");
-            if (muteBtn != null)
-            {
-                muteBtn.Click += (s, e) => MuteToggled?.Invoke();
-            }
+            if (muteBtn != null) muteBtn.Click += (s, e) => MuteToggled?.Invoke();
 
             var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
             if (volumeSlider != null)
@@ -160,10 +157,7 @@ namespace LanScreenShare.Desktop
             }
 
             var micMuteBtn = this.FindControl<Button>("MicMuteButton");
-            if (micMuteBtn != null)
-            {
-                micMuteBtn.Click += (s, e) => MicMuteToggled?.Invoke();
-            }
+            if (micMuteBtn != null) micMuteBtn.Click += (s, e) => MicMuteToggled?.Invoke();
 
             var micVolumeSlider = this.FindControl<Slider>("MicVolumeSlider");
             if (micVolumeSlider != null)
@@ -178,7 +172,10 @@ namespace LanScreenShare.Desktop
                     }
                 };
             }
+        }
 
+        private void InitializeWindowButtons()
+        {
             var stretchBtn = this.FindControl<Button>("StretchModeButton");
             if (stretchBtn != null)
             {
@@ -315,6 +312,36 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void ShowGameModeBanner(bool isGameMode, Border? banner, TextBlock? bannerText, PathIcon? bannerIcon)
+        {
+            if (banner == null || bannerText == null) return;
+
+            banner.IsVisible = true;
+            string iconName = isGameMode ? "Icon3dRotation" : "IconLockOpen";
+            string colorHex = isGameMode ? "#38BDF8" : "#FBBF24";
+            string text = isGameMode
+                ? "Modo 3D Activo — Presiona Ctrl + Alt + L para liberar el cursor"
+                : "Mouse Liberado — Presiona Ctrl + Alt + L para recapturar";
+
+            if (bannerIcon != null)
+            {
+                bannerIcon.Data = (this.FindResource(iconName) as StreamGeometry)!;
+                bannerIcon.Foreground = new SolidColorBrush(Color.Parse(colorHex));
+            }
+            bannerText.Text = text;
+            bannerText.Foreground = new SolidColorBrush(Color.Parse(colorHex));
+
+            double seconds = isGameMode ? 3.0 : 2.5;
+            _gameModeBannerTimer?.Stop();
+            _gameModeBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
+            _gameModeBannerTimer.Tick += (s, e) =>
+            {
+                banner.IsVisible = false;
+                _gameModeBannerTimer?.Stop();
+            };
+            _gameModeBannerTimer.Start();
+        }
+
         public void SetGameModeState(bool isGameMode)
         {
             _isGameMode = isGameMode;
@@ -330,54 +357,12 @@ namespace LanScreenShare.Desktop
                 gameModeBtn.Background = isGameMode ? new SolidColorBrush(Color.Parse("#2563EB")) : new SolidColorBrush(Color.Parse("#27272A"));
             }
 
-            if (isGameMode)
+            if (screenImage != null)
             {
-                if (screenImage != null) screenImage.Cursor = new Cursor(StandardCursorType.None);
-                if (banner != null && bannerText != null)
-                {
-                    banner.IsVisible = true;
-                    if (bannerIcon != null)
-                    {
-                        bannerIcon.Data = (this.FindResource("Icon3dRotation") as StreamGeometry)!;
-                        bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
-                    }
-                    bannerText.Text = "Modo 3D Activo — Presiona Ctrl + Alt + L para liberar el cursor";
-                    bannerText.Foreground = new SolidColorBrush(Color.Parse("#38BDF8"));
-
-                    _gameModeBannerTimer?.Stop();
-                    _gameModeBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-                    _gameModeBannerTimer.Tick += (s, e) =>
-                    {
-                        banner.IsVisible = false;
-                        _gameModeBannerTimer?.Stop();
-                    };
-                    _gameModeBannerTimer.Start();
-                }
+                screenImage.Cursor = isGameMode ? new Cursor(StandardCursorType.None) : Cursor.Default;
             }
-            else
-            {
-                if (screenImage != null) screenImage.Cursor = Cursor.Default;
-                if (banner != null && bannerText != null)
-                {
-                    banner.IsVisible = true;
-                    if (bannerIcon != null)
-                    {
-                        bannerIcon.Data = (this.FindResource("IconLockOpen") as StreamGeometry)!;
-                        bannerIcon.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
-                    }
-                    bannerText.Text = "Mouse Liberado — Presiona Ctrl + Alt + L para recapturar";
-                    bannerText.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
 
-                    _gameModeBannerTimer?.Stop();
-                    _gameModeBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
-                    _gameModeBannerTimer.Tick += (s, e) =>
-                    {
-                        banner.IsVisible = false;
-                        _gameModeBannerTimer?.Stop();
-                    };
-                    _gameModeBannerTimer.Start();
-                }
-            }
+            ShowGameModeBanner(isGameMode, banner, bannerText, bannerIcon);
         }
 
         public void SetVolume(float volume, bool isMuted)
@@ -575,8 +560,7 @@ namespace LanScreenShare.Desktop
 
             var p = e.GetPosition(screenImage);
 
-            if (p.X < offsetX || p.X > offsetX + renderedW ||
-                p.Y < offsetY || p.Y > offsetY + renderedH)
+            if (IsOutsideBounds(p.X, offsetX, renderedW) || IsOutsideBounds(p.Y, offsetY, renderedH))
             {
                 return false;
             }
@@ -586,12 +570,18 @@ namespace LanScreenShare.Desktop
             return true;
         }
 
+        private static bool IsOutsideBounds(double pos, double offset, double size) =>
+            pos < offset || pos > offset + size;
+
+        private static bool HasValidBounds(Control? c) =>
+            c != null && c.Bounds.Width > 0 && c.Bounds.Height > 0;
+
         private Avalonia.PixelPoint GetScreenImageCenterOnScreen()
         {
             var screenImage = this.FindControl<Image>("ScreenImage");
-            if (screenImage != null && screenImage.Bounds.Width > 0 && screenImage.Bounds.Height > 0)
+            if (HasValidBounds(screenImage))
             {
-                int imgCenterX = this.Position.X + (int)Math.Round(screenImage.Bounds.X + (screenImage.Bounds.Width / 2.0));
+                int imgCenterX = this.Position.X + (int)Math.Round(screenImage!.Bounds.X + (screenImage.Bounds.Width / 2.0));
                 int imgCenterY = this.Position.Y + (int)Math.Round(screenImage.Bounds.Y + (screenImage.Bounds.Height / 2.0));
                 return new Avalonia.PixelPoint(imgCenterX, imgCenterY);
             }
@@ -601,41 +591,44 @@ namespace LanScreenShare.Desktop
             return new Avalonia.PixelPoint(winCenterX, winCenterY);
         }
 
+        private void HandleGameModePointerMove()
+        {
+            if (_isRecenteringMouse)
+            {
+                _isRecenteringMouse = false;
+                return;
+            }
+
+            if (!OperatingSystem.IsWindows()) return;
+
+            var center = GetScreenImageCenterOnScreen();
+            if (GetCursorPos(out POINT curPos))
+            {
+                int dx = curPos.X - center.X;
+                int dy = curPos.Y - center.Y;
+
+                if (dx != 0 || dy != 0)
+                {
+                    RemoteInputSent?.Invoke(new RemoteInputMessage
+                    {
+                        Type = InputEventType.MouseMoveRelative,
+                        NormalizedX = dx,
+                        NormalizedY = dy
+                    });
+
+                    _isRecenteringMouse = true;
+                    SetCursorPos(center.X, center.Y);
+                }
+            }
+        }
+
         private void ScreenImage_PointerMoved(object? sender, PointerEventArgs e)
         {
-            if (!_isRemoteControlEnabled) return;
-            if (IsPointerOverHeader(e)) return;
+            if (!_isRemoteControlEnabled || IsPointerOverHeader(e)) return;
 
             if (_isGameMode)
             {
-                if (_isRecenteringMouse)
-                {
-                    _isRecenteringMouse = false;
-                    return;
-                }
-
-                if (OperatingSystem.IsWindows())
-                {
-                    var center = GetScreenImageCenterOnScreen();
-                    if (GetCursorPos(out POINT curPos))
-                    {
-                        int dx = curPos.X - center.X;
-                        int dy = curPos.Y - center.Y;
-
-                        if (dx != 0 || dy != 0)
-                        {
-                            RemoteInputSent?.Invoke(new RemoteInputMessage
-                            {
-                                Type = InputEventType.MouseMoveRelative,
-                                NormalizedX = dx,
-                                NormalizedY = dy
-                            });
-
-                            _isRecenteringMouse = true;
-                            SetCursorPos(center.X, center.Y);
-                        }
-                    }
-                }
+                HandleGameModePointerMove();
                 return;
             }
 
@@ -802,18 +795,16 @@ namespace LanScreenShare.Desktop
 
         private void PopoutWindow_KeyDown(object? sender, KeyEventArgs e)
         {
-            if (e.Key == Key.L &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            bool hasCtrlAlt = e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+
+            if (e.Key == Key.L && hasCtrlAlt)
             {
                 GameModeToggled?.Invoke();
                 e.Handled = true;
                 return;
             }
 
-            if (e.Key == Key.M &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            if (e.Key == Key.M && hasCtrlAlt)
             {
                 CycleMonitorRequested?.Invoke();
                 e.Handled = true;

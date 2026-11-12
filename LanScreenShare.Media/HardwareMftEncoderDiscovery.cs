@@ -105,12 +105,11 @@ namespace LanScreenShare.Media
         [DllImport("ole32.dll")]
         private static extern void CoTaskMemFree(IntPtr pv);
 
-        public static IReadOnlyList<MftEncoderInfo> EnumerateEncoders()
-        {
-            var encoders = new List<MftEncoderInfo>();
-            if (!OperatingSystem.IsWindows())
-                return encoders;
+        private static bool HasActivates(int hr, uint count, IntPtr ptr) =>
+            hr == 0 && count > 0 && ptr != IntPtr.Zero;
 
+        private static IntPtr AllocateH264OutputType()
+        {
             var outputType = new MFT_REGISTER_TYPE_INFO
             {
                 guidMajorType = MFMediaType_Video,
@@ -119,13 +118,57 @@ namespace LanScreenShare.Media
 
             IntPtr pOutputType = Marshal.AllocHGlobal(Marshal.SizeOf<MFT_REGISTER_TYPE_INFO>());
             Marshal.StructureToPtr(outputType, pOutputType, false);
+            return pOutputType;
+        }
+
+        private static MftEncoderInfo? ProcessSingleEncoderActivate(IntPtr pActivate)
+        {
+            try
+            {
+                var activate = (IMFActivate)Marshal.GetObjectForIUnknown(pActivate);
+                activate.GetAllocatedString(MFT_FRIENDLY_NAME_Attribute, out string friendlyName, out _);
+                friendlyName ??= "Desconocido";
+
+                activate.GetGUID(MFT_TRANSFORM_CLSID_Attribute, out Guid clsid);
+                activate.GetUINT32(MF_TRANSFORM_ASYNC, out uint isAsyncVal);
+                bool isAsync = isAsyncVal != 0;
+
+                var (vendor, isHardware, displayName, priority) = CategorizeEncoder(friendlyName, isAsync);
+
+                return new MftEncoderInfo(
+                    FriendlyName: friendlyName,
+                    DisplayName: displayName,
+                    IsHardware: isHardware,
+                    IsAsync: isAsync,
+                    Vendor: vendor,
+                    Clsid: clsid,
+                    Priority: priority
+                );
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                Marshal.Release(pActivate);
+            }
+        }
+
+        public static IReadOnlyList<MftEncoderInfo> EnumerateEncoders()
+        {
+            var encoders = new List<MftEncoderInfo>();
+            if (!OperatingSystem.IsWindows())
+                return encoders;
+
+            IntPtr pOutputType = AllocateH264OutputType();
 
             try
             {
                 uint flags = MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER;
                 int hr = MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, flags, IntPtr.Zero, pOutputType, out IntPtr ppActivates, out uint numActivates);
 
-                if (hr == 0 && numActivates > 0 && ppActivates != IntPtr.Zero)
+                if (HasActivates(hr, numActivates, ppActivates))
                 {
                     for (int i = 0; i < numActivates; i++)
                     {
@@ -133,34 +176,10 @@ namespace LanScreenShare.Media
                         if (pActivate == IntPtr.Zero)
                             continue;
 
-                        try
+                        var info = ProcessSingleEncoderActivate(pActivate);
+                        if (info != null)
                         {
-                            var activate = (IMFActivate)Marshal.GetObjectForIUnknown(pActivate);
-                            activate.GetAllocatedString(MFT_FRIENDLY_NAME_Attribute, out string friendlyName, out _);
-                            friendlyName ??= "Desconocido";
-
-                            activate.GetGUID(MFT_TRANSFORM_CLSID_Attribute, out Guid clsid);
-                            activate.GetUINT32(MF_TRANSFORM_ASYNC, out uint isAsyncVal);
-                            bool isAsync = isAsyncVal != 0;
-
-                            var (vendor, isHardware, displayName, priority) = CategorizeEncoder(friendlyName, isAsync);
-
-                            encoders.Add(new MftEncoderInfo(
-                                FriendlyName: friendlyName,
-                                DisplayName: displayName,
-                                IsHardware: isHardware,
-                                IsAsync: isAsync,
-                                Vendor: vendor,
-                                Clsid: clsid,
-                                Priority: priority
-                            ));
-                        }
-                        catch
-                        {
-                        }
-                        finally
-                        {
-                            Marshal.Release(pActivate);
+                            encoders.Add(info);
                         }
                     }
 
@@ -180,27 +199,36 @@ namespace LanScreenShare.Media
             return encoders;
         }
 
+        private static bool MatchesAny(string text, params string[] patterns)
+        {
+            foreach (var p in patterns)
+            {
+                if (text.Contains(p)) return true;
+            }
+            return false;
+        }
+
         private static (EncoderGpuVendor Vendor, bool IsHardware, string DisplayName, int Priority) CategorizeEncoder(string friendlyName, bool isAsync)
         {
             string lower = friendlyName.ToLowerInvariant();
 
-            if (lower.Contains("nvidia") || lower.Contains("nvenc"))
+            if (MatchesAny(lower, "nvidia", "nvenc"))
             {
                 return (EncoderGpuVendor.Nvidia, true, "GPU NVIDIA (NVENC)", 100);
             }
-            if (lower.Contains("amd") || lower.Contains("radeon"))
+            if (MatchesAny(lower, "amd", "radeon"))
             {
                 return (EncoderGpuVendor.Amd, true, "GPU AMD (Radeon)", 95);
             }
-            if (lower.Contains("intel") || lower.Contains("quicksync") || lower.Contains("qsv"))
+            if (MatchesAny(lower, "intel", "quicksync", "qsv"))
             {
                 return (EncoderGpuVendor.Intel, true, "GPU Intel (QuickSync)", 90);
             }
-            if (lower.Contains("qualcomm") || lower.Contains("snapdragon"))
+            if (MatchesAny(lower, "qualcomm", "snapdragon"))
             {
                 return (EncoderGpuVendor.Qualcomm, true, "GPU Qualcomm", 85);
             }
-            if (lower.Contains("dx12") || lower.Contains("hardware"))
+            if (MatchesAny(lower, "dx12", "hardware"))
             {
                 return (EncoderGpuVendor.OtherHardware, true, $"GPU ({friendlyName})", 70);
             }
@@ -209,24 +237,43 @@ namespace LanScreenShare.Media
             return (EncoderGpuVendor.Software, false, "CPU (Software Microsoft)", 10);
         }
 
-        /// <summary>
-        /// Activa una instancia del codificador MFT según el descriptor proporcionado usando MFTEnumEx / IMFActivate.
-        /// Retorna el IMFTransform de Vortice listo para configurar, o null si falla la activación COM.
-        /// </summary>
+        private static IMFTransform? TryActivateMatchingObject(IntPtr pActivate, string targetFriendlyName)
+        {
+            try
+            {
+                var activate = (IMFActivate)Marshal.GetObjectForIUnknown(pActivate);
+                activate.GetAllocatedString(MFT_FRIENDLY_NAME_Attribute, out string friendlyName, out _);
+                friendlyName ??= "";
+
+                if (!friendlyName.Equals(targetFriendlyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                int hrAct = activate.ActivateObject(IID_IMFTransform, out object rawTransform);
+                if (hrAct == 0 && rawTransform != null)
+                {
+                    IntPtr pUnk = Marshal.GetIUnknownForObject(rawTransform);
+                    return new IMFTransform(pUnk);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[HardwareMftDiscovery] Error activando {targetFriendlyName}: {ex.Message}");
+            }
+            finally
+            {
+                Marshal.Release(pActivate);
+            }
+            return null;
+        }
+
         public static (IMFTransform? Transform, bool IsAsync) ActivateEncoder(MftEncoderInfo encoder)
         {
             if (!OperatingSystem.IsWindows())
                 return (null, false);
 
-            var outputType = new MFT_REGISTER_TYPE_INFO
-            {
-                guidMajorType = MFMediaType_Video,
-                guidSubtype = MFVideoFormat_H264
-            };
-
-            IntPtr pOutputType = Marshal.AllocHGlobal(Marshal.SizeOf<MFT_REGISTER_TYPE_INFO>());
-            Marshal.StructureToPtr(outputType, pOutputType, false);
-
+            IntPtr pOutputType = AllocateH264OutputType();
             IMFTransform? resultTransform = null;
             bool resultIsAsync = encoder.IsAsync;
 
@@ -235,7 +282,7 @@ namespace LanScreenShare.Media
                 uint flags = MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER;
                 int hr = MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, flags, IntPtr.Zero, pOutputType, out IntPtr ppActivates, out uint numActivates);
 
-                if (hr == 0 && numActivates > 0 && ppActivates != IntPtr.Zero)
+                if (HasActivates(hr, numActivates, ppActivates))
                 {
                     try
                     {
@@ -245,35 +292,9 @@ namespace LanScreenShare.Media
                             if (pActivate == IntPtr.Zero)
                                 continue;
 
-                            try
-                            {
-                                if (resultTransform == null)
-                                {
-                                    var activate = (IMFActivate)Marshal.GetObjectForIUnknown(pActivate);
-                                    activate.GetAllocatedString(MFT_FRIENDLY_NAME_Attribute, out string friendlyName, out _);
-                                    friendlyName ??= "";
-
-                                    if (friendlyName.Equals(encoder.FriendlyName, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        int hrAct = activate.ActivateObject(IID_IMFTransform, out object rawTransform);
-                                        if (hrAct == 0 && rawTransform != null)
-                                        {
-                                            IntPtr pUnk = Marshal.GetIUnknownForObject(rawTransform);
-                                            // pUnk tiene refcount añadido por GetIUnknownForObject.
-                                            // resultTransform se adueña de este puntero y lo liberará en Dispose().
-                                            resultTransform = new IMFTransform(pUnk);
-                                        }
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[HardwareMftDiscovery] Error activando {encoder.FriendlyName}: {ex.Message}");
-                            }
-                            finally
-                            {
-                                Marshal.Release(pActivate);
-                            }
+                            resultTransform = TryActivateMatchingObject(pActivate, encoder.FriendlyName);
+                            if (resultTransform != null)
+                                break;
                         }
                     }
                     finally

@@ -90,7 +90,7 @@ namespace LanScreenShare.Network.Streaming
             {
                 while (!token.IsCancellationRequested && IsConnected)
                 {
-                    await ReadExactBytesAsync(stream, headerBuffer, 0, Lsi2ControlPacket.PacketSize, token);
+                    await ReadExactBytesAsync(stream, headerBuffer, token);
 
                     if (!Lsi2ControlPacket.TryReadPacket(
                             headerBuffer,
@@ -106,8 +106,7 @@ namespace LanScreenShare.Network.Streaming
                     if (message == null)
                         continue;
 
-                    if (message.Type == InputEventType.ClipboardText ||
-                        message.Type == InputEventType.MonitorInfo)
+                    if (message.Type == InputEventType.ClipboardText || message.Type == InputEventType.MonitorInfo)
                     {
                         int payloadLength = message.KeyCode;
                         if (payloadLength <= 0 || payloadLength > Lsi2ControlPacket.MaxClipboardPayloadBytes)
@@ -117,24 +116,10 @@ namespace LanScreenShare.Network.Streaming
                         }
 
                         byte[] payloadBuffer = new byte[payloadLength];
-                        await ReadExactBytesAsync(stream, payloadBuffer, 0, payloadLength, token);
+                        await ReadExactBytesAsync(stream, payloadBuffer, token);
                         string text = Encoding.UTF8.GetString(payloadBuffer);
 
-                        try
-                        {
-                            if (message.Type == InputEventType.ClipboardText)
-                            {
-                                ClipboardTextReceived?.Invoke(this, text);
-                            }
-                            else
-                            {
-                                MonitorInfoReceived?.Invoke(this, text);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ControlClient] Error procesando evento {message.Type}: {ex.Message}");
-                        }
+                        DispatchServerMessage(message.Type, text);
                     }
                 }
             }
@@ -155,12 +140,32 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
-        private static async Task ReadExactBytesAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken token)
+        private void DispatchServerMessage(InputEventType type, string text)
+        {
+            try
+            {
+                if (type == InputEventType.ClipboardText)
+                {
+                    ClipboardTextReceived?.Invoke(this, text);
+                }
+                else
+                {
+                    MonitorInfoReceived?.Invoke(this, text);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ControlClient] Error procesando evento {type}: {ex.Message}");
+            }
+        }
+
+        private static async Task ReadExactBytesAsync(Stream stream, Memory<byte> buffer, CancellationToken token)
         {
             int totalBytesRead = 0;
+            int count = buffer.Length;
             while (totalBytesRead < count)
             {
-                int bytesRead = await stream.ReadAsync(buffer.AsMemory(offset + totalBytesRead, count - totalBytesRead), token);
+                int bytesRead = await stream.ReadAsync(buffer.Slice(totalBytesRead, count - totalBytesRead), token);
                 if (bytesRead == 0)
                 {
                     throw new EndOfStreamException("El anfitrión cerró el canal de control.");
@@ -217,49 +222,13 @@ namespace LanScreenShare.Network.Streaming
             });
         }
 
-        public async Task SendSelectSourceAsync(string sourceId)
-        {
-            if (!IsConnected || _stream == null || string.IsNullOrEmpty(sourceId))
-                return;
+        public Task SendSelectSourceAsync(string sourceId) =>
+            SendTextPayloadAsync(InputEventType.SelectSource, sourceId, "selección de fuente LSI2");
 
-            byte[] utf8Bytes = Encoding.UTF8.GetBytes(sourceId);
-            if (utf8Bytes.Length == 0 || utf8Bytes.Length > Lsi2ControlPacket.MaxClipboardPayloadBytes)
-                return;
+        public Task SendClipboardTextAsync(string text) =>
+            SendTextPayloadAsync(InputEventType.ClipboardText, text, "portapapeles LSI2");
 
-            byte[] packet = new byte[Lsi2ControlPacket.PacketSize + utf8Bytes.Length];
-            ulong seq = Interlocked.Increment(ref _sequenceNumber);
-            ulong ts = (ulong)Stopwatch.GetTimestamp();
-
-            var input = new RemoteInputMessage
-            {
-                Type = InputEventType.SelectSource,
-                KeyCode = utf8Bytes.Length,
-                ClipboardText = sourceId
-            };
-
-            Lsi2ControlPacket.WritePacket(packet.AsSpan(0, Lsi2ControlPacket.PacketSize), seq, ts, input);
-            Buffer.BlockCopy(utf8Bytes, 0, packet, Lsi2ControlPacket.PacketSize, utf8Bytes.Length);
-
-            await _sendLock.WaitAsync();
-            try
-            {
-                if (IsConnected && _stream != null)
-                {
-                    await _stream.WriteAsync(packet.AsMemory(0, packet.Length));
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ControlClient] Error enviando selección de fuente LSI2: {ex.Message}");
-                await DisconnectAsync();
-            }
-            finally
-            {
-                _sendLock.Release();
-            }
-        }
-
-        public async Task SendClipboardTextAsync(string text)
+        private async Task SendTextPayloadAsync(InputEventType type, string text, string errorContext)
         {
             if (!IsConnected || _stream == null || string.IsNullOrEmpty(text))
                 return;
@@ -274,7 +243,7 @@ namespace LanScreenShare.Network.Streaming
 
             var input = new RemoteInputMessage
             {
-                Type = InputEventType.ClipboardText,
+                Type = type,
                 KeyCode = utf8Bytes.Length,
                 ClipboardText = text
             };
@@ -292,7 +261,7 @@ namespace LanScreenShare.Network.Streaming
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ControlClient] Error enviando portapapeles LSI2: {ex.Message}");
+                Console.WriteLine($"[ControlClient] Error enviando {errorContext}: {ex.Message}");
                 await DisconnectAsync();
             }
             finally
