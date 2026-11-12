@@ -24,18 +24,21 @@ public static class ChannelAttachmentMessage
     public const uint Magic = 0x4C534154; // "LSAT"
     public const int MessageSize = 37;
 
-    public static byte[] Serialize(string sessionId, string tokenId, ChannelType channel)
+    public static byte[] Serialize(in ChannelAttachmentPayload payload)
     {
         byte[] buffer = new byte[MessageSize];
         Span<byte> span = buffer.AsSpan();
 
         BinaryPrimitives.WriteUInt32BigEndian(span.Slice(0, 4), Magic);
-        WriteSessionGuid(span.Slice(4, 16), sessionId);
-        WriteTokenBytes(span.Slice(20, 16), tokenId);
-        span[36] = MapChannelToByte(channel);
+        WriteSessionGuid(span.Slice(4, 16), payload.SessionId);
+        WriteTokenBytes(span.Slice(20, 16), payload.TokenId);
+        span[36] = MapChannelToByte(payload.Channel);
 
         return buffer;
     }
+
+    public static byte[] Serialize(string sessionId, string tokenId, ChannelType channel) =>
+        Serialize(new ChannelAttachmentPayload(sessionId, tokenId, channel));
 
     private static void WriteSessionGuid(Span<byte> destination, string sessionId)
     {

@@ -5,9 +5,9 @@ namespace LanScreenShare.Core.Security
 {
     public sealed class ActiveSession
     {
-        public string SessionId { get; }
-        public string PeerFingerprint { get; }
-        public string PeerName { get; }
+        public SessionId SessionId { get; }
+        public DeviceFingerprint PeerFingerprint { get; }
+        public DeviceName PeerName { get; }
         public DateTime CreatedAt { get; }
         public DateTime ExpiresAt { get; set; }
         public SessionState State { get; set; }
@@ -16,7 +16,7 @@ namespace LanScreenShare.Core.Security
         public RemoteControlState ControlState { get; set; }
         public HashSet<ChannelType> AttachedChannels { get; } = new();
 
-        public ActiveSession(string sessionId, string peerFingerprint, string peerName, DateTime expiresAt)
+        public ActiveSession(SessionId sessionId, DeviceFingerprint peerFingerprint, DeviceName peerName, DateTime expiresAt)
         {
             SessionId = sessionId;
             PeerFingerprint = peerFingerprint;

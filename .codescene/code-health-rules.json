@@ -1,7 +1,20 @@
 {
   "rule_sets": [
     {
-      "matching_content_path": "**/*",
+      "matching_content_path": "LanScreenShare.Media/**/*",
+      "rules": [
+        {
+          "name": "Primitive Obsession",
+          "weight": 0.0
+        },
+        {
+          "name": "Overall Code Complexity",
+          "weight": 0.0
+        }
+      ]
+    },
+    {
+      "matching_content_path": "LanScreenShare.Desktop/**/*",
       "rules": [
         {
           "name": "Primitive Obsession",
@@ -13,6 +26,28 @@
         },
         {
           "name": "Overall Code Complexity",
+          "weight": 0.0
+        }
+      ]
+    },
+    {
+      "matching_content_path": "LanScreenShare.Network/**/*",
+      "rules": [
+        {
+          "name": "Primitive Obsession",
+          "weight": 0.0
+        },
+        {
+          "name": "String Heavy Function Arguments",
+          "weight": 0.0
+        }
+      ]
+    },
+    {
+      "matching_content_path": "LanScreenShare.Core/Services/AdaptiveBitrateController.cs",
+      "rules": [
+        {
+          "name": "Primitive Obsession",
           "weight": 0.0
         }
       ]

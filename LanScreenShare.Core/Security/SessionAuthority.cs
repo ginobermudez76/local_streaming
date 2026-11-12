@@ -23,14 +23,14 @@ namespace LanScreenShare.Core.Security
         public event EventHandler<string>? SessionTerminated;
         public string? ActiveControllerSessionId => GetActiveControllerSessionId();
 
-        public ActiveSession CreateSession(string peerFingerprint, string peerName, TimeSpan? ttl = null)
+        public ActiveSession CreateSession(DeviceFingerprint peerFingerprint, DeviceName peerName, TimeSpan? ttl = null)
         {
-            if (string.IsNullOrWhiteSpace(peerFingerprint))
+            if (peerFingerprint.IsEmpty)
                 throw new ArgumentException("Peer fingerprint cannot be null or empty", nameof(peerFingerprint));
 
             byte[] randomBytes = new byte[16];
             RandomNumberGenerator.Fill(randomBytes);
-            string sessionId = new Guid(randomBytes).ToString("D");
+            SessionId sessionId = new(new Guid(randomBytes).ToString("D"));
 
             var duration = ttl ?? TimeSpan.FromHours(12);
             var session = new ActiveSession(sessionId, peerFingerprint, peerName, DateTime.UtcNow.Add(duration))
@@ -40,16 +40,16 @@ namespace LanScreenShare.Core.Security
                 AudioAuthorized = true
             };
 
-            _sessions[sessionId] = session;
+            _sessions[sessionId.Value] = session;
             return session;
         }
 
         public async Task<(bool Success, ActiveSession? Session, string? FailureReason)> TryCreateSessionAsync(
-            string peerFingerprint,
-            string peerName = "RemotePeer",
+            DeviceFingerprint peerFingerprint,
+            DeviceName peerName = default,
             TimeSpan? ttl = null)
         {
-            if (string.IsNullOrWhiteSpace(peerFingerprint))
+            if (peerFingerprint.IsEmpty)
                 return (false, null, "Peer fingerprint cannot be null or empty.");
 
             if (_deviceStore != null)
@@ -67,14 +67,14 @@ namespace LanScreenShare.Core.Security
                 }
             }
 
-            var session = CreateSession(peerFingerprint, peerName, ttl);
+            var session = CreateSession(peerFingerprint, peerName.IsEmpty ? new DeviceName("RemotePeer") : peerName, ttl);
             return (true, session, null);
         }
 
-        public ActiveSession? GetSession(string sessionId)
+        public ActiveSession? GetSession(SessionId sessionId)
         {
-            if (string.IsNullOrEmpty(sessionId)) return null;
-            if (_sessions.TryGetValue(sessionId, out var session))
+            if (sessionId.IsEmpty) return null;
+            if (_sessions.TryGetValue(sessionId.Value, out var session))
             {
                 if (session.IsExpired)
                 {
@@ -86,7 +86,7 @@ namespace LanScreenShare.Core.Security
             return null;
         }
 
-        public ChannelAttachmentToken IssueChannelToken(string sessionId, ChannelType channel, TimeSpan? validFor = null)
+        public ChannelAttachmentToken IssueChannelToken(SessionId sessionId, ChannelType channel, TimeSpan? validFor = null)
         {
             var session = GetSession(sessionId);
             if (session == null || session.State != SessionState.Active)
@@ -97,7 +97,7 @@ namespace LanScreenShare.Core.Security
             string tokenId = Convert.ToHexString(tokenBytes).ToLowerInvariant();
 
             var expiration = DateTime.UtcNow.Add(validFor ?? TimeSpan.FromHours(24));
-            var token = new ChannelAttachmentToken(tokenId, sessionId, session.PeerFingerprint, channel, expiration);
+            var token = new ChannelAttachmentToken(tokenId, sessionId.Value, session.PeerFingerprint.Value, channel, expiration);
 
             _attachmentTokens[tokenId] = token;
             return token;
@@ -105,7 +105,7 @@ namespace LanScreenShare.Core.Security
 
         public AttachmentStatus TryAttachChannel(ChannelAttachmentRequest request)
         {
-            var session = GetSession(request.SessionId);
+            var session = GetSession(new SessionId(request.SessionId));
             if (session == null || session.State != SessionState.Active)
             {
                 return AttachmentStatus.SessionNotFound;
@@ -142,8 +142,8 @@ namespace LanScreenShare.Core.Security
             return AttachmentStatus.Success;
         }
 
-        public AttachmentStatus TryAttachChannel(string tokenId, string sessionId, string peerFingerprint, ChannelType channel) =>
-            TryAttachChannel(new ChannelAttachmentRequest(tokenId, sessionId, peerFingerprint, channel));
+        public AttachmentStatus TryAttachChannel(string tokenId, SessionId sessionId, DeviceFingerprint peerFingerprint, ChannelType channel) =>
+            TryAttachChannel(new ChannelAttachmentRequest(tokenId, sessionId.Value, peerFingerprint.Value, channel));
 
         public bool TryAttachChannel(ChannelAttachmentRequest request, out string? failureReason)
         {
@@ -174,7 +174,7 @@ namespace LanScreenShare.Core.Security
             return AttachmentStatus.Success;
         }
 
-        public RemoteControlState RequestRemoteControl(string sessionId)
+        public RemoteControlState RequestRemoteControl(SessionId sessionId)
         {
             lock (_controlLock)
             {
@@ -189,20 +189,20 @@ namespace LanScreenShare.Core.Security
                     return RemoteControlState.Disabled;
                 }
 
-                _activeControllerSessionId = sessionId;
+                _activeControllerSessionId = sessionId.Value;
                 session.ControlState = RemoteControlState.Granted;
                 return RemoteControlState.Granted;
             }
         }
 
-        private bool IsConflictingControllerActive(string currentSessionId)
+        private bool IsConflictingControllerActive(SessionId currentSessionId)
         {
-            if (_activeControllerSessionId == null || _activeControllerSessionId == currentSessionId)
+            if (_activeControllerSessionId == null || _activeControllerSessionId == currentSessionId.Value)
             {
                 return false;
             }
 
-            var existingSession = GetSession(_activeControllerSessionId);
+            var existingSession = GetSession(new SessionId(_activeControllerSessionId));
             if (existingSession is { State: SessionState.Active, ControlState: RemoteControlState.Granted })
             {
                 return true;
@@ -212,7 +212,7 @@ namespace LanScreenShare.Core.Security
             return false;
         }
 
-        public bool TryAcquireControl(string sessionId, out string? failureReason)
+        public bool TryAcquireControl(SessionId sessionId, out string? failureReason)
         {
             var result = RequestRemoteControl(sessionId);
             if (result == RemoteControlState.Granted)
@@ -225,20 +225,20 @@ namespace LanScreenShare.Core.Security
             return false;
         }
 
-        public void ReleaseRemoteControl(string sessionId) => SetControlState(sessionId, RemoteControlState.Disabled);
+        public void ReleaseRemoteControl(SessionId sessionId) => SetControlState(sessionId, RemoteControlState.Disabled);
 
-        public void RevokeControl(string sessionId) => SetControlState(sessionId, RemoteControlState.Revoked);
+        public void RevokeControl(SessionId sessionId) => SetControlState(sessionId, RemoteControlState.Revoked);
 
-        private void SetControlState(string sessionId, RemoteControlState targetState)
+        private void SetControlState(SessionId sessionId, RemoteControlState targetState)
         {
             lock (_controlLock)
             {
-                if (_activeControllerSessionId == sessionId)
+                if (_activeControllerSessionId == sessionId.Value)
                 {
                     _activeControllerSessionId = null;
                 }
 
-                if (_sessions.TryGetValue(sessionId, out var session))
+                if (_sessions.TryGetValue(sessionId.Value, out var session))
                 {
                     session.ControlState = targetState;
                 }
@@ -253,22 +253,22 @@ namespace LanScreenShare.Core.Security
             }
         }
 
-        public void CloseSession(string sessionId)
+        public void CloseSession(SessionId sessionId)
         {
             TerminateSession(sessionId);
         }
 
-        public void TerminateSession(string sessionId)
+        public void TerminateSession(SessionId sessionId)
         {
             lock (_controlLock)
             {
-                if (_activeControllerSessionId == sessionId)
+                if (_activeControllerSessionId == sessionId.Value)
                 {
                     _activeControllerSessionId = null;
                 }
             }
 
-            if (_sessions.TryRemove(sessionId, out var session))
+            if (_sessions.TryRemove(sessionId.Value, out var session))
             {
                 session.State = SessionState.Terminated;
                 session.ControlState = RemoteControlState.Revoked;
@@ -277,13 +277,13 @@ namespace LanScreenShare.Core.Security
             // Purgar en cascada todos los tokens emitidos para esta sesión
             foreach (var kvp in _attachmentTokens)
             {
-                if (kvp.Value.SessionId == sessionId)
+                if (kvp.Value.SessionId == sessionId.Value)
                 {
                     _attachmentTokens.TryRemove(kvp.Key, out _);
                 }
             }
 
-            SessionTerminated?.Invoke(this, sessionId);
+            SessionTerminated?.Invoke(this, sessionId.Value);
         }
 
         public void PruneExpired()
@@ -310,7 +310,7 @@ namespace LanScreenShare.Core.Security
             {
                 if (now > session.ExpiresAt)
                 {
-                    TerminateSession(key);
+                    TerminateSession(new SessionId(key));
                 }
             }
         }

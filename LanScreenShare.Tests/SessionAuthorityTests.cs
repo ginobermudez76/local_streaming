@@ -12,14 +12,14 @@ public class InMemoryPairedDeviceStore : IPairedDeviceStore
 {
     private readonly ConcurrentDictionary<string, PairedDevice> _devices = new();
 
-    public Task<bool> IsDevicePairedAsync(string fingerprint)
+    public Task<bool> IsDevicePairedAsync(DeviceFingerprint fingerprint)
     {
-        return Task.FromResult(_devices.ContainsKey(fingerprint));
+        return Task.FromResult(_devices.ContainsKey(fingerprint.Value));
     }
 
-    public Task<bool> IsDeviceRevokedAsync(string fingerprint)
+    public Task<bool> IsDeviceRevokedAsync(DeviceFingerprint fingerprint)
     {
-        if (_devices.TryGetValue(fingerprint, out var device))
+        if (_devices.TryGetValue(fingerprint.Value, out var device))
         {
             return Task.FromResult(device.IsRevoked);
         }
@@ -38,16 +38,16 @@ public class InMemoryPairedDeviceStore : IPairedDeviceStore
         return Task.CompletedTask;
     }
 
-    public Task RevokeDeviceAsync(string fingerprint)
+    public Task RevokeDeviceAsync(DeviceFingerprint fingerprint)
     {
-        if (_devices.TryGetValue(fingerprint, out var device))
+        if (_devices.TryGetValue(fingerprint.Value, out var device))
         {
-            _devices[fingerprint] = device with { IsRevoked = true };
+            _devices[fingerprint.Value] = device with { IsRevoked = true };
         }
         return Task.CompletedTask;
     }
 
-    public Task RemoveDeviceAsync(string fingerprint)
+    public Task RemoveDeviceAsync(DeviceFingerprint fingerprint)
     {
         _devices.TryRemove(fingerprint, out _);
         return Task.CompletedTask;
@@ -94,7 +94,7 @@ public class SessionAuthorityTests
         Assert.IsTrue(success);
         Assert.IsNotNull(session);
         Assert.AreEqual(SessionState.Active, session.State);
-        Assert.AreEqual(_trustedFingerprint, session.PeerFingerprint);
+        Assert.AreEqual(_trustedFingerprint, session.PeerFingerprint.Value);
     }
 
     [TestMethod]
@@ -146,12 +146,12 @@ public class SessionAuthorityTests
         // 1. Session 1 requests and gets control
         var state1 = _authority.RequestRemoteControl(session1!.SessionId);
         Assert.AreEqual(RemoteControlState.Granted, state1);
-        Assert.AreEqual(session1.SessionId, _authority.ActiveControllerSessionId);
+        Assert.AreEqual(session1.SessionId.Value, _authority.ActiveControllerSessionId);
 
         // 2. Session 2 requests control while session 1 holds it -> conflict denied
         var state2 = _authority.RequestRemoteControl(session2!.SessionId);
         Assert.AreEqual(RemoteControlState.DeniedConflict, state2);
-        Assert.AreEqual(session1.SessionId, _authority.ActiveControllerSessionId);
+        Assert.AreEqual(session1.SessionId.Value, _authority.ActiveControllerSessionId);
 
         // 3. Session 1 requests again -> already granted
         var state1Again = _authority.RequestRemoteControl(session1.SessionId);
@@ -164,7 +164,7 @@ public class SessionAuthorityTests
         // 5. Now Session 2 can acquire control
         var state2New = _authority.RequestRemoteControl(session2.SessionId);
         Assert.AreEqual(RemoteControlState.Granted, state2New);
-        Assert.AreEqual(session2.SessionId, _authority.ActiveControllerSessionId);
+        Assert.AreEqual(session2.SessionId.Value, _authority.ActiveControllerSessionId);
     }
 
     [TestMethod]
