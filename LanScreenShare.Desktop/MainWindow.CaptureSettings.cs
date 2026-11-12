@@ -606,8 +606,6 @@ namespace LanScreenShare.Desktop
             return (items, bestIdx);
         }
 
-        public readonly record struct CaptureProfile(int Fps, int Quality, double Scale, string Codec, int TargetWidth = 0, int TargetHeight = 0, int BitrateMbps = 8);
-
         private void SwitchCaptureSource(CaptureSource source, string engine, in CaptureProfile profile)
         {
             _screenCaptureService.StopCapture();

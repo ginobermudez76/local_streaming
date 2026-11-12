@@ -7,6 +7,9 @@ namespace LanScreenShare.Core.Models
         string Codec = "jpeg",
         int TargetWidth = 0,
         int TargetHeight = 0,
-        int BitrateMbps = 8);
+        int BitrateMbps = 8)
+    {
+        public int Fps => TargetFps;
+        public double Scale => ResolutionScale;
+    }
 }
-
