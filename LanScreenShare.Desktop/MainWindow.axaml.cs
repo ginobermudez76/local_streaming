@@ -196,6 +196,12 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void WireButtonClick(string name, EventHandler<RoutedEventArgs> handler)
+        {
+            var btn = this.FindControl<Button>(name);
+            if (btn != null) btn.Click += handler;
+        }
+
         private static bool IsRunningAsAdministrator()
         {
             if (!OperatingSystem.IsWindows())

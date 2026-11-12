@@ -16,6 +16,35 @@ namespace LanScreenShare.Desktop
 {
     public partial class MainWindow
     {
+        private void InitializeFileTransferSubsystem()
+        {
+            _fileTransferServer = new TcpFileTransferServer(_sessionAuthority, _sslServerOptions);
+            _fileTransferClient = new TcpFileTransferClient();
+
+            _fileTransferServer.TransferProgress += (s, p) => Dispatcher.UIThread.Post(() => ShowFileTransferProgress(p));
+            _fileTransferServer.TransferCompleted += (s, c) => Dispatcher.UIThread.Post(() => ShowFileTransferCompleted(c));
+            _fileTransferServer.TransferError += (s, err) => Dispatcher.UIThread.Post(() => ShowFileTransferError(err));
+
+            _fileTransferClient.TransferProgress += (s, p) => Dispatcher.UIThread.Post(() => ShowFileTransferProgress(p));
+            _fileTransferClient.TransferCompleted += (s, c) => Dispatcher.UIThread.Post(() => ShowFileTransferCompleted(c));
+            _fileTransferClient.TransferError += (s, err) => Dispatcher.UIThread.Post(() => ShowFileTransferError(err));
+
+            if (this.FindControl<Button>("SendFileButton") is { } sendFileBtn)
+                sendFileBtn.Click += async (s, e) => await PickAndSendFilesAsync();
+
+            if (this.FindControl<Button>("FileTransferCancelButton") is { } cancelTransferBtn)
+                cancelTransferBtn.Click += (s, e) => CancelActiveFileTransfer();
+
+            if (this.FindControl<Button>("FileTransferOpenFolderButton") is { } openFolderBtn)
+                openFolderBtn.Click += (s, e) => OpenDownloadsFolder();
+
+            if (this.FindControl<Button>("FileTransferDismissButton") is { } dismissBannerBtn)
+                dismissBannerBtn.Click += (s, e) => HideFileTransferBanner();
+
+            this.AddHandler(DragDrop.DropEvent, MainWindow_Drop);
+            this.AddHandler(DragDrop.DragOverEvent, MainWindow_DragOver);
+        }
+
         private bool CanTransferFiles =>
             (_isHosting && _streamServer.ConnectedClientsCount > 0) ||
             (_isViewing && _streamClient.IsConnected);

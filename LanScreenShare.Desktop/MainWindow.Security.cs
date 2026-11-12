@@ -4,12 +4,89 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using LanScreenShare.Core.Security;
+using LanScreenShare.Network.Security;
 
 namespace LanScreenShare.Desktop
 {
     public partial class MainWindow
     {
         #region Security & Pairing Approvals
+
+        private void InitializeSecuritySubsystem()
+        {
+            _identityKeyStorage = IdentityKeyStorageFactory.Create();
+            _pairedDeviceStore = new JsonPairedDeviceStore();
+            _sessionAuthority = new SessionAuthority(_pairedDeviceStore);
+
+            try
+            {
+                _identityCertificate = _identityKeyStorage.GetOrCreateIdentityCertificateAsync().GetAwaiter().GetResult();
+                _sslServerOptions = TlsConfigurationHelper.CreateServerOptions(_identityCertificate, _pairedDeviceStore, OnProvisionalPairingRequested);
+                _sslClientOptions = TlsConfigurationHelper.CreateClientOptions(_identityCertificate, "LanScreenShareHost", _pairedDeviceStore, OnClientProvisionalPairing);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Security] Error inicializando identidad mTLS: {ex.Message}");
+            }
+        }
+
+        private void InitializeStreamAccessMode()
+        {
+            var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
+            if (streamAccessCombo != null)
+            {
+                SelectComboBoxItemByTag(streamAccessCombo, _appSettings.StreamAccessMode);
+                _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
+                streamAccessCombo.SelectionChanged += (s, e) =>
+                {
+                    _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
+                    Console.WriteLine($"[AccessHost] Aprobación de stream requerida: {_requireStreamApproval}");
+                    SaveCurrentSettings();
+                };
+            }
+
+            _streamServer.ClientApprovalCallback = async (clientId) =>
+            {
+                if (!_requireStreamApproval) return true;
+                return await RequestStreamApprovalAsync(clientId);
+            };
+
+            WireButtonClick("ApproveStreamButton", (s, e) => _streamApprovalTcs?.TrySetResult(true));
+            WireButtonClick("RejectStreamButton", (s, e) => _streamApprovalTcs?.TrySetResult(false));
+        }
+
+        private void InitializeControlAccessMode()
+        {
+            var controlAccessCombo = this.FindControl<ComboBox>("ControlAccessModeComboBox");
+            if (controlAccessCombo != null)
+            {
+                SelectComboBoxItemByTag(controlAccessCombo, _appSettings.ControlAccessMode);
+                _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+                controlAccessCombo.SelectionChanged += (s, e) =>
+                {
+                    _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+                    Console.WriteLine($"[AccessHost] Modo de control remoto: {_remoteControlMode}");
+                    SaveCurrentSettings();
+                };
+            }
+
+            _controlServer.ClientApprovalCallback = async (clientId) =>
+            {
+                if (!_allowRemoteControl) return false;
+                if (_remoteControlMode == "auto") return true;
+                return await RequestControlApprovalAsync(clientId);
+            };
+
+            WireButtonClick("ApproveControlButton", (s, e) => _controlApprovalTcs?.TrySetResult(true));
+            WireButtonClick("RejectControlButton", (s, e) => _controlApprovalTcs?.TrySetResult(false));
+        }
+
+        private void InitializeAccessAndApproval()
+        {
+            InitializeStreamAccessMode();
+            InitializeControlAccessMode();
+        }
 
         private bool OnProvisionalPairingRequested(string fingerprint, X509Certificate2 clientCert)
         {

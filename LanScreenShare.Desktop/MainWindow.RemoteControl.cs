@@ -18,6 +18,105 @@ namespace LanScreenShare.Desktop
     {
         #region Remote Control & Game Mode
 
+        private bool CanHostSyncClipboard() => _isHosting && _allowRemoteControl && _allowClipboardSync;
+        private bool CanViewerSyncClipboard() => _isViewing && _remoteControlEnabled && _allowClipboardSync;
+
+        private void UpdateHostControlServerState()
+        {
+            if (!_isHosting) return;
+            if (_allowRemoteControl)
+            {
+                if (!_controlServer.IsRunning) _ = _controlServer.StartAsync(5003);
+            }
+            else
+            {
+                _controlServer.Stop();
+            }
+        }
+
+        private void InitializeControlCheckboxes()
+        {
+            var allowCb = this.FindControl<CheckBox>("AllowRemoteControlCheckBox");
+            var controlAccessPanel = this.FindControl<StackPanel>("ControlAccessModePanel");
+
+            if (allowCb != null)
+            {
+                allowCb.IsChecked = _appSettings.AllowRemoteControl;
+                _allowRemoteControl = _appSettings.AllowRemoteControl;
+                if (controlAccessPanel != null) controlAccessPanel.IsVisible = _allowRemoteControl;
+
+                allowCb.IsCheckedChanged += (s, e) =>
+                {
+                    _allowRemoteControl = allowCb.IsChecked == true;
+                    if (controlAccessPanel != null) controlAccessPanel.IsVisible = _allowRemoteControl;
+                    UpdateHostControlServerState();
+                    Console.WriteLine($"[ControlHost] Permiso de control remoto: {_allowRemoteControl}");
+                    SaveCurrentSettings();
+                };
+            }
+
+            var clipboardSyncCb = this.FindControl<CheckBox>("ClipboardSyncCheckBox");
+            if (clipboardSyncCb != null)
+            {
+                clipboardSyncCb.IsChecked = _appSettings.ClipboardSyncEnabled;
+                _allowClipboardSync = _appSettings.ClipboardSyncEnabled;
+                clipboardSyncCb.IsCheckedChanged += (s, e) =>
+                {
+                    bool enabled = clipboardSyncCb.IsChecked == true;
+                    _allowClipboardSync = enabled;
+                    _appSettings.ClipboardSyncEnabled = enabled;
+                    SaveCurrentSettings();
+                };
+            }
+        }
+
+        private void WireControlServerEvents()
+        {
+            _controlServer.ClipboardTextReceived += (s, text) =>
+            {
+                if (CanHostSyncClipboard()) ApplyRemoteClipboardText(text);
+            };
+            _controlServer.ClientConnected += (s, id) =>
+            {
+                if (_isHosting && _allowRemoteControl) BroadcastHostSourceCatalog();
+            };
+            _controlServer.SourceCatalogRequested += (s, e) =>
+            {
+                if (_isHosting && _allowRemoteControl) BroadcastHostSourceCatalog();
+            };
+            _controlServer.SwitchMonitorRequested += (s, idx) =>
+            {
+                if (_isHosting && _allowRemoteControl) HandleRemoteMonitorSwitchOnHost(idx);
+            };
+            _controlServer.SelectSourceRequested += (s, srcId) =>
+            {
+                if (_isHosting && _allowRemoteControl) HandleRemoteSelectSourceOnHost(srcId);
+            };
+        }
+
+        private void WireControlClientEvents()
+        {
+            _controlClient.ClipboardTextReceived += (s, text) =>
+            {
+                if (CanViewerSyncClipboard()) ApplyRemoteClipboardText(text);
+            };
+            _controlClient.MonitorInfoReceived += (s, monitorLabel) =>
+            {
+                if (_isViewing) ApplyRemoteMonitorInfo(monitorLabel);
+            };
+        }
+
+        private void InitializeControlSubsystem()
+        {
+            _controlServer = new TcpControlServer(_sessionAuthority, _inputSimulatorService, _sslServerOptions);
+            _controlClient = new TcpControlClient();
+            _discoveryService.IsRemoteControlAllowedProvider = () => _allowRemoteControl;
+
+            InitializeControlCheckboxes();
+            WireControlServerEvents();
+            WireControlClientEvents();
+        }
+
         private readonly record struct ImageGeometry(Size ImageSize, Rect Bounds);
 
         private bool TryGetNormalizedCoordinates(PointerEventArgs e, out float normX, out float normY)

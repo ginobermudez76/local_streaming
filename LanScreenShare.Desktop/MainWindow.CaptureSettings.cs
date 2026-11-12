@@ -20,6 +20,163 @@ namespace LanScreenShare.Desktop
     {
         #region Stream Settings Logic
 
+        private static bool TryGetSelectedItemTagAsInt(ComboBox? combo, out int value)
+        {
+            if (combo?.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            {
+                return int.TryParse(tag, out value);
+            }
+            value = 0;
+            return false;
+        }
+
+        private void InitializeEngineAndCodecControls()
+        {
+            var engineCombo = this.FindControl<ComboBox>("EngineComboBox");
+            if (engineCombo != null)
+            {
+                SelectComboBoxItemByTag(engineCombo, _appSettings.Engine);
+                engineCombo.SelectionChanged += (s, e) =>
+                {
+                    OnEngineChanged();
+                    SaveCurrentSettings();
+                };
+            }
+
+            var codecCombo = this.FindControl<ComboBox>("CodecComboBox");
+            if (codecCombo != null)
+            {
+                SelectComboBoxItemByTag(codecCombo, _appSettings.Codec);
+                codecCombo.SelectionChanged += (s, e) =>
+                {
+                    string selCodec = GetSelectedCodec();
+                    UpdateQualitySliderForCodec(selCodec);
+                    UpdateHardwareEncoderBadgeUI();
+                    OnSettingChanged();
+                    SaveCurrentSettings();
+                };
+                UpdateHardwareEncoderBadgeUI();
+            }
+        }
+
+        private void InitializeFpsAndQualityControls()
+        {
+            var fpsCombo = this.FindControl<ComboBox>("FpsComboBox");
+            if (fpsCombo != null)
+            {
+                SelectComboBoxItemByTag(fpsCombo, _appSettings.Fps.ToString());
+                fpsCombo.SelectionChanged += (s, e) =>
+                {
+                    OnSettingChanged();
+                    SaveCurrentSettings();
+                };
+            }
+
+            var qualitySlider = this.FindControl<Slider>("QualitySlider");
+            if (qualitySlider != null)
+            {
+                UpdateQualitySliderForCodec(GetSelectedCodec());
+                qualitySlider.PropertyChanged += (s, e) =>
+                {
+                    if (_isUpdatingQualitySlider) return;
+                    if (e.Property.Name == nameof(Slider.Value))
+                    {
+                        OnSettingChanged();
+                        SaveCurrentSettings();
+                    }
+                };
+            }
+        }
+
+        private void InitializeBitrateAndScaleControls()
+        {
+            var bitrateCombo = this.FindControl<ComboBox>("BitrateComboBox");
+            if (bitrateCombo != null)
+            {
+                bitrateCombo.SelectionChanged += (s, e) =>
+                {
+                    if (_isUpdatingQualitySlider) return;
+                    if (TryGetSelectedItemTagAsInt(bitrateCombo, out int val))
+                    {
+                        var slider = this.FindControl<Slider>("QualitySlider");
+                        if (slider != null && (int)slider.Value != val)
+                        {
+                            slider.Value = val;
+                        }
+                        else
+                        {
+                            OnSettingChanged();
+                            SaveCurrentSettings();
+                        }
+                    }
+                };
+            }
+
+            InitializeResolutionOptions();
+
+            var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
+            if (scaleCombo != null)
+            {
+                scaleCombo.SelectionChanged += (s, e) =>
+                {
+                    OnSettingChanged();
+                    SaveCurrentSettings();
+                };
+            }
+        }
+
+        private void InitializeAbrCheckbox()
+        {
+            var abrCb = this.FindControl<CheckBox>("AbrCheckBox");
+            if (abrCb == null) return;
+
+            abrCb.IsChecked = _appSettings.EnableAdaptiveBitrate;
+            _abrController.IsEnabled = _appSettings.EnableAdaptiveBitrate;
+            abrCb.IsCheckedChanged += (s, e) =>
+            {
+                bool isChecked = abrCb.IsChecked ?? true;
+                _appSettings.EnableAdaptiveBitrate = isChecked;
+                _abrController.IsEnabled = isChecked;
+                if (!isChecked && _screenCaptureService != null)
+                {
+                    var slider = this.FindControl<Slider>("QualitySlider");
+                    int manualVal = slider != null ? (int)slider.Value : _appSettings.BitrateMbps;
+                    _screenCaptureService.BitrateMbps = manualVal;
+                    _screenCaptureService.TargetFps = GetSelectedFps();
+                }
+                UpdateAbrUI();
+                SaveCurrentSettings();
+            };
+        }
+
+        private void InitializePresetAndAdvancedButtons()
+        {
+            WireButtonClick("PresetQualityButton", (s, e) => ApplyTransmissionPreset("quality"));
+            WireButtonClick("PresetBalancedButton", (s, e) => ApplyTransmissionPreset("balanced"));
+            WireButtonClick("PresetSpeedButton", (s, e) => ApplyTransmissionPreset("speed"));
+
+            WireButtonClick("ToggleAdvancedSettingsButton", (s, e) =>
+            {
+                _appSettings.ShowAdvancedSettings = !_appSettings.ShowAdvancedSettings;
+                UpdateAdvancedSettingsVisibility();
+                SaveCurrentSettings();
+            });
+
+            UpdateAdvancedSettingsVisibility();
+        }
+
+        private void InitializeEncoderAndSettingsControls()
+        {
+            WireButtonClick("SelectSourceButton", SelectSourceButton_Click);
+            UpdateSourceUI();
+
+            InitializeEngineAndCodecControls();
+            InitializeFpsAndQualityControls();
+            InitializeBitrateAndScaleControls();
+            InitializeAbrCheckbox();
+            InitializePresetAndAdvancedButtons();
+        }
+
         private string GetSelectedEngine()
         {
             var combo = this.FindControl<ComboBox>("EngineComboBox");
