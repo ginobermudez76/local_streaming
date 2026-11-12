@@ -11,6 +11,11 @@ namespace LanScreenShare.Core.Services
         SevereCongestion = 3
     }
 
+    public readonly record struct BitrateLimits(int MinMbps = 2, int MaxMbps = 25);
+    public readonly record struct FpsLimits(int MinFps = 30, int BaseFps = 60);
+    public readonly record struct AbrThresholds(int OptimalMs = 25, int CongestionMs = 50, int SevereMs = 90);
+    public readonly record struct AbrCooldowns(int IncreaseMs = 2000, int DecreaseMs = 700);
+
     /// <summary>
     /// Controlador de Ajuste Automático de Bitrate (ABR - Adaptive Bitrate Controller).
     /// Monitorea dinámicamente RTT, fluctuaciones de latencia, fotogramas descartados (en emisor y receptor)
@@ -37,14 +42,14 @@ namespace LanScreenShare.Core.Services
         private int _baselineRttMs = 15;
         private string _lastAdjustmentReason = "Inicial";
 
-        // Umbrales de RTT adaptados para streaming en red local (LAN / Wi-Fi 5-6GHz)
-        public int RttThresholdOptimalMs { get; set; } = 25;
-        public int RttThresholdCongestionMs { get; set; } = 50;
-        public int RttThresholdSevereMs { get; set; } = 90;
+        public AbrThresholds Thresholds { get; set; } = new(25, 50, 90);
+        public AbrCooldowns Cooldowns { get; set; } = new(2000, 700);
 
-        // Intervalos de enfriamiento (cooldown) y muestreo
-        public int IncreaseCooldownMs { get; set; } = 2000;
-        public int DecreaseCooldownMs { get; set; } = 700;
+        public int RttThresholdOptimalMs { get => Thresholds.OptimalMs; set => Thresholds = Thresholds with { OptimalMs = value }; }
+        public int RttThresholdCongestionMs { get => Thresholds.CongestionMs; set => Thresholds = Thresholds with { CongestionMs = value }; }
+        public int RttThresholdSevereMs { get => Thresholds.SevereMs; set => Thresholds = Thresholds with { SevereMs = value }; }
+        public int IncreaseCooldownMs { get => Cooldowns.IncreaseMs; set => Cooldowns = Cooldowns with { IncreaseMs = value }; }
+        public int DecreaseCooldownMs { get => Cooldowns.DecreaseMs; set => Cooldowns = Cooldowns with { DecreaseMs = value }; }
 
         public bool IsEnabled { get; set; } = true;
 
@@ -55,7 +60,7 @@ namespace LanScreenShare.Core.Services
             {
                 lock (_lock)
                 {
-                    int clamped = Math.Clamp(value, _minBitrateMbps, _maxBitrateMbps);
+                    int clamped = Math.Clamp(value, MinBitrateMbps, MaxBitrateMbps);
                     if (_currentBitrateMbps != clamped)
                     {
                         _currentBitrateMbps = clamped;

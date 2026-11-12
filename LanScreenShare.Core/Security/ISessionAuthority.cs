@@ -9,23 +9,23 @@ namespace LanScreenShare.Core.Security
         string? ActiveControllerSessionId { get; }
         event EventHandler<string>? SessionTerminated;
 
-        ActiveSession CreateSession(string peerFingerprint, string peerName, TimeSpan? ttl = null);
-        Task<(bool Success, ActiveSession? Session, string? FailureReason)> TryCreateSessionAsync(string peerFingerprint, string peerName = "RemotePeer", TimeSpan? ttl = null);
-        ActiveSession? GetSession(string sessionId);
+        ActiveSession CreateSession(DeviceFingerprint peerFingerprint, DeviceName peerName, TimeSpan? ttl = null);
+        Task<(bool Success, ActiveSession? Session, string? FailureReason)> TryCreateSessionAsync(DeviceFingerprint peerFingerprint, DeviceName peerName = default, TimeSpan? ttl = null);
+        ActiveSession? GetSession(SessionId sessionId);
 
-        ChannelAttachmentToken IssueChannelToken(string sessionId, ChannelType channel, TimeSpan? validFor = null);
+        ChannelAttachmentToken IssueChannelToken(SessionId sessionId, ChannelType channel, TimeSpan? validFor = null);
         AttachmentStatus TryAttachChannel(ChannelAttachmentRequest request);
-        AttachmentStatus TryAttachChannel(string tokenId, string sessionId, string peerFingerprint, ChannelType channel);
+        AttachmentStatus TryAttachChannel(string tokenId, SessionId sessionId, DeviceFingerprint peerFingerprint, ChannelType channel);
         bool TryAttachChannel(ChannelAttachmentRequest request, out string? failureReason);
 
-        RemoteControlState RequestRemoteControl(string sessionId);
-        bool TryAcquireControl(string sessionId, out string? failureReason);
-        void ReleaseRemoteControl(string sessionId);
-        void RevokeControl(string sessionId);
+        RemoteControlState RequestRemoteControl(SessionId sessionId);
+        bool TryAcquireControl(SessionId sessionId, out string? failureReason);
+        void ReleaseRemoteControl(SessionId sessionId);
+        void RevokeControl(SessionId sessionId);
         string? GetActiveControllerSessionId();
 
-        void CloseSession(string sessionId);
-        void TerminateSession(string sessionId);
+        void CloseSession(SessionId sessionId);
+        void TerminateSession(SessionId sessionId);
         void PruneExpired();
 
         bool IsPairingBlocked(string ipAddress);

@@ -35,13 +35,13 @@ public class JsonPairedDeviceStore : IPairedDeviceStore
         }
     }
 
-    public Task<bool> IsDevicePairedAsync(string fingerprint) =>
-        QueryDevicesAsync(devices => devices.Any(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)));
+    public Task<bool> IsDevicePairedAsync(DeviceFingerprint fingerprint) =>
+        QueryDevicesAsync(devices => devices.Any(d => string.Equals(d.PublicKeyFingerprint, fingerprint.Value, StringComparison.OrdinalIgnoreCase)));
 
-    public Task<bool> IsDeviceRevokedAsync(string fingerprint) =>
+    public Task<bool> IsDeviceRevokedAsync(DeviceFingerprint fingerprint) =>
         QueryDevicesAsync(devices =>
         {
-            var device = devices.FirstOrDefault(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
+            var device = devices.FirstOrDefault(d => string.Equals(d.PublicKeyFingerprint, fingerprint.Value, StringComparison.OrdinalIgnoreCase));
             return device != null && device.IsRevoked;
         });
 
@@ -55,12 +55,12 @@ public class JsonPairedDeviceStore : IPairedDeviceStore
             return true;
         });
 
-    public Task RevokeDeviceAsync(string fingerprint) =>
+    public Task RevokeDeviceAsync(DeviceFingerprint fingerprint) =>
         MutateDevicesAsync(devices => MarkDeviceRevoked(devices, fingerprint));
 
     private static void UpsertDevice(List<PairedDevice> devices, PairedDevice device)
     {
-        int idx = FindDeviceIndex(devices, device.PublicKeyFingerprint);
+        int idx = FindDeviceIndex(devices, (DeviceFingerprint)device.PublicKeyFingerprint);
         if (idx < 0)
         {
             devices.Add(device);
@@ -69,7 +69,7 @@ public class JsonPairedDeviceStore : IPairedDeviceStore
         devices[idx] = device;
     }
 
-    private static bool MarkDeviceRevoked(List<PairedDevice> devices, string fingerprint)
+    private static bool MarkDeviceRevoked(List<PairedDevice> devices, DeviceFingerprint fingerprint)
     {
         int idx = FindDeviceIndex(devices, fingerprint);
         if (idx < 0) return false;
@@ -77,12 +77,12 @@ public class JsonPairedDeviceStore : IPairedDeviceStore
         return true;
     }
 
-    private static int FindDeviceIndex(List<PairedDevice> devices, string fingerprint) =>
-        devices.FindIndex(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
+    private static int FindDeviceIndex(List<PairedDevice> devices, DeviceFingerprint fingerprint) =>
+        devices.FindIndex(d => string.Equals(d.PublicKeyFingerprint, fingerprint.Value, StringComparison.OrdinalIgnoreCase));
 
-    public Task RemoveDeviceAsync(string fingerprint) =>
+    public Task RemoveDeviceAsync(DeviceFingerprint fingerprint) =>
         MutateDevicesAsync(devices =>
-            devices.RemoveAll(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase)) > 0);
+            devices.RemoveAll(d => string.Equals(d.PublicKeyFingerprint, fingerprint.Value, StringComparison.OrdinalIgnoreCase)) > 0);
 
     private async Task<T> QueryDevicesAsync<T>(Func<List<PairedDevice>, T> query)
     {
