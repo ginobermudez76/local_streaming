@@ -254,7 +254,7 @@ namespace LanScreenShare.Desktop
                 try
                 {
                     using var fileCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                    await _fileTransferClient.ConnectAsync(ipAddress, 5004, _sslClientOptions, handshake?.SessionId, handshake?.FileTransferToken, fileCts.Token);
+                    await _fileTransferClient.ConnectAsync(new FileTransferClientConnectionOptions(ipAddress, 5004, _sslClientOptions, handshake?.SessionId, handshake?.FileTransferToken), fileCts.Token);
                     Console.WriteLine($"[Viewer] Canal de transferencia de archivos conectado a {ipAddress}:5004.");
                 }
                 catch (Exception ex)

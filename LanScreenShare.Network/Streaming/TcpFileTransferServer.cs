@@ -244,12 +244,21 @@ namespace LanScreenShare.Network.Streaming
             }
         }
 
-        private Task DispatchPacketAsync(ClientContext ctx, FileTransferPacketType type, uint payloadLength, CancellationToken ct) => type switch
+        private Task DispatchPacketAsync(ClientContext ctx, FileTransferPacketType type, uint payloadLength, CancellationToken ct)
+        {
+            if (type == FileTransferPacketType.Chunk)
+            {
+                return HandleChunkPacketAsync(ctx, payloadLength, ct);
+            }
+
+            return DispatchControlPacketAsync(ctx, type, payloadLength, ct);
+        }
+
+        private Task DispatchControlPacketAsync(ClientContext ctx, FileTransferPacketType type, uint payloadLength, CancellationToken ct) => type switch
         {
             FileTransferPacketType.Offer => HandleOfferPacketAsync(ctx, payloadLength, ct),
             FileTransferPacketType.Accept => HandleAcceptPacketAsync(ctx, payloadLength, ct),
             FileTransferPacketType.Reject => HandleRejectPacketAsync(ctx, payloadLength, ct),
-            FileTransferPacketType.Chunk => HandleChunkPacketAsync(ctx, payloadLength, ct),
             FileTransferPacketType.Complete => HandleCompletePacketAsync(ctx, payloadLength, ct),
             FileTransferPacketType.Cancel => HandleCancelPacketAsync(ctx, payloadLength, ct),
             _ => Task.CompletedTask

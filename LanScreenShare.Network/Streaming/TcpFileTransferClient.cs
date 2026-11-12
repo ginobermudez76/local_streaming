@@ -62,13 +62,17 @@ namespace LanScreenShare.Network.Streaming
             DownloadDirectory = downloads;
         }
 
-        public async Task ConnectAsync(
+        public Task ConnectAsync(string hostIp, int port = 5004, CancellationToken cancellationToken = default) =>
+            ConnectAsync(new FileTransferClientConnectionOptions(hostIp, port), cancellationToken);
+
+        public Task ConnectAsync(
             string hostIp,
-            int port = 5004,
-            SslClientAuthenticationOptions? sslOptions = null,
-            string? sessionId = null,
-            string? attachmentToken = null,
-            CancellationToken cancellationToken = default)
+            int port,
+            SslClientAuthenticationOptions? sslOptions,
+            CancellationToken cancellationToken = default) =>
+            ConnectAsync(new FileTransferClientConnectionOptions(hostIp, port, sslOptions), cancellationToken);
+
+        public async Task ConnectAsync(FileTransferClientConnectionOptions options, CancellationToken cancellationToken = default)
         {
             if (IsConnected)
                 await DisconnectAsync();
@@ -76,46 +80,51 @@ namespace LanScreenShare.Network.Streaming
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var token = _cts.Token;
 
-            var client = new TcpClient
-            {
-                NoDelay = true
-            };
-
-            await client.ConnectAsync(hostIp, port, token);
+            var client = new TcpClient { NoDelay = true };
+            await client.ConnectAsync(options.HostIp, options.Port, token);
             Stream stream = client.GetStream();
 
-            if (sslOptions != null)
+            if (options.SslOptions != null)
             {
-                var sslStream = new SslStream(stream, false);
-                using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
-
-                await sslStream.AuthenticateAsClientAsync(sslOptions, linkedCts.Token);
-
-                if (!string.IsNullOrEmpty(sessionId) && !string.IsNullOrEmpty(attachmentToken))
-                {
-                    byte[] attachBytes = ChannelAttachmentMessage.Serialize(sessionId, attachmentToken, ChannelType.FileTransfer);
-                    await sslStream.WriteAsync(attachBytes, linkedCts.Token);
-
-                    byte[] resp = new byte[1];
-                    await FileTransferPacket.ReadExactBytesAsync(sslStream, resp, 0, 1, linkedCts.Token);
-                    var status = (AttachmentStatus)resp[0];
-
-                    if (status != AttachmentStatus.Success)
-                    {
-                        client.Close();
-                        throw new InvalidOperationException($"Asociación de canal de transferencia de archivos rechazada por el servidor ({status}).");
-                    }
-                }
-
-                stream = sslStream;
+                stream = await EstablishTlsHandshakeAsync(client, stream, options, token);
             }
 
             _client = client;
             _stream = stream;
 
             _ = Task.Run(() => ProcessIncomingStreamAsync(token), token);
-            Console.WriteLine($"[FileTransferClient] Conectado a {hostIp}:{port} para transferencia de archivos.");
+            Console.WriteLine($"[FileTransferClient] Conectado a {options.HostIp}:{options.Port} para transferencia de archivos.");
+        }
+
+        private static async Task<Stream> EstablishTlsHandshakeAsync(
+            TcpClient client,
+            Stream rawStream,
+            FileTransferClientConnectionOptions options,
+            CancellationToken token)
+        {
+            var sslStream = new SslStream(rawStream, false);
+            using var authCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, authCts.Token);
+
+            await sslStream.AuthenticateAsClientAsync(options.SslOptions!, linkedCts.Token);
+
+            if (!string.IsNullOrEmpty(options.SessionId) && !string.IsNullOrEmpty(options.AttachmentToken))
+            {
+                byte[] attachBytes = ChannelAttachmentMessage.Serialize(options.SessionId, options.AttachmentToken, ChannelType.FileTransfer);
+                await sslStream.WriteAsync(attachBytes, linkedCts.Token);
+
+                byte[] resp = new byte[1];
+                await FileTransferPacket.ReadExactBytesAsync(sslStream, resp, 0, 1, linkedCts.Token);
+                var status = (AttachmentStatus)resp[0];
+
+                if (status != AttachmentStatus.Success)
+                {
+                    client.Close();
+                    throw new InvalidOperationException($"Asociación de canal de transferencia de archivos rechazada por el servidor ({status}).");
+                }
+            }
+
+            return sslStream;
         }
 
         private async Task ProcessIncomingStreamAsync(CancellationToken ct)
@@ -142,27 +151,7 @@ namespace LanScreenShare.Network.Streaming
                         throw new InvalidDataException($"Carga útil de fragmento excede el máximo permitido ({payloadLength} bytes).");
                     }
 
-                    switch (type)
-                    {
-                        case FileTransferPacketType.Offer:
-                            await HandleOfferPacketAsync(payloadLength, ct);
-                            break;
-                        case FileTransferPacketType.Accept:
-                            await HandleAcceptPacketAsync(payloadLength, ct);
-                            break;
-                        case FileTransferPacketType.Reject:
-                            await HandleRejectPacketAsync(payloadLength, ct);
-                            break;
-                        case FileTransferPacketType.Chunk:
-                            await HandleChunkPacketAsync(payloadLength, ct);
-                            break;
-                        case FileTransferPacketType.Complete:
-                            await HandleCompletePacketAsync(payloadLength, ct);
-                            break;
-                        case FileTransferPacketType.Cancel:
-                            await HandleCancelPacketAsync(payloadLength, ct);
-                            break;
-                    }
+                    await DispatchIncomingPacketAsync(type, payloadLength, ct);
                 }
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -171,13 +160,38 @@ namespace LanScreenShare.Network.Streaming
             }
             finally
             {
-                foreach (var inbound in _inboundTransfers.Values)
-                {
-                    inbound.Dispose();
-                }
-                _inboundTransfers.Clear();
-                Disconnected?.Invoke(this, EventArgs.Empty);
+                CleanupInboundTransfers();
             }
+        }
+
+        private Task DispatchIncomingPacketAsync(FileTransferPacketType type, uint payloadLength, CancellationToken ct)
+        {
+            if (type == FileTransferPacketType.Chunk)
+            {
+                return HandleChunkPacketAsync(payloadLength, ct);
+            }
+
+            return DispatchControlPacketAsync(type, payloadLength, ct);
+        }
+
+        private Task DispatchControlPacketAsync(FileTransferPacketType type, uint payloadLength, CancellationToken ct) => type switch
+        {
+            FileTransferPacketType.Offer => HandleOfferPacketAsync(payloadLength, ct),
+            FileTransferPacketType.Accept => HandleAcceptPacketAsync(payloadLength, ct),
+            FileTransferPacketType.Reject => HandleRejectPacketAsync(payloadLength, ct),
+            FileTransferPacketType.Complete => HandleCompletePacketAsync(payloadLength, ct),
+            FileTransferPacketType.Cancel => HandleCancelPacketAsync(payloadLength, ct),
+            _ => Task.CompletedTask
+        };
+
+        private void CleanupInboundTransfers()
+        {
+            foreach (var inbound in _inboundTransfers.Values)
+            {
+                inbound.Dispose();
+            }
+            _inboundTransfers.Clear();
+            Disconnected?.Invoke(this, EventArgs.Empty);
         }
 
         private static async Task<T?> ReadJsonDtoAsync<T>(Stream stream, uint payloadLength, CancellationToken ct)
@@ -362,129 +376,22 @@ namespace LanScreenShare.Network.Streaming
 
             var fileInfo = new FileInfo(filePath);
             string transferId = Guid.NewGuid().ToString("D");
-            Guid transferGuid = Guid.Parse(transferId);
-
-            var acceptTcs = new TaskCompletionSource<bool>();
-            _outboundAcceptSignals[transferId] = acceptTcs;
 
             try
             {
-                await _sendLock.WaitAsync(cancellationToken);
-                try
-                {
-                    await FileTransferPacket.WriteOfferAsync(_stream, transferId, fileInfo.Name, fileInfo.Length, cancellationToken);
-                }
-                finally
-                {
-                    _sendLock.Release();
-                }
-
-                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-                using var reg = linked.Token.Register(() => acceptTcs.TrySetResult(false));
-
-                bool accepted = await acceptTcs.Task;
+                bool accepted = await ProposeFileTransferAsync(transferId, fileInfo, cancellationToken);
                 if (!accepted)
                 {
-                    TransferError?.Invoke(this, new FileTransferError
-                    {
-                        TransferId = transferId,
-                        FileName = fileInfo.Name,
-                        ErrorMessage = "El receptor rechazó la transferencia.",
-                        IsUpload = true
-                    });
+                    DispatchTransferRejection(transferId, fileInfo.Name);
                     return false;
                 }
 
-                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, FileTransferPacket.DefaultChunkSize, true);
-                byte[] buffer = ArrayPool<byte>.Shared.Rent(FileTransferPacket.DefaultChunkSize);
-                long totalSent = 0;
-                var sw = Stopwatch.StartNew();
-                long lastReportMs = 0;
-                long lastReportBytes = 0;
-
-                try
-                {
-                    int read;
-                    while ((read = await fs.ReadAsync(buffer.AsMemory(0, FileTransferPacket.DefaultChunkSize), cancellationToken)) > 0)
-                    {
-                        await _sendLock.WaitAsync(cancellationToken);
-                        try
-                        {
-                            await FileTransferPacket.WriteChunkAsync(_stream, transferGuid, totalSent, buffer.AsMemory(0, read), cancellationToken);
-                        }
-                        finally
-                        {
-                            _sendLock.Release();
-                        }
-
-                        totalSent += read;
-
-                        long nowMs = sw.ElapsedMilliseconds;
-                        if (nowMs - lastReportMs >= 200 || totalSent >= fileInfo.Length)
-                        {
-                            double elapsed = Math.Max(0.001, (nowMs - lastReportMs) / 1000.0);
-                            double speed = (totalSent - lastReportBytes) / elapsed;
-                            lastReportMs = nowMs;
-                            lastReportBytes = totalSent;
-
-                            TransferProgress?.Invoke(this, new FileTransferProgress
-                            {
-                                TransferId = transferId,
-                                FileName = fileInfo.Name,
-                                BytesTransferred = totalSent,
-                                TotalBytes = fileInfo.Length,
-                                SpeedBytesPerSec = speed,
-                                IsUpload = true
-                            });
-                        }
-                    }
-
-                    await _sendLock.WaitAsync(cancellationToken);
-                    try
-                    {
-                        await FileTransferPacket.WriteCompleteAsync(_stream, transferId, cancellationToken);
-                    }
-                    finally
-                    {
-                        _sendLock.Release();
-                    }
-
-                    TransferCompleted?.Invoke(this, new FileTransferCompleted
-                    {
-                        TransferId = transferId,
-                        FileName = fileInfo.Name,
-                        FilePath = filePath,
-                        FileSize = fileInfo.Length,
-                        IsUpload = true
-                    });
-
-                    return true;
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(buffer);
-                }
+                await StreamFileContentAsync(transferId, fileInfo, filePath, cancellationToken);
+                return true;
             }
             catch (Exception ex)
             {
-                if (_stream != null)
-                {
-                    try
-                    {
-                        await _sendLock.WaitAsync(CancellationToken.None);
-                        try
-                        {
-                            await FileTransferPacket.WriteCancelAsync(_stream, transferId, ex.Message, CancellationToken.None);
-                        }
-                        finally
-                        {
-                            _sendLock.Release();
-                        }
-                    }
-                    catch { }
-                }
-
+                await TrySendCancelPacketAsync(transferId, ex.Message);
                 TransferError?.Invoke(this, new FileTransferError
                 {
                     TransferId = transferId,
@@ -498,6 +405,142 @@ namespace LanScreenShare.Network.Streaming
             {
                 _outboundAcceptSignals.TryRemove(transferId, out _);
             }
+        }
+
+        private async Task<bool> ProposeFileTransferAsync(string transferId, FileInfo fileInfo, CancellationToken ct)
+        {
+            var acceptTcs = new TaskCompletionSource<bool>();
+            _outboundAcceptSignals[transferId] = acceptTcs;
+
+            await _sendLock.WaitAsync(ct);
+            try
+            {
+                await FileTransferPacket.WriteOfferAsync(_stream!, transferId, fileInfo.Name, fileInfo.Length, ct);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            using var reg = linked.Token.Register(() => acceptTcs.TrySetResult(false));
+
+            return await acceptTcs.Task;
+        }
+
+        private void DispatchTransferRejection(string transferId, string fileName)
+        {
+            TransferError?.Invoke(this, new FileTransferError
+            {
+                TransferId = transferId,
+                FileName = fileName,
+                ErrorMessage = "El receptor rechazó la transferencia.",
+                IsUpload = true
+            });
+        }
+
+        private async Task StreamFileContentAsync(
+            string transferId,
+            FileInfo fileInfo,
+            string filePath,
+            CancellationToken ct)
+        {
+            Guid transferGuid = Guid.Parse(transferId);
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, FileTransferPacket.DefaultChunkSize, true);
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(FileTransferPacket.DefaultChunkSize);
+            long totalSent = 0;
+            var sw = Stopwatch.StartNew();
+            long lastReportMs = 0;
+            long lastReportBytes = 0;
+
+            try
+            {
+                int read;
+                while ((read = await fs.ReadAsync(buffer.AsMemory(0, FileTransferPacket.DefaultChunkSize), ct)) > 0)
+                {
+                    await WriteChunkPacketAsync(transferGuid, totalSent, buffer.AsMemory(0, read), ct);
+                    totalSent += read;
+
+                    long nowMs = sw.ElapsedMilliseconds;
+                    if (nowMs - lastReportMs >= 200 || totalSent >= fileInfo.Length)
+                    {
+                        double elapsed = Math.Max(0.001, (nowMs - lastReportMs) / 1000.0);
+                        double speed = (totalSent - lastReportBytes) / elapsed;
+                        lastReportMs = nowMs;
+                        lastReportBytes = totalSent;
+
+                        TransferProgress?.Invoke(this, new FileTransferProgress
+                        {
+                            TransferId = transferId,
+                            FileName = fileInfo.Name,
+                            BytesTransferred = totalSent,
+                            TotalBytes = fileInfo.Length,
+                            SpeedBytesPerSec = speed,
+                            IsUpload = true
+                        });
+                    }
+                }
+
+                await WriteCompletePacketAsync(transferId, ct);
+
+                TransferCompleted?.Invoke(this, new FileTransferCompleted
+                {
+                    TransferId = transferId,
+                    FileName = fileInfo.Name,
+                    FilePath = filePath,
+                    FileSize = fileInfo.Length,
+                    IsUpload = true
+                });
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        private async Task WriteChunkPacketAsync(Guid transferGuid, long offset, ReadOnlyMemory<byte> chunk, CancellationToken ct)
+        {
+            await _sendLock.WaitAsync(ct);
+            try
+            {
+                await FileTransferPacket.WriteChunkAsync(_stream!, transferGuid, offset, chunk, ct);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        private async Task WriteCompletePacketAsync(string transferId, CancellationToken ct)
+        {
+            await _sendLock.WaitAsync(ct);
+            try
+            {
+                await FileTransferPacket.WriteCompleteAsync(_stream!, transferId, ct);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        private async Task TrySendCancelPacketAsync(string transferId, string reason)
+        {
+            if (_stream == null) return;
+            try
+            {
+                await _sendLock.WaitAsync(CancellationToken.None);
+                try
+                {
+                    await FileTransferPacket.WriteCancelAsync(_stream, transferId, reason, CancellationToken.None);
+                }
+                finally
+                {
+                    _sendLock.Release();
+                }
+            }
+            catch { }
         }
 
         public Task DisconnectAsync()
