@@ -193,40 +193,13 @@ namespace LanScreenShare.Media
                         return false;
                     }
 
-                    int hr = InitializeAudioClientFormat(_audioClient, out WaveFormat waveFormat);
-                    if (hr < 0)
+                    if (!TryInitializeClientPipeline(_audioClient, out var waveFormat, out var captureClient))
                     {
-                        Log($"[ProcessAudio] IAudioClient.Initialize falló con HRESULT: 0x{hr:X8}");
                         Cleanup();
                         return false;
                     }
 
-                    _bufferEvent = new AutoResetEvent(false);
-                    hr = _audioClient.SetEventHandle(_bufferEvent.SafeWaitHandle.DangerousGetHandle());
-                    if (hr < 0)
-                    {
-                        Log($"[ProcessAudio] SetEventHandle falló con HRESULT: 0x{hr:X8}");
-                        Cleanup();
-                        return false;
-                    }
-
-                    hr = _audioClient.GetService(typeof(IAudioCaptureClient).GUID, out object rawCaptureClient);
-                    if (hr < 0 || rawCaptureClient == null)
-                    {
-                        Log($"[ProcessAudio] GetService(IAudioCaptureClient) falló con HRESULT: 0x{hr:X8}");
-                        Cleanup();
-                        return false;
-                    }
-
-                    _captureClient = (IAudioCaptureClient)rawCaptureClient;
-                    hr = _audioClient.Start();
-                    if (hr < 0)
-                    {
-                        Log($"[ProcessAudio] IAudioClient.Start falló con HRESULT: 0x{hr:X8}");
-                        Cleanup();
-                        return false;
-                    }
-
+                    _captureClient = captureClient;
                     _cts = new CancellationTokenSource();
                     IsCapturing = true;
                     _captureTask = Task.Run(() => CaptureLoop(waveFormat, _cts.Token));
@@ -241,6 +214,45 @@ namespace LanScreenShare.Media
                     return false;
                 }
             }, cancellationToken);
+        }
+
+        private bool TryInitializeClientPipeline(
+            IAudioClient client,
+            out WaveFormat waveFormat,
+            out IAudioCaptureClient captureClient)
+        {
+            captureClient = null!;
+            int hr = InitializeAudioClientFormat(client, out waveFormat);
+            if (hr < 0)
+            {
+                Log($"[ProcessAudio] IAudioClient.Initialize falló con HRESULT: 0x{hr:X8}");
+                return false;
+            }
+
+            _bufferEvent = new AutoResetEvent(false);
+            hr = client.SetEventHandle(_bufferEvent.SafeWaitHandle.DangerousGetHandle());
+            if (hr < 0)
+            {
+                Log($"[ProcessAudio] SetEventHandle falló con HRESULT: 0x{hr:X8}");
+                return false;
+            }
+
+            hr = client.GetService(typeof(IAudioCaptureClient).GUID, out object rawCaptureClient);
+            if (hr < 0 || rawCaptureClient == null)
+            {
+                Log($"[ProcessAudio] GetService(IAudioCaptureClient) falló con HRESULT: 0x{hr:X8}");
+                return false;
+            }
+
+            captureClient = (IAudioCaptureClient)rawCaptureClient;
+            hr = client.Start();
+            if (hr < 0)
+            {
+                Log($"[ProcessAudio] IAudioClient.Start falló con HRESULT: 0x{hr:X8}");
+                return false;
+            }
+
+            return true;
         }
 
         private static bool IsValidBuffer(int hrGet, IntPtr pData, uint numFrames) =>
@@ -292,12 +304,17 @@ namespace LanScreenShare.Media
             while (!token.IsCancellationRequested)
             {
                 int index = WaitHandle.WaitAny(waitHandles, 20);
-                if (index == 1 || token.IsCancellationRequested)
+                if (index == 1)
                     break;
 
-                while (!token.IsCancellationRequested && TryReadAndDispatchPacket(waveFormat, formatEncoding))
-                {
-                }
+                DrainPackets(waveFormat, formatEncoding, token);
+            }
+        }
+
+        private void DrainPackets(WaveFormat waveFormat, short formatEncoding, CancellationToken token)
+        {
+            while (!token.IsCancellationRequested && TryReadAndDispatchPacket(waveFormat, formatEncoding))
+            {
             }
         }
 

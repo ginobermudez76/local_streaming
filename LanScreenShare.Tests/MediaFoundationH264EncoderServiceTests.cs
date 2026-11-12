@@ -196,7 +196,7 @@ namespace LanScreenShare.Tests
                 byte[] encoded = encoder.EncodeFrame(dummyBgra, width, height, forceKeyframe: i == 0);
                 if (encoded.Length > 0)
                 {
-                    bool ok = decoder.TryDecodeFrame(encoded, width, height, out byte[] bgraPixels, out int decW, out int decH);
+                    bool ok = decoder.TryDecodeFrame(encoded, width, height, out var decodedFrame);
                     if (ok)
                     {
                         if (firstDecodedFrameIndex < 0) firstDecodedFrameIndex = i;

@@ -142,18 +142,33 @@ namespace LanScreenShare.Media
             _captureTask = null;
         }
 
+        private sealed class WindowFpsTracker
+        {
+            private readonly Stopwatch _fpsStopwatch = Stopwatch.StartNew();
+            private int _capturedFramesCount;
+            private int _currentHostFps;
+
+            public void UpdateMetrics(CapturedFrame frame, int frameTimeMs)
+            {
+                _capturedFramesCount++;
+                if (_fpsStopwatch.ElapsedMilliseconds >= 1000)
+                {
+                    _currentHostFps = (int)Math.Round(_capturedFramesCount * 1000.0 / _fpsStopwatch.ElapsedMilliseconds);
+                    _capturedFramesCount = 0;
+                    _fpsStopwatch.Restart();
+                }
+
+                frame.HostFps = _currentHostFps > 0 ? _currentHostFps : _capturedFramesCount;
+                frame.HostFrameTimeMs = frameTimeMs;
+            }
+        }
+
         private void CaptureLoop(CancellationToken token)
         {
-            try
-            {
-                Thread.CurrentThread.Priority = ThreadPriority.Highest;
-            }
-            catch { }
+            try { Thread.CurrentThread.Priority = ThreadPriority.Highest; } catch { }
 
             var stopwatch = new Stopwatch();
-            var fpsStopwatch = Stopwatch.StartNew();
-            int capturedFramesCount = 0;
-            int currentHostFps = 0;
+            var tracker = new WindowFpsTracker();
 
             while (!token.IsCancellationRequested)
             {
@@ -165,41 +180,16 @@ namespace LanScreenShare.Media
                     break;
                 }
 
-                // Si la ventana estÃ¡ minimizada, pausar brevemente
                 if (IsIconic(_hwnd))
                 {
                     Thread.Sleep(100);
                     continue;
                 }
 
-                int currentFps = _targetFps;
-                int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, currentFps));
-
+                int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, _targetFps));
                 try
                 {
-                    var frameProcStopwatch = Stopwatch.StartNew();
-                    bool forceKeyframe = _forceKeyframeRequested;
-                    _forceKeyframeRequested = false;
-                        var frame = CaptureWindowFrame(_hwnd, new WindowCaptureOptions(_quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe));
-
-                    if (frame != null)
-                    {
-                        frameProcStopwatch.Stop();
-                        int frameTimeMs = (int)frameProcStopwatch.ElapsedMilliseconds;
-
-                        capturedFramesCount++;
-                        if (fpsStopwatch.ElapsedMilliseconds >= 1000)
-                        {
-                            currentHostFps = (int)Math.Round(capturedFramesCount * 1000.0 / fpsStopwatch.ElapsedMilliseconds);
-                            capturedFramesCount = 0;
-                            fpsStopwatch.Restart();
-                        }
-
-                        frame.HostFps = currentHostFps > 0 ? currentHostFps : capturedFramesCount;
-                        frame.HostFrameTimeMs = frameTimeMs;
-
-                        FrameCaptured?.Invoke(this, frame);
-                    }
+                    CaptureAndDispatchSingleFrame(tracker);
                 }
                 catch (Exception ex)
                 {
@@ -212,6 +202,21 @@ namespace LanScreenShare.Media
                 {
                     Thread.Sleep(delay);
                 }
+            }
+        }
+
+        private void CaptureAndDispatchSingleFrame(WindowFpsTracker tracker)
+        {
+            var procStopwatch = Stopwatch.StartNew();
+            bool forceKeyframe = _forceKeyframeRequested;
+            _forceKeyframeRequested = false;
+
+            var frame = CaptureWindowFrame(_hwnd, new WindowCaptureOptions(_quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe));
+            if (frame != null)
+            {
+                procStopwatch.Stop();
+                tracker.UpdateMetrics(frame, (int)procStopwatch.ElapsedMilliseconds);
+                FrameCaptured?.Invoke(this, frame);
             }
         }
 

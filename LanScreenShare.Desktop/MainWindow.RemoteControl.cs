@@ -70,28 +70,32 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private bool CanHostHandleRemoteControl => _isHosting && _allowRemoteControl;
+
         private void WireControlServerEvents()
         {
             _controlServer.ClipboardTextReceived += (s, text) =>
             {
                 if (CanHostSyncClipboard()) ApplyRemoteClipboardText(text);
             };
-            _controlServer.ClientConnected += (s, id) =>
-            {
-                if (_isHosting && _allowRemoteControl) BroadcastHostSourceCatalog();
-            };
-            _controlServer.SourceCatalogRequested += (s, e) =>
-            {
-                if (_isHosting && _allowRemoteControl) BroadcastHostSourceCatalog();
-            };
+            _controlServer.ClientConnected += (s, id) => OnHostRemoteControlRequested();
+            _controlServer.SourceCatalogRequested += (s, e) => OnHostRemoteControlRequested();
             _controlServer.SwitchMonitorRequested += (s, idx) =>
             {
-                if (_isHosting && _allowRemoteControl) HandleRemoteMonitorSwitchOnHost(idx);
+                if (CanHostHandleRemoteControl) HandleRemoteMonitorSwitchOnHost(idx);
             };
             _controlServer.SelectSourceRequested += (s, srcId) =>
             {
-                if (_isHosting && _allowRemoteControl) HandleRemoteSelectSourceOnHost(srcId);
+                if (CanHostHandleRemoteControl) HandleRemoteSelectSourceOnHost(srcId);
             };
+        }
+
+        private void OnHostRemoteControlRequested()
+        {
+            if (CanHostHandleRemoteControl)
+            {
+                BroadcastHostSourceCatalog();
+            }
         }
 
         private void WireControlClientEvents()

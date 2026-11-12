@@ -627,7 +627,7 @@ namespace LanScreenShare.Desktop
 
             _screenCaptureService = CreateCaptureService(source, engine);
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
-            _screenCaptureService.StartCapture(fps, profile.Quality, profile.Scale, profile.Codec, profile.TargetWidth, profile.TargetHeight, bitrateMbps);
+            _screenCaptureService.StartCapture(new CaptureProfile(fps, profile.Quality, profile.Scale, profile.Codec, profile.TargetWidth, profile.TargetHeight, bitrateMbps));
             UpdateAbrUI();
         }
 
@@ -704,7 +704,7 @@ namespace LanScreenShare.Desktop
             UpdateScaleAndResolutionLabels(targetW, targetH, scale);
             MarkCustomPresetIfUserChanged();
 
-            _screenCaptureService.UpdateSettings(fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+            _screenCaptureService.UpdateSettings(new CaptureProfile(fps, quality, scale, codec, targetW, targetH, bitrateMbps));
         }
 
         private void UpdateFpsAndQualityLabels(int fps, string codec, int sliderVal)

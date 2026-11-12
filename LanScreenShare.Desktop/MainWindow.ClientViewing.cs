@@ -322,11 +322,12 @@ namespace LanScreenShare.Desktop
 
         private void HandleH264FrameReceived(CapturedFrame frame)
         {
-            if (_h264Decoder == null || !_h264Decoder.TryDecodeFrame(frame.Data, frame.Width, frame.Height, out byte[] bgraPixels, out int decW, out int decH))
+            if (_h264Decoder == null || !_h264Decoder.TryDecodeFrame(frame.Data, frame.Width, frame.Height, out var decodedFrame))
             {
                 return;
             }
 
+            byte[] bgraPixels = decodedFrame.Pixels;
             lock (_bitmapLock)
             {
                 if (_latestDecodedBgra == null || _latestDecodedBgra.Length != bgraPixels.Length)
@@ -334,8 +335,8 @@ namespace LanScreenShare.Desktop
                     _latestDecodedBgra = new byte[bgraPixels.Length];
                 }
                 Buffer.BlockCopy(bgraPixels, 0, _latestDecodedBgra, 0, bgraPixels.Length);
-                _latestDecodedWidth = decW;
-                _latestDecodedHeight = decH;
+                _latestDecodedWidth = decodedFrame.Width;
+                _latestDecodedHeight = decodedFrame.Height;
             }
 
             if (Interlocked.Exchange(ref _isUiRenderPending, 1) == 0)

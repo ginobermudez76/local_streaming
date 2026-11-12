@@ -18,14 +18,11 @@ namespace LanScreenShare.Core.Interfaces
         bool IsHardwareAccelerated => false;
 
         void StartCapture(CaptureProfile profile);
-        void StartCapture(int targetFps = 30, int quality = 70, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
-            => StartCapture(new CaptureProfile(targetFps, quality, resolutionScale, codec, targetWidth, targetHeight, bitrateMbps));
+        void StartCapture() => StartCapture(new CaptureProfile());
 
         void StopCapture();
 
         void UpdateSettings(CaptureProfile profile);
-        void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
-            => UpdateSettings(new CaptureProfile(targetFps, quality, resolutionScale, codec, targetWidth, targetHeight, bitrateMbps));
 
         void RequestKeyframe() { }
     }

@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using LanScreenShare.Core.Interfaces;
+using LanScreenShare.Core.Models;
 using Vortice.MediaFoundation;
 
 namespace LanScreenShare.Media
@@ -227,11 +228,9 @@ namespace LanScreenShare.Media
             }
         }
 
-        public bool TryDecodeFrame(byte[] encodedData, int width, int height, out byte[] bgraPixels, out int decodedWidth, out int decodedHeight)
+        public bool TryDecodeFrame(byte[] encodedData, int width, int height, out DecodedVideoFrame decodedFrame)
         {
-            bgraPixels = Array.Empty<byte>();
-            decodedWidth = width;
-            decodedHeight = height;
+            decodedFrame = default;
 
             if (encodedData.Length == 0)
                 return false;
@@ -245,7 +244,7 @@ namespace LanScreenShare.Media
 
                 if (DrainPendingOutput(width, height))
                 {
-                    bgraPixels = _decodedBgraBuffer!;
+                    decodedFrame = new DecodedVideoFrame(_decodedBgraBuffer!, width, height);
                     return true;
                 }
 

@@ -88,16 +88,16 @@ namespace LanScreenShare.Media
         private static INPUT CreateMouseButtonReleaseInput(uint flag) =>
             CreateMouseInput(0, 0, flag);
 
-        private static uint GetMouseButtonFlag(RemoteMouseButton button, bool isDown) => (button, isDown) switch
+        private static uint GetMouseButtonDownFlag(RemoteMouseButton button) => button switch
         {
-            (RemoteMouseButton.Left, true) => MOUSEEVENTF_LEFTDOWN,
-            (RemoteMouseButton.Left, false) => MOUSEEVENTF_LEFTUP,
-            (RemoteMouseButton.Right, true) => MOUSEEVENTF_RIGHTDOWN,
-            (RemoteMouseButton.Right, false) => MOUSEEVENTF_RIGHTUP,
-            (RemoteMouseButton.Middle, true) => MOUSEEVENTF_MIDDLEDOWN,
-            (RemoteMouseButton.Middle, false) => MOUSEEVENTF_MIDDLEUP,
+            RemoteMouseButton.Left => MOUSEEVENTF_LEFTDOWN,
+            RemoteMouseButton.Right => MOUSEEVENTF_RIGHTDOWN,
+            RemoteMouseButton.Middle => MOUSEEVENTF_MIDDLEDOWN,
             _ => 0
         };
+
+        private static uint GetMouseButtonFlag(RemoteMouseButton button, bool isDown) =>
+            isDown ? GetMouseButtonDownFlag(button) : GetMouseButtonUpFlag(button);
 
         private void DispatchInputEvent(in RemoteInputMessage input)
         {

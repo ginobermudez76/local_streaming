@@ -108,8 +108,7 @@ namespace LanScreenShare.Core.Services
             }, token);
         }
 
-        public void StartCapture(int targetFps = 30, int quality = 70, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
-            => StartCapture(new CaptureProfile(targetFps, quality, resolutionScale, codec, targetWidth, targetHeight, bitrateMbps));
+        public void StartCapture() => StartCapture(new CaptureProfile());
 
         public void StopCapture()
         {
@@ -138,9 +137,6 @@ namespace LanScreenShare.Core.Services
             TargetHeight = profile.TargetHeight;
             BitrateMbps = profile.BitrateMbps;
         }
-
-        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
-            => UpdateSettings(new CaptureProfile(targetFps, quality, resolutionScale, codec, targetWidth, targetHeight, bitrateMbps));
 
         public void RequestKeyframe()
         {
