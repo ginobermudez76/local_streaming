@@ -13,12 +13,15 @@ namespace LanScreenShare.Media
     [SupportedOSPlatform("windows")]
     public class WindowsScreenCaptureService : IScreenCaptureService
     {
+        public readonly record struct ScreenBounds(int X, int Y, int Width, int Height, bool AllScreens = false);
+
+        public event EventHandler<CapturedFrame>? FrameCaptured;
         private CancellationTokenSource? _cts;
         private Task? _captureTask;
         private bool _disposed;
 
         private volatile int _targetFps = 30;
-        private volatile int _quality = 75;
+        private volatile int _quality = 70;
         private volatile int _scalePercent = 100;
         private volatile int _targetWidth = 0;
         private volatile int _targetHeight = 0;
@@ -38,7 +41,6 @@ namespace LanScreenShare.Media
         private volatile int _captureHeight = 0;
         private volatile bool _captureAllScreens = false;
 
-        public event EventHandler<CapturedFrame>? FrameCaptured;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
         public string? ActiveEncoderDescription => _codec == "h264" ? _h264Encoder?.EncoderDescription : "JPEG";
         public bool IsHardwareAccelerated => _codec == "h264" && (_h264Encoder?.IsHardwareAccelerated ?? false);
@@ -73,13 +75,13 @@ namespace LanScreenShare.Media
             set => _captureAllScreens = value;
         }
 
-        public void SetTargetBounds(int x, int y, int width, int height, bool allScreens = false)
+        public void SetTargetBounds(ScreenBounds bounds)
         {
-            _captureX = x;
-            _captureY = y;
-            _captureWidth = Math.Max(0, width);
-            _captureHeight = Math.Max(0, height);
-            _captureAllScreens = allScreens;
+            _captureX = bounds.X;
+            _captureY = bounds.Y;
+            _captureWidth = Math.Max(0, bounds.Width);
+            _captureHeight = Math.Max(0, bounds.Height);
+            _captureAllScreens = bounds.AllScreens;
         }
 
         public int TargetFps
@@ -133,98 +135,93 @@ namespace LanScreenShare.Media
             set => _codec = value.ToLowerInvariant() == "h264" ? "h264" : "jpeg";
         }
 
-        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "h264", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
+        public void UpdateSettings(CaptureProfile profile)
         {
-            TargetFps = targetFps;
-            Quality = quality;
-            BitrateMbps = bitrateMbps;
-            ResolutionScale = resolutionScale;
-            Codec = codec;
-            TargetWidth = targetWidth;
-            TargetHeight = targetHeight;
+            TargetFps = profile.TargetFps;
+            Quality = profile.Quality;
+            BitrateMbps = profile.BitrateMbps;
+            ResolutionScale = profile.ResolutionScale;
+            Codec = profile.Codec;
+            TargetWidth = profile.TargetWidth;
+            TargetHeight = profile.TargetHeight;
         }
 
-        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0, string codec = "h264", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
+        public void StartCapture(CaptureProfile profile)
         {
             if (IsCapturing)
                 return;
 
-            _targetFps = Math.Clamp(targetFps, 1, 120);
-            _quality = Math.Clamp(quality, 10, 100);
-            _bitrateMbps = Math.Clamp(bitrateMbps, 1, 50);
-            ResolutionScale = resolutionScale;
-            Codec = codec;
-            TargetWidth = targetWidth;
-            TargetHeight = targetHeight;
+            _targetFps = Math.Clamp(profile.TargetFps, 1, 120);
+            _quality = Math.Clamp(profile.Quality, 10, 100);
+            _bitrateMbps = Math.Clamp(profile.BitrateMbps, 1, 50);
+            ResolutionScale = profile.ResolutionScale;
+            Codec = profile.Codec;
+            TargetWidth = profile.TargetWidth;
+            TargetHeight = profile.TargetHeight;
 
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
 
-            _captureTask = Task.Run(async () =>
+            _captureTask = Task.Run(() => CaptureLoopAsync(token), token);
+        }
+
+        private async Task CaptureLoopAsync(CancellationToken token)
+        {
+            try
             {
-                try
+                Thread.CurrentThread.Priority = ThreadPriority.Highest;
+            }
+            catch { }
+
+            var stopwatch = new Stopwatch();
+            var fpsTracker = new HostFpsTracker();
+
+            while (!token.IsCancellationRequested)
+            {
+                stopwatch.Restart();
+                int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, _targetFps));
+
+                CaptureAndDispatchFrame(fpsTracker);
+
+                int elapsed = (int)stopwatch.ElapsedMilliseconds;
+                int delay = frameIntervalMs - elapsed;
+                if (delay > 0)
                 {
-                    Thread.CurrentThread.Priority = ThreadPriority.Highest;
-                }
-                catch { }
-
-                var stopwatch = new Stopwatch();
-                var fpsStopwatch = Stopwatch.StartNew();
-                int capturedFramesCount = 0;
-                int currentHostFps = 0;
-
-                while (!token.IsCancellationRequested)
-                {
-                    stopwatch.Restart();
-
-                    int currentFps = _targetFps;
-                    int frameIntervalMs = Math.Max(5, 1000 / Math.Max(1, currentFps));
-
                     try
                     {
-                        var frameProcStopwatch = Stopwatch.StartNew();
-                        bool forceKeyframe = _forceKeyframeRequested;
-                        _forceKeyframeRequested = false;
-                        var frame = CaptureDesktopFrame(new ScreenCaptureOptions(_quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe));
-                        if (frame != null)
-                        {
-                            frameProcStopwatch.Stop();
-                            int frameTimeMs = (int)frameProcStopwatch.ElapsedMilliseconds;
-
-                            capturedFramesCount++;
-                            if (fpsStopwatch.ElapsedMilliseconds >= 1000)
-                            {
-                                currentHostFps = (int)Math.Round(capturedFramesCount * 1000.0 / fpsStopwatch.ElapsedMilliseconds);
-                                capturedFramesCount = 0;
-                                fpsStopwatch.Restart();
-                            }
-
-                            frame.HostFps = currentHostFps > 0 ? currentHostFps : capturedFramesCount;
-                            frame.HostFrameTimeMs = frameTimeMs;
-
-                            FrameCaptured?.Invoke(this, frame);
-                        }
+                        await Task.Delay(delay, token);
                     }
-                    catch (Exception ex)
+                    catch (OperationCanceledException)
                     {
-                        Console.WriteLine($"[ScreenCapture] Error capturando frame: {ex.Message}");
-                    }
-
-                    int elapsed = (int)stopwatch.ElapsedMilliseconds;
-                    int delay = frameIntervalMs - elapsed;
-                    if (delay > 0)
-                    {
-                        try
-                        {
-                            await Task.Delay(delay, token);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            break;
-                        }
+                        break;
                     }
                 }
-            }, token);
+            }
+        }
+
+        private void CaptureAndDispatchFrame(HostFpsTracker fpsTracker)
+        {
+            try
+            {
+                var frameProcStopwatch = Stopwatch.StartNew();
+                bool forceKeyframe = _forceKeyframeRequested;
+                _forceKeyframeRequested = false;
+
+                var options = new ScreenCaptureOptions(_quality, ResolutionScale, _targetWidth, _targetHeight, forceKeyframe);
+                var frame = CaptureDesktopFrame(options);
+                if (frame != null)
+                {
+                    frameProcStopwatch.Stop();
+                    frame.HostFrameTimeMs = (int)frameProcStopwatch.ElapsedMilliseconds;
+                    frame.HostFps = fpsTracker.RecordFrameAndGetFps();
+
+                    FrameCaptured?.Invoke(this, frame);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ScreenCapture] Error capturando frame: {ex.Message}");
+            }
         }
 
         public void StopCapture()
@@ -236,11 +233,30 @@ namespace LanScreenShare.Media
             }
             catch
             {
-                // Ignorar excepciones al esperar cancelaciÃ³n
+                // Ignorar excepciones al esperar cancelación
             }
             _cts?.Dispose();
             _cts = null;
             _captureTask = null;
+        }
+
+        private sealed class HostFpsTracker
+        {
+            private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+            private int _frameCount;
+            private int _currentFps;
+
+            public int RecordFrameAndGetFps()
+            {
+                _frameCount++;
+                if (_stopwatch.ElapsedMilliseconds >= 1000)
+                {
+                    _currentFps = (int)Math.Round(_frameCount * 1000.0 / _stopwatch.ElapsedMilliseconds);
+                    _frameCount = 0;
+                    _stopwatch.Restart();
+                }
+                return _currentFps > 0 ? _currentFps : _frameCount;
+            }
         }
 
         private readonly record struct ScreenCaptureOptions(
@@ -282,90 +298,112 @@ namespace LanScreenShare.Media
             }
         }
 
-        private CapturedFrame? CaptureDesktopFrame(in ScreenCaptureOptions options)
+        private sealed class GdiDesktopCaptureSession : IDisposable
         {
-            GetCaptureBounds(out int left, out int top, out int width, out int height);
+            public IntPtr HdcSrc { get; private set; }
+            public IntPtr HdcDest { get; private set; }
+            public IntPtr HBitmap { get; private set; }
+            public IntPtr PBits { get; private set; }
+            public IntPtr HOld { get; private set; }
 
-            if (width <= 0 || height <= 0)
-                return null;
-
-            IntPtr hdcSrc = GetDC(IntPtr.Zero);
-            if (hdcSrc == IntPtr.Zero)
-                return null;
-
-            IntPtr hdcDest = CreateCompatibleDC(hdcSrc);
-            if (hdcDest == IntPtr.Zero)
+            public static GdiDesktopCaptureSession? TryCreate(int width, int height)
             {
-                ReleaseDC(IntPtr.Zero, hdcSrc);
-                return null;
+                IntPtr hdcSrc = GetDC(IntPtr.Zero);
+                if (hdcSrc == IntPtr.Zero) return null;
+
+                IntPtr hdcDest = CreateCompatibleDC(hdcSrc);
+                if (hdcDest == IntPtr.Zero)
+                {
+                    ReleaseDC(IntPtr.Zero, hdcSrc);
+                    return null;
+                }
+
+                var bmi = new BITMAPINFO();
+                bmi.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
+                bmi.bmiHeader.biWidth = width;
+                bmi.bmiHeader.biHeight = -height;
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = BI_RGB;
+
+                IntPtr hBitmap = CreateDIBSection(hdcDest, ref bmi, DIB_RGB_COLORS, out IntPtr pBits, IntPtr.Zero, 0);
+                if (hBitmap == IntPtr.Zero || pBits == IntPtr.Zero)
+                {
+                    DeleteDC(hdcDest);
+                    ReleaseDC(IntPtr.Zero, hdcSrc);
+                    return null;
+                }
+
+                IntPtr hOld = SelectObject(hdcDest, hBitmap);
+                return new GdiDesktopCaptureSession
+                {
+                    HdcSrc = hdcSrc,
+                    HdcDest = hdcDest,
+                    HBitmap = hBitmap,
+                    PBits = pBits,
+                    HOld = hOld
+                };
             }
 
-            BITMAPINFO bmi = new BITMAPINFO();
-            bmi.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
-            bmi.bmiHeader.biWidth = width;
-            bmi.bmiHeader.biHeight = -height; // Top-down DIB
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-
-            IntPtr hBitmap = CreateDIBSection(hdcDest, ref bmi, DIB_RGB_COLORS, out IntPtr pBits, IntPtr.Zero, 0);
-            if (hBitmap == IntPtr.Zero || pBits == IntPtr.Zero)
+            public void Dispose()
             {
-                DeleteDC(hdcDest);
-                ReleaseDC(IntPtr.Zero, hdcSrc);
-                return null;
+                if (HOld != IntPtr.Zero) SelectObject(HdcDest, HOld);
+                if (HBitmap != IntPtr.Zero) DeleteObject(HBitmap);
+                if (HdcDest != IntPtr.Zero) DeleteDC(HdcDest);
+                if (HdcSrc != IntPtr.Zero) ReleaseDC(IntPtr.Zero, HdcSrc);
+            }
+        }
+
+        private static int ComputeTargetDimension(int customTarget, int original, double scale)
+        {
+            if (customTarget > 0) return customTarget;
+            if (scale > 0.2 && scale < 0.99) return (int)(original * scale);
+            return 0;
+        }
+
+        private static (SKBitmap bitmapToEncode, SKBitmap? disposableBitmap, int finalWidth, int finalHeight) PrepareEncodingBitmap(
+            SKBitmap skBitmap,
+            int width,
+            int height,
+            in ScreenCaptureOptions options)
+        {
+            int targetW = ComputeTargetDimension(options.CustomTargetWidth, width, options.Scale);
+            int targetH = ComputeTargetDimension(options.CustomTargetHeight, height, options.Scale);
+
+            if (NeedsResize(targetW, targetH, width, height))
+            {
+                var resized = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                if (resized != null)
+                {
+                    return (resized, resized, targetW, targetH);
+                }
             }
 
-            IntPtr hOld = SelectObject(hdcDest, hBitmap);
+            return (skBitmap, null, width, height);
+        }
 
-            BitBlt(hdcDest, 0, 0, width, height, hdcSrc, left, top, SRCCOPY | CAPTUREBLT);
-            DrawMouseCursor(hdcDest, left, top);
+        private CapturedFrame? EncodeCapturedBitmap(IntPtr pBits, int width, int height, in ScreenCaptureOptions options)
+        {
+            var imageInfo = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var skBitmap = new SKBitmap();
+            skBitmap.InstallPixels(imageInfo, pBits);
 
-            int finalWidth = width;
-            int finalHeight = height;
+            var (bitmapToEncode, resizedBitmap, finalWidth, finalHeight) = PrepareEncodingBitmap(skBitmap, width, height, options);
 
             try
             {
-                var imageInfo = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
-                using var skBitmap = new SKBitmap();
-                skBitmap.InstallPixels(imageInfo, pBits);
-
-                SKBitmap bitmapToEncode = skBitmap;
-                SKBitmap? resizedBitmap = null;
-
-                int targetW = options.CustomTargetWidth > 0 ? options.CustomTargetWidth : (options.Scale > 0.2 && options.Scale < 0.99 ? (int)(width * options.Scale) : 0);
-                int targetH = options.CustomTargetHeight > 0 ? options.CustomTargetHeight : (options.Scale > 0.2 && options.Scale < 0.99 ? (int)(height * options.Scale) : 0);
-
-                if (NeedsResize(targetW, targetH, width, height))
-                {
-                    resizedBitmap = skBitmap.Resize(new SKImageInfo(targetW, targetH), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
-                    if (resizedBitmap != null)
-                    {
-                        bitmapToEncode = resizedBitmap;
-                        finalWidth = targetW;
-                        finalHeight = targetH;
-                    }
-                }
-
-                byte[]? encodedBytes = null;
                 string currentCodec = _codec;
+                byte[]? encodedBytes = null;
 
-                try
+                if (currentCodec == "h264")
                 {
-                    if (currentCodec == "h264")
-                    {
-                        encodedBytes = EncodeH264(bitmapToEncode, finalWidth, finalHeight, options.ForceKeyframe);
-                    }
-
-                    if (encodedBytes == null || encodedBytes.Length == 0)
-                    {
-                        currentCodec = "jpeg";
-                        encodedBytes = EncodeJpeg(bitmapToEncode, options.Quality);
-                    }
+                    encodedBytes = EncodeH264(bitmapToEncode, finalWidth, finalHeight, options.ForceKeyframe);
                 }
-                finally
+
+                if (encodedBytes == null || encodedBytes.Length == 0)
                 {
-                    resizedBitmap?.Dispose();
+                    currentCodec = "jpeg";
+                    encodedBytes = EncodeJpeg(bitmapToEncode, options.Quality);
                 }
 
                 if (encodedBytes == null || encodedBytes.Length == 0)
@@ -382,11 +420,22 @@ namespace LanScreenShare.Media
             }
             finally
             {
-                SelectObject(hdcDest, hOld);
-                DeleteObject(hBitmap);
-                DeleteDC(hdcDest);
-                ReleaseDC(IntPtr.Zero, hdcSrc);
+                resizedBitmap?.Dispose();
             }
+        }
+
+        private CapturedFrame? CaptureDesktopFrame(in ScreenCaptureOptions options)
+        {
+            GetCaptureBounds(out int left, out int top, out int width, out int height);
+            if (width <= 0 || height <= 0) return null;
+
+            using var session = GdiDesktopCaptureSession.TryCreate(width, height);
+            if (session == null) return null;
+
+            BitBlt(session.HdcDest, 0, 0, width, height, session.HdcSrc, left, top, SRCCOPY | CAPTUREBLT);
+            DrawMouseCursor(session.HdcDest, left, top);
+
+            return EncodeCapturedBitmap(session.PBits, width, height, options);
         }
 
         private byte[]? EncodeH264(SKBitmap bitmap, int width, int height, bool forceKeyframe)
@@ -432,30 +481,11 @@ namespace LanScreenShare.Media
             }
             catch
             {
-                // Continuar sin cursor si falla la consulta
+                // Ignorar error al capturar el cursor
             }
         }
 
-        public void Dispose()
-        {
-            if (_disposed)
-                return;
-
-            StopCapture();
-            _h264Encoder?.Dispose();
-            _h264Encoder = null;
-            _disposed = true;
-            GC.SuppressFinalize(this);
-        }
-
-        #region Win32 P/Invoke
-
-        private const int SM_CXSCREEN = 0;
-        private const int SM_CYSCREEN = 1;
-        private const int SM_XVIRTUALSCREEN = 76;
-        private const int SM_YVIRTUALSCREEN = 77;
-        private const int SM_CXVIRTUALSCREEN = 78;
-        private const int SM_CYVIRTUALSCREEN = 79;
+        #region P/Invoke GDI & User32
 
         private const int SRCCOPY = 0x00CC0020;
         private const int CAPTUREBLT = 0x40000000;
@@ -463,21 +493,45 @@ namespace LanScreenShare.Media
         private const int BI_RGB = 0;
         private const int CURSOR_SHOWING = 0x00000001;
 
-        [StructLayout(LayoutKind.Sequential)]
-        private struct POINT
-        {
-            public int x;
-            public int y;
-        }
+        private const int SM_XVIRTUALSCREEN = 76;
+        private const int SM_YVIRTUALSCREEN = 77;
+        private const int SM_CXVIRTUALSCREEN = 78;
+        private const int SM_CYVIRTUALSCREEN = 79;
+        private const int SM_CXSCREEN = 0;
+        private const int SM_CYSCREEN = 1;
 
-        [StructLayout(LayoutKind.Sequential)]
-        private struct CURSORINFO
-        {
-            public int cbSize;
-            public int flags;
-            public IntPtr hCursor;
-            public POINT ptScreenPos;
-        }
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDC(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteDC(IntPtr hDC);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr hObject);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool BitBlt(IntPtr hObject, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hObjectSource, int nXSrc, int nYSrc, int dwRop);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr CreateDIBSection(IntPtr hdc, [In] ref BITMAPINFO pbmi, uint iUsage, out IntPtr ppvBits, IntPtr hSection, uint dwOffset);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern bool DrawIcon(IntPtr hDC, int X, int Y, IntPtr hIcon);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetCursorInfo(out CURSORINFO pci);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct BITMAPINFOHEADER
@@ -503,39 +557,34 @@ namespace LanScreenShare.Media
             public uint[] bmiColors;
         }
 
-        [DllImport("user32.dll")]
-        private static extern int GetSystemMetrics(int nIndex);
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int x;
+            public int y;
+        }
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetDC(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
-
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteDC(IntPtr hdc);
-
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
-
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteObject(IntPtr hObject);
-
-        [DllImport("gdi32.dll")]
-        private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, int dwRop);
-
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO pbmi, uint iUsage, out IntPtr ppvBits, IntPtr hSection, uint dwOffset);
-
-        [DllImport("user32.dll")]
-        private static extern bool GetCursorInfo(out CURSORINFO pci);
-
-        [DllImport("user32.dll")]
-        private static extern bool DrawIcon(IntPtr hDC, int X, int Y, IntPtr hIcon);
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CURSORINFO
+        {
+            public int cbSize;
+            public int flags;
+            public IntPtr hCursor;
+            public POINT ptScreenPos;
+        }
 
         #endregion
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            StopCapture();
+            _h264Encoder?.Dispose();
+            _h264Encoder = null;
+            _disposed = true;
+            GC.SuppressFinalize(this);
+        }
     }
 }

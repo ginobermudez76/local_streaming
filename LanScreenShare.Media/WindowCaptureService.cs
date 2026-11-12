@@ -96,29 +96,29 @@ namespace LanScreenShare.Media
             _hwnd = hwnd;
         }
 
-        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
+        public void UpdateSettings(CaptureProfile profile)
         {
-            TargetFps = targetFps;
-            Quality = quality;
-            BitrateMbps = bitrateMbps;
-            ResolutionScale = resolutionScale;
-            Codec = codec;
-            TargetWidth = targetWidth;
-            TargetHeight = targetHeight;
+            TargetFps = profile.TargetFps;
+            Quality = profile.Quality;
+            BitrateMbps = profile.BitrateMbps;
+            ResolutionScale = profile.ResolutionScale;
+            Codec = profile.Codec;
+            TargetWidth = profile.TargetWidth;
+            TargetHeight = profile.TargetHeight;
         }
 
-        public void StartCapture(int targetFps = 30, int quality = 75, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
+        public void StartCapture(CaptureProfile profile)
         {
             if (IsCapturing)
                 return;
 
-            _targetFps = Math.Clamp(targetFps, 1, 120);
-            _quality = Math.Clamp(quality, 10, 100);
-            _bitrateMbps = Math.Clamp(bitrateMbps, 1, 50);
-            ResolutionScale = resolutionScale;
-            Codec = codec;
-            TargetWidth = targetWidth;
-            TargetHeight = targetHeight;
+            _targetFps = Math.Clamp(profile.TargetFps, 1, 120);
+            _quality = Math.Clamp(profile.Quality, 10, 100);
+            _bitrateMbps = Math.Clamp(profile.BitrateMbps, 1, 50);
+            ResolutionScale = profile.ResolutionScale;
+            Codec = profile.Codec;
+            TargetWidth = profile.TargetWidth;
+            TargetHeight = profile.TargetHeight;
 
             _cts = new CancellationTokenSource();
             var token = _cts.Token;

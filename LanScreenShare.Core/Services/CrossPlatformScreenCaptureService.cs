@@ -40,17 +40,17 @@ namespace LanScreenShare.Core.Services
         public string ActiveEncoderDescription => "CrossPlatform Universal Engine";
         public bool IsHardwareAccelerated => false;
 
-        public void StartCapture(int targetFps = 30, int quality = 70, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
+        public void StartCapture(CaptureProfile profile)
         {
             if (_isCapturing) return;
 
-            _targetFps = Math.Clamp(targetFps, 1, 120);
-            _quality = quality;
-            _resolutionScale = resolutionScale;
-            _codec = codec;
-            _targetWidth = targetWidth > 0 ? targetWidth : 1280;
-            _targetHeight = targetHeight > 0 ? targetHeight : 720;
-            _bitrateMbps = bitrateMbps;
+            _targetFps = Math.Clamp(profile.TargetFps, 1, 120);
+            _quality = profile.Quality;
+            _resolutionScale = profile.ResolutionScale;
+            _codec = profile.Codec;
+            _targetWidth = profile.TargetWidth > 0 ? profile.TargetWidth : 1280;
+            _targetHeight = profile.TargetHeight > 0 ? profile.TargetHeight : 720;
+            _bitrateMbps = profile.BitrateMbps;
 
             _isCapturing = true;
             _cts = new CancellationTokenSource();
@@ -108,6 +108,9 @@ namespace LanScreenShare.Core.Services
             }, token);
         }
 
+        public void StartCapture(int targetFps = 30, int quality = 70, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
+            => StartCapture(new CaptureProfile(targetFps, quality, resolutionScale, codec, targetWidth, targetHeight, bitrateMbps));
+
         public void StopCapture()
         {
             _isCapturing = false;
@@ -125,16 +128,19 @@ namespace LanScreenShare.Core.Services
             }
         }
 
-        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
+        public void UpdateSettings(CaptureProfile profile)
         {
-            TargetFps = targetFps;
-            Quality = quality;
-            ResolutionScale = resolutionScale;
-            Codec = codec;
-            TargetWidth = targetWidth;
-            TargetHeight = targetHeight;
-            BitrateMbps = bitrateMbps;
+            TargetFps = profile.TargetFps;
+            Quality = profile.Quality;
+            ResolutionScale = profile.ResolutionScale;
+            Codec = profile.Codec;
+            TargetWidth = profile.TargetWidth;
+            TargetHeight = profile.TargetHeight;
+            BitrateMbps = profile.BitrateMbps;
         }
+
+        public void UpdateSettings(int targetFps, int quality, double resolutionScale = 1.0, string codec = "jpeg", int targetWidth = 0, int targetHeight = 0, int bitrateMbps = 8)
+            => UpdateSettings(new CaptureProfile(targetFps, quality, resolutionScale, codec, targetWidth, targetHeight, bitrateMbps));
 
         public void RequestKeyframe()
         {
