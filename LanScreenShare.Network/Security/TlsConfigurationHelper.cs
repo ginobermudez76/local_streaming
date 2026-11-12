@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography;
@@ -34,14 +35,14 @@ public static class TlsConfigurationHelper
         IPairedDeviceStore? deviceStore,
         Func<string, X509Certificate2, bool>? provisionalPairingCallback = null)
     {
-        return new SslServerAuthenticationOptions
+        var options = new SslServerAuthenticationOptions
         {
             ServerCertificate = hostCertificate,
             ClientCertificateRequired = true,
-            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
-            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
             RemoteCertificateValidationCallback = CreateValidationCallback(ClientAuthOid, deviceStore, provisionalPairingCallback)
         };
+        ApplyBaseTlsSettings(options);
+        return options;
     }
 
     /// <summary>
@@ -53,15 +54,27 @@ public static class TlsConfigurationHelper
         IPairedDeviceStore? deviceStore,
         Func<string, X509Certificate2, bool>? provisionalPairingCallback = null)
     {
-        return new SslClientAuthenticationOptions
+        var options = new SslClientAuthenticationOptions
         {
             ClientCertificates = new X509CertificateCollection { viewerCertificate },
             TargetHost = targetHost,
-            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
-            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
             LocalCertificateSelectionCallback = (_, _, _, _, _) => viewerCertificate,
             RemoteCertificateValidationCallback = CreateValidationCallback(ServerAuthOid, deviceStore, provisionalPairingCallback)
         };
+        ApplyBaseTlsSettings(options);
+        return options;
+    }
+
+    private static void ApplyBaseTlsSettings(SslServerAuthenticationOptions options)
+    {
+        options.EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12;
+        options.CertificateRevocationCheckMode = X509RevocationMode.NoCheck;
+    }
+
+    private static void ApplyBaseTlsSettings(SslClientAuthenticationOptions options)
+    {
+        options.EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12;
+        options.CertificateRevocationCheckMode = X509RevocationMode.NoCheck;
     }
 
     private static RemoteCertificateValidationCallback CreateValidationCallback(
@@ -149,17 +162,8 @@ public static class TlsConfigurationHelper
         return false;
     }
 
-    private static bool HasRequiredEku(X509Certificate2 cert, string expectedEkuOid)
-    {
-        foreach (var ext in cert.Extensions)
-        {
-            if (MatchesEkuExtension(ext, expectedEkuOid))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
+    private static bool HasRequiredEku(X509Certificate2 cert, string expectedEkuOid) =>
+        cert.Extensions.Cast<X509Extension>().Any(ext => MatchesEkuExtension(ext, expectedEkuOid));
 
     private static bool MatchesEkuExtension(X509Extension ext, string expectedEkuOid)
     {
@@ -177,17 +181,8 @@ public static class TlsConfigurationHelper
         return false;
     }
 
-    private static bool ContainsEkuOid(OidCollection usages, string expectedEkuOid)
-    {
-        foreach (var oid in usages)
-        {
-            if (oid.Value == expectedEkuOid)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
+    private static bool ContainsEkuOid(OidCollection usages, string expectedEkuOid) =>
+        usages.Cast<Oid>().Any(oid => oid.Value == expectedEkuOid);
 
     private static bool IsDeviceAuthorized(
         string fingerprint,

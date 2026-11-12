@@ -51,29 +51,31 @@ public class JsonPairedDeviceStore : IPairedDeviceStore
     public Task AddPairedDeviceAsync(PairedDevice device) =>
         MutateDevicesAsync(devices =>
         {
-            int existingIndex = FindDeviceIndex(devices, device.PublicKeyFingerprint);
-            if (existingIndex >= 0)
-            {
-                devices[existingIndex] = device;
-            }
-            else
-            {
-                devices.Add(device);
-            }
+            UpsertDevice(devices, device);
             return true;
         });
 
     public Task RevokeDeviceAsync(string fingerprint) =>
-        MutateDevicesAsync(devices =>
+        MutateDevicesAsync(devices => MarkDeviceRevoked(devices, fingerprint));
+
+    private static void UpsertDevice(List<PairedDevice> devices, PairedDevice device)
+    {
+        int idx = FindDeviceIndex(devices, device.PublicKeyFingerprint);
+        if (idx < 0)
         {
-            int existingIndex = FindDeviceIndex(devices, fingerprint);
-            if (existingIndex >= 0)
-            {
-                devices[existingIndex] = devices[existingIndex] with { IsRevoked = true };
-                return true;
-            }
-            return false;
-        });
+            devices.Add(device);
+            return;
+        }
+        devices[idx] = device;
+    }
+
+    private static bool MarkDeviceRevoked(List<PairedDevice> devices, string fingerprint)
+    {
+        int idx = FindDeviceIndex(devices, fingerprint);
+        if (idx < 0) return false;
+        devices[idx] = devices[idx] with { IsRevoked = true };
+        return true;
+    }
 
     private static int FindDeviceIndex(List<PairedDevice> devices, string fingerprint) =>
         devices.FindIndex(d => string.Equals(d.PublicKeyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));

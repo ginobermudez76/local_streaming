@@ -68,6 +68,25 @@ public class ThreeChannelFullMtlsLifecycleTests
         return X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.Exportable);
     }
 
+    private readonly record struct ControlTestContext(
+        TcpControlClient Client,
+        SessionAuthority Authority,
+        string SessionId,
+        MockInputSimulatorService Simulator
+    );
+
+    private readonly record struct MediaTestTargets(
+        TcpStreamServer StreamServer,
+        TcpAudioServer AudioServer
+    );
+
+    private readonly record struct MediaEvents(
+        ManualResetEventSlim FrameEvent,
+        ManualResetEventSlim AudioEvent,
+        Func<CapturedFrame?> GetFrame,
+        Func<CapturedAudioChunk?> GetAudio
+    );
+
     [TestMethod]
     public async Task CompleteThreeChannelLifecycle_mTLS_Tokens_AndCascadeInvalidation()
     {
@@ -148,48 +167,15 @@ public class ThreeChannelFullMtlsLifecycleTests
         Assert.AreEqual(sessionId, sessionAuthority.ActiveControllerSessionId);
 
         // 4. Enviar entrada de control LSI2 (28 bytes)
-        var testInput = new RemoteInputMessage
-        {
-            Type = InputEventType.MouseDown,
-            Button = RemoteMouseButton.Left,
-            NormalizedX = 0.5f,
-            NormalizedY = 0.5f
-        };
-        await controlClient.SendInputAsync(testInput);
+        var ctrlCtx = new ControlTestContext(controlClient, sessionAuthority, sessionId, inputSimulator);
+        await VerifyControlInjectionAsync(ctrlCtx, token);
 
-        // Pequeño retardo para procesamiento asíncrono
-        await Task.Delay(100, token);
-        Assert.IsNotNull(inputSimulator.LastInput);
-        Assert.AreEqual(InputEventType.MouseDown, inputSimulator.LastInput.Type);
+        // 5. Broadcast de medios (vídeo y audio)
+        var mediaTargets = new MediaTestTargets(streamServer, audioServer);
+        var mediaEvents = new MediaEvents(frameReceivedEvent, audioReceivedEvent, () => receivedFrame, () => receivedAudio);
+        await VerifyMediaBroadcastsAsync(mediaTargets, mediaEvents);
 
-        // 5. Broadcast de frame de vídeo
-        var testFrame = new CapturedFrame
-        {
-            Data = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0x02 },
-            Width = 1920,
-            Height = 1080,
-            Format = "jpeg"
-        };
-        await streamServer.BroadcastFrameAsync(testFrame);
-        Assert.IsTrue(frameReceivedEvent.Wait(TimeSpan.FromSeconds(3)));
-        Assert.IsNotNull(receivedFrame);
-        Assert.AreEqual(1920, receivedFrame.Width);
-
-        // 6. Broadcast de audio
-        var testAudio = new CapturedAudioChunk
-        {
-            Data = new byte[] { 0x01, 0x02, 0x03, 0x04 },
-            SampleRate = 48000,
-            Channels = 2,
-            BitsPerSample = 16,
-            AudioFormat = 1
-        };
-        await audioServer.BroadcastAudioAsync(testAudio);
-        Assert.IsTrue(audioReceivedEvent.Wait(TimeSpan.FromSeconds(3)));
-        Assert.IsNotNull(receivedAudio);
-        Assert.AreEqual(48000, receivedAudio.SampleRate);
-
-        // 7. Desconexión del canal primario (5001) -> debe desencadenar invalidación en cascada
+        // 6. Desconexión del canal primario (5001) -> debe desencadenar invalidación en cascada
         await streamClient.DisconnectAsync();
         await Task.Delay(150, token);
 
@@ -204,6 +190,53 @@ public class ThreeChannelFullMtlsLifecycleTests
         streamServer.Stop();
         audioServer.Stop();
         controlServer.Stop();
+    }
+
+    private static async Task VerifyControlInjectionAsync(ControlTestContext ctx, CancellationToken token)
+    {
+        ctx.Authority.RequestRemoteControl(ctx.SessionId);
+        Assert.AreEqual(ctx.SessionId, ctx.Authority.ActiveControllerSessionId);
+
+        var testInput = new RemoteInputMessage
+        {
+            Type = InputEventType.MouseDown,
+            Button = RemoteMouseButton.Left,
+            NormalizedX = 0.5f,
+            NormalizedY = 0.5f
+        };
+        await ctx.Client.SendInputAsync(testInput);
+
+        await Task.Delay(100, token);
+        Assert.IsNotNull(ctx.Simulator.LastInput);
+        Assert.AreEqual(InputEventType.MouseDown, ctx.Simulator.LastInput.Type);
+    }
+
+    private static async Task VerifyMediaBroadcastsAsync(MediaTestTargets targets, MediaEvents events)
+    {
+        var testFrame = new CapturedFrame
+        {
+            Data = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0x02 },
+            Width = 1920,
+            Height = 1080,
+            Format = "jpeg"
+        };
+        await targets.StreamServer.BroadcastFrameAsync(testFrame);
+        Assert.IsTrue(events.FrameEvent.Wait(TimeSpan.FromSeconds(3)));
+        Assert.IsNotNull(events.GetFrame());
+        Assert.AreEqual(1920, events.GetFrame()!.Width);
+
+        var testAudio = new CapturedAudioChunk
+        {
+            Data = new byte[] { 0x01, 0x02, 0x03, 0x04 },
+            SampleRate = 48000,
+            Channels = 2,
+            BitsPerSample = 16,
+            AudioFormat = 1
+        };
+        await targets.AudioServer.BroadcastAudioAsync(testAudio);
+        Assert.IsTrue(events.AudioEvent.Wait(TimeSpan.FromSeconds(3)));
+        Assert.IsNotNull(events.GetAudio());
+        Assert.AreEqual(48000, events.GetAudio()!.SampleRate);
     }
 }
 

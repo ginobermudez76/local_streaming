@@ -236,7 +236,7 @@ namespace LanScreenShare.Network
             target = default;
             var ip = unicast.Address;
 
-            if (ip.AddressFamily != AddressFamily.InterNetwork || IPAddress.IsLoopback(ip) || ip.ToString().StartsWith("169.254."))
+            if (!IsEligibleIpv4(ip))
             {
                 return false;
             }
@@ -245,6 +245,13 @@ namespace LanScreenShare.Network
             var broadcast = CalculateBroadcastAddress(ip, mask);
             target = new BroadcastTarget(ip, broadcast);
             return true;
+        }
+
+        private static bool IsEligibleIpv4(IPAddress ip)
+        {
+            if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
+            if (IPAddress.IsLoopback(ip)) return false;
+            return !ip.ToString().StartsWith("169.254.");
         }
 
         private static IPAddress NormalizeMask(IPAddress? mask) =>
