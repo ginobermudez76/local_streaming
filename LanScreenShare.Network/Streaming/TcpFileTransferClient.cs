@@ -114,7 +114,7 @@ namespace LanScreenShare.Network.Streaming
                 await sslStream.WriteAsync(attachBytes, linkedCts.Token);
 
                 byte[] resp = new byte[1];
-                await FileTransferPacket.ReadExactBytesAsync(sslStream, resp, 0, 1, linkedCts.Token);
+                await FileTransferPacket.ReadExactBytesAsync(sslStream, resp, linkedCts.Token);
                 var status = (AttachmentStatus)resp[0];
 
                 if (status != AttachmentStatus.Success)
@@ -135,7 +135,7 @@ namespace LanScreenShare.Network.Streaming
             {
                 while (!ct.IsCancellationRequested && _stream != null)
                 {
-                    await FileTransferPacket.ReadExactBytesAsync(_stream, headerBuffer, 0, FileTransferPacket.HeaderSize, ct);
+                    await FileTransferPacket.ReadExactBytesAsync(_stream, headerBuffer, ct);
 
                     uint magic = BinaryPrimitives.ReadUInt32BigEndian(headerBuffer.AsSpan(0, 4));
                     if (magic != FileTransferPacket.Magic)
@@ -197,7 +197,7 @@ namespace LanScreenShare.Network.Streaming
         private static async Task<T?> ReadJsonDtoAsync<T>(Stream stream, uint payloadLength, CancellationToken ct)
         {
             byte[] jsonBytes = new byte[payloadLength];
-            await FileTransferPacket.ReadExactBytesAsync(stream, jsonBytes, 0, (int)payloadLength, ct);
+            await FileTransferPacket.ReadExactBytesAsync(stream, jsonBytes, ct);
             return JsonSerializer.Deserialize<T>(jsonBytes);
         }
 
@@ -235,7 +235,7 @@ namespace LanScreenShare.Network.Streaming
         {
             if (_stream == null) return;
             byte[] metaBuffer = new byte[24];
-            await FileTransferPacket.ReadExactBytesAsync(_stream, metaBuffer, 0, 24, ct);
+            await FileTransferPacket.ReadExactBytesAsync(_stream, metaBuffer, ct);
 
             Guid transferId = new(metaBuffer.AsSpan(0, 16));
             long offset = BinaryPrimitives.ReadInt64BigEndian(metaBuffer.AsSpan(16, 8));
@@ -244,7 +244,7 @@ namespace LanScreenShare.Network.Streaming
             byte[] chunkData = ArrayPool<byte>.Shared.Rent(dataLength);
             try
             {
-                await FileTransferPacket.ReadExactBytesAsync(_stream, chunkData, 0, dataLength, ct);
+                await FileTransferPacket.ReadExactBytesAsync(_stream, chunkData.AsMemory(0, dataLength), ct);
 
                 string idStr = transferId.ToString("D");
                 if (_inboundTransfers.TryGetValue(idStr, out var inbound))
@@ -415,7 +415,15 @@ namespace LanScreenShare.Network.Streaming
             await _sendLock.WaitAsync(ct);
             try
             {
-                await FileTransferPacket.WriteOfferAsync(_stream!, transferId, fileInfo.Name, fileInfo.Length, ct);
+                await FileTransferPacket.WriteOfferAsync(
+                    _stream!,
+                    new FileTransferOfferDto
+                    {
+                        TransferId = transferId,
+                        FileName = fileInfo.Name,
+                        FileSize = fileInfo.Length
+                    },
+                    ct);
             }
             finally
             {
@@ -504,7 +512,7 @@ namespace LanScreenShare.Network.Streaming
             await _sendLock.WaitAsync(ct);
             try
             {
-                await FileTransferPacket.WriteChunkAsync(_stream!, transferGuid, offset, chunk, ct);
+                await FileTransferPacket.WriteChunkAsync(_stream!, new FileChunkPayload(transferGuid, offset, chunk), ct);
             }
             finally
             {

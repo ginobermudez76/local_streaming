@@ -9,5 +9,12 @@ namespace LanScreenShare.Core.Security
         ChannelType AllowedChannel,
         DateTime ExpiresAt
     );
+
+    public readonly record struct ChannelAttachmentRequest(
+        string TokenId,
+        string SessionId,
+        string PeerFingerprint,
+        ChannelType Channel
+    );
 }
 

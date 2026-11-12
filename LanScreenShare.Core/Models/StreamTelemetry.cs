@@ -43,18 +43,19 @@ namespace LanScreenShare.Core.Models
 
         private NetworkQuality EvaluateQuality()
         {
-            if (RttMs <= 0 && ViewerFps <= 0 && HostFps <= 0)
+            if (!IsTelemetryActive())
                 return NetworkQuality.Unknown;
 
-            if (RttMs < 25 && DroppedFrames == 0)
-                return NetworkQuality.Excellent;
+            return CategorizeQuality();
+        }
 
-            if (RttMs < 50 && DroppedFrames < 5)
-                return NetworkQuality.Good;
+        private bool IsTelemetryActive() => RttMs > 0 || ViewerFps > 0 || HostFps > 0;
 
-            if (RttMs < 90 && DroppedFrames < 20)
-                return NetworkQuality.Fair;
-
+        private NetworkQuality CategorizeQuality()
+        {
+            if (RttMs < 25 && DroppedFrames == 0) return NetworkQuality.Excellent;
+            if (RttMs < 50 && DroppedFrames < 5) return NetworkQuality.Good;
+            if (RttMs < 90 && DroppedFrames < 20) return NetworkQuality.Fair;
             return NetworkQuality.Poor;
         }
     }

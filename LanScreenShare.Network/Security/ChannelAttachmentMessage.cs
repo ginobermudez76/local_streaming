@@ -4,6 +4,12 @@ using LanScreenShare.Core.Security;
 
 namespace LanScreenShare.Network.Security;
 
+public readonly record struct ChannelAttachmentPayload(
+    string SessionId,
+    string TokenId,
+    ChannelType Channel
+);
+
 /// <summary>
 /// Encapsula el mensaje binario de fijación de canal para puertos secundarios (Audio 5002, Control 5003).
 /// Especificación: ADR-001 Sección 8.
@@ -23,49 +29,67 @@ public static class ChannelAttachmentMessage
         byte[] buffer = new byte[MessageSize];
         Span<byte> span = buffer.AsSpan();
 
-        // 1. Magic
         BinaryPrimitives.WriteUInt32BigEndian(span.Slice(0, 4), Magic);
+        WriteSessionGuid(span.Slice(4, 16), sessionId);
+        WriteTokenBytes(span.Slice(20, 16), tokenId);
+        span[36] = MapChannelToByte(channel);
 
-        // 2. SessionId (Guid 16 bytes)
+        return buffer;
+    }
+
+    private static void WriteSessionGuid(Span<byte> destination, string sessionId)
+    {
         if (!Guid.TryParse(sessionId, out var sessionGuid))
         {
             throw new ArgumentException("SessionId debe ser un GUID válido.", nameof(sessionId));
         }
-        sessionGuid.TryWriteBytes(span.Slice(4, 16));
+        sessionGuid.TryWriteBytes(destination);
+    }
 
-        // 3. TokenId (Hex 32 chars -> 16 bytes)
+    private static void WriteTokenBytes(Span<byte> destination, string tokenId)
+    {
         byte[] tokenBytes = Convert.FromHexString(tokenId);
         if (tokenBytes.Length != 16)
         {
             throw new ArgumentException("TokenId debe corresponder a 16 bytes (32 caracteres hexadecimales).", nameof(tokenId));
         }
-        tokenBytes.CopyTo(span.Slice(20, 16));
-
-        // 4. ChannelType (1B)
-        span[36] = channel switch
-        {
-            ChannelType.Video => 1,
-            ChannelType.Audio => 2,
-            ChannelType.RemoteControl => 3,
-            ChannelType.FileTransfer => 4,
-            _ => throw new ArgumentOutOfRangeException(nameof(channel))
-        };
-
-        return buffer;
+        tokenBytes.CopyTo(destination);
     }
+
+    private static byte MapChannelToByte(ChannelType channel) => channel switch
+    {
+        ChannelType.Video => 1,
+        ChannelType.Audio => 2,
+        ChannelType.RemoteControl => 3,
+        ChannelType.FileTransfer => 4,
+        _ => throw new ArgumentOutOfRangeException(nameof(channel))
+    };
 
     public static bool TryDeserialize(
         ReadOnlySpan<byte> data,
-        out string sessionId,
-        out string tokenId,
-        out ChannelType channel,
+        out ChannelAttachmentPayload payload,
         out string? error)
     {
-        sessionId = string.Empty;
-        tokenId = string.Empty;
-        channel = ChannelType.Video;
-        error = null;
+        payload = default;
+        if (!ValidateHeader(data, out error))
+        {
+            return false;
+        }
 
+        string sessionId = new Guid(data.Slice(4, 16)).ToString("D");
+        string tokenId = Convert.ToHexString(data.Slice(20, 16)).ToLowerInvariant();
+
+        if (!TryParseChannelType(data[36], out var channel, out error))
+        {
+            return false;
+        }
+
+        payload = new ChannelAttachmentPayload(sessionId, tokenId, channel);
+        return true;
+    }
+
+    private static bool ValidateHeader(ReadOnlySpan<byte> data, out string? error)
+    {
         if (data.Length < MessageSize)
         {
             error = $"Attachment frame too short: expected {MessageSize} bytes, got {data.Length}";
@@ -79,13 +103,12 @@ public static class ChannelAttachmentMessage
             return false;
         }
 
-        var guidBytes = data.Slice(4, 16);
-        sessionId = new Guid(guidBytes).ToString("D");
+        error = null;
+        return true;
+    }
 
-        var tokenBytes = data.Slice(20, 16);
-        tokenId = Convert.ToHexString(tokenBytes).ToLowerInvariant();
-
-        byte channelByte = data[36];
+    private static bool TryParseChannelType(byte channelByte, out ChannelType channel, out string? error)
+    {
         channel = channelByte switch
         {
             1 => ChannelType.Video,
@@ -101,7 +124,7 @@ public static class ChannelAttachmentMessage
             return false;
         }
 
+        error = null;
         return true;
     }
 }
-

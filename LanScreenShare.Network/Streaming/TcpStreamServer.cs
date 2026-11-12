@@ -267,12 +267,10 @@ namespace LanScreenShare.Network.Streaming
                 ? hostCertObj.RawData
                 : Array.Empty<byte>();
 
+            var pairingCreds = new PairingCredentials(hostCertBytes, peerCert.RawData, hostNonce, viewerNonce);
             var (_, sasFormatted) = CanonicalSasCalculator.ComputeSas(
                 CanonicalSasCalculator.CurrentProtocolVersion,
-                hostCertBytes,
-                peerCert.RawData,
-                hostNonce,
-                viewerNonce);
+                in pairingCreds);
 
             bool approved = await PairingApprovalCallback(peer.Fingerprint, peer.DeviceName, sasFormatted);
             if (!approved)

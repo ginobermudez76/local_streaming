@@ -129,7 +129,6 @@ namespace LanScreenShare.Network.Streaming
             if (!Lsi2ControlPacket.TryReadPacket(
                     headerBuffer,
                     out _,
-                    out _,
                     out var message,
                     out string? protocolError))
             {

@@ -76,15 +76,14 @@ namespace LanScreenShare.Tests
 
             bool ok = Lsi2ControlPacket.TryReadPacket(
                 buffer,
-                out ulong seq,
-                out ulong ts,
+                out var header,
                 out var parsed,
                 out string? error);
 
             Assert.IsTrue(ok, $"TryReadPacket falló: {error}");
             Assert.IsNotNull(parsed);
-            Assert.AreEqual(42UL, seq);
-            Assert.AreEqual(99999UL, ts);
+            Assert.AreEqual(42UL, header.SequenceNumber);
+            Assert.AreEqual(99999UL, header.Timestamp);
             Assert.AreEqual(InputEventType.ClipboardText, parsed.Type);
             Assert.AreEqual(4096, parsed.KeyCode);
         }

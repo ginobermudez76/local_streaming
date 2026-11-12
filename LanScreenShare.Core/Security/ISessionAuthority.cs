@@ -14,8 +14,9 @@ namespace LanScreenShare.Core.Security
         ActiveSession? GetSession(string sessionId);
 
         ChannelAttachmentToken IssueChannelToken(string sessionId, ChannelType channel, TimeSpan? validFor = null);
+        AttachmentStatus TryAttachChannel(ChannelAttachmentRequest request);
         AttachmentStatus TryAttachChannel(string tokenId, string sessionId, string peerFingerprint, ChannelType channel);
-        bool TryAttachChannel(string tokenId, string sessionId, string peerFingerprint, ChannelType channel, out string? failureReason);
+        bool TryAttachChannel(ChannelAttachmentRequest request, out string? failureReason);
 
         RemoteControlState RequestRemoteControl(string sessionId);
         bool TryAcquireControl(string sessionId, out string? failureReason);

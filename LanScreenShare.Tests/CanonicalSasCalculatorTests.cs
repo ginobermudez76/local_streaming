@@ -28,19 +28,11 @@ public class CanonicalSasCalculatorTests
     [TestMethod]
     public void ComputeSas_DeterministicResult()
     {
-        var (code1, str1) = CanonicalSasCalculator.ComputeSas(
-            CanonicalSasCalculator.CurrentProtocolVersion,
-            _dummyHostCert,
-            _dummyViewerCert,
-            _dummyHostNonce,
-            _dummyViewerNonce);
+        var creds1 = new PairingCredentials(_dummyHostCert, _dummyViewerCert, _dummyHostNonce, _dummyViewerNonce);
+        var (code1, str1) = CanonicalSasCalculator.ComputeSas(CanonicalSasCalculator.CurrentProtocolVersion, in creds1);
 
-        var (code2, str2) = CanonicalSasCalculator.ComputeSas(
-            CanonicalSasCalculator.CurrentProtocolVersion,
-            _dummyHostCert,
-            _dummyViewerCert,
-            _dummyHostNonce,
-            _dummyViewerNonce);
+        var creds2 = new PairingCredentials(_dummyHostCert, _dummyViewerCert, _dummyHostNonce, _dummyViewerNonce);
+        var (code2, str2) = CanonicalSasCalculator.ComputeSas(CanonicalSasCalculator.CurrentProtocolVersion, in creds2);
 
         Assert.AreEqual(code1, code2);
         Assert.AreEqual(str1, str2);
@@ -51,22 +43,14 @@ public class CanonicalSasCalculatorTests
     [TestMethod]
     public void ComputeSas_DifferentNonces_ProduceDifferentCodes()
     {
-        var (code1, _) = CanonicalSasCalculator.ComputeSas(
-            CanonicalSasCalculator.CurrentProtocolVersion,
-            _dummyHostCert,
-            _dummyViewerCert,
-            _dummyHostNonce,
-            _dummyViewerNonce);
+        var creds1 = new PairingCredentials(_dummyHostCert, _dummyViewerCert, _dummyHostNonce, _dummyViewerNonce);
+        var (code1, _) = CanonicalSasCalculator.ComputeSas(CanonicalSasCalculator.CurrentProtocolVersion, in creds1);
 
         byte[] modifiedViewerNonce = (byte[])_dummyViewerNonce.Clone();
         modifiedViewerNonce[0] ^= 0xFF;
 
-        var (code2, _) = CanonicalSasCalculator.ComputeSas(
-            CanonicalSasCalculator.CurrentProtocolVersion,
-            _dummyHostCert,
-            _dummyViewerCert,
-            _dummyHostNonce,
-            modifiedViewerNonce);
+        var creds2 = new PairingCredentials(_dummyHostCert, _dummyViewerCert, _dummyHostNonce, modifiedViewerNonce);
+        var (code2, _) = CanonicalSasCalculator.ComputeSas(CanonicalSasCalculator.CurrentProtocolVersion, in creds2);
 
         // Very high probability they are different
         Assert.AreNotEqual(code1, code2);
@@ -75,22 +59,14 @@ public class CanonicalSasCalculatorTests
     [TestMethod]
     public void ComputeSas_DifferentCerts_ProduceDifferentCodes()
     {
-        var (code1, _) = CanonicalSasCalculator.ComputeSas(
-            CanonicalSasCalculator.CurrentProtocolVersion,
-            _dummyHostCert,
-            _dummyViewerCert,
-            _dummyHostNonce,
-            _dummyViewerNonce);
+        var creds1 = new PairingCredentials(_dummyHostCert, _dummyViewerCert, _dummyHostNonce, _dummyViewerNonce);
+        var (code1, _) = CanonicalSasCalculator.ComputeSas(CanonicalSasCalculator.CurrentProtocolVersion, in creds1);
 
         byte[] modifiedHostCert = (byte[])_dummyHostCert.Clone();
         modifiedHostCert[0] = 0x31;
 
-        var (code2, _) = CanonicalSasCalculator.ComputeSas(
-            CanonicalSasCalculator.CurrentProtocolVersion,
-            modifiedHostCert,
-            _dummyViewerCert,
-            _dummyHostNonce,
-            _dummyViewerNonce);
+        var creds2 = new PairingCredentials(modifiedHostCert, _dummyViewerCert, _dummyHostNonce, _dummyViewerNonce);
+        var (code2, _) = CanonicalSasCalculator.ComputeSas(CanonicalSasCalculator.CurrentProtocolVersion, in creds2);
 
         Assert.AreNotEqual(code1, code2);
     }
@@ -100,24 +76,15 @@ public class CanonicalSasCalculatorTests
     public void ComputeSas_InvalidHostNonceLength_ThrowsArgumentException()
     {
         byte[] invalidNonce = new byte[15];
-        CanonicalSasCalculator.ComputeSas(
-            CanonicalSasCalculator.CurrentProtocolVersion,
-            _dummyHostCert,
-            _dummyViewerCert,
-            invalidNonce,
-            _dummyViewerNonce);
+        var creds = new PairingCredentials(_dummyHostCert, _dummyViewerCert, invalidNonce, _dummyViewerNonce);
+        CanonicalSasCalculator.ComputeSas(CanonicalSasCalculator.CurrentProtocolVersion, in creds);
     }
 
     [TestMethod]
     [ExpectedException(typeof(ArgumentException))]
     public void ComputeSas_EmptyCertificate_ThrowsArgumentException()
     {
-        CanonicalSasCalculator.ComputeSas(
-            CanonicalSasCalculator.CurrentProtocolVersion,
-            Array.Empty<byte>(),
-            _dummyViewerCert,
-            _dummyHostNonce,
-            _dummyViewerNonce);
+        var creds = new PairingCredentials(Array.Empty<byte>(), _dummyViewerCert, _dummyHostNonce, _dummyViewerNonce);
+        CanonicalSasCalculator.ComputeSas(CanonicalSasCalculator.CurrentProtocolVersion, in creds);
     }
 }
-

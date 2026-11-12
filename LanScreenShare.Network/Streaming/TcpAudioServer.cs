@@ -180,9 +180,7 @@ namespace LanScreenShare.Network.Streaming
 
             if (!ChannelAttachmentMessage.TryDeserialize(
                     attachBuffer,
-                    out string reqSessionId,
-                    out string reqTokenId,
-                    out var reqChannel,
+                    out var attachPayload,
                     out string? attachError))
             {
                 Console.WriteLine($"[AudioServer] Error en CHANNEL_ATTACH de {clientId}: {attachError}");
@@ -192,10 +190,10 @@ namespace LanScreenShare.Network.Streaming
             if (_sessionAuthority != null)
             {
                 var status = _sessionAuthority.TryAttachChannel(
-                    reqTokenId,
-                    reqSessionId,
+                    attachPayload.TokenId,
+                    attachPayload.SessionId,
                     peerFingerprint,
-                    reqChannel);
+                    attachPayload.Channel);
 
                 await sslStream.WriteAsync(new byte[] { (byte)status }, linkedCts.Token);
 
@@ -206,7 +204,7 @@ namespace LanScreenShare.Network.Streaming
                 }
             }
 
-            return new TlsHandshakeResult(sslStream, reqSessionId);
+            return new TlsHandshakeResult(sslStream, attachPayload.SessionId);
         }
 
         private void RegisterClient(string clientId, TcpClient client, Stream stream, string? sessionId)

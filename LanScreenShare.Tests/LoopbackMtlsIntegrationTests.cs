@@ -98,15 +98,13 @@ public class LoopbackMtlsIntegrationTests
 
             bool attachParsed = ChannelAttachmentMessage.TryDeserialize(
                 attachBuffer,
-                out string attachSessionId,
-                out string attachTokenId,
-                out var attachChannel,
+                out var attachPayload,
                 out string? attachError);
 
             Assert.IsTrue(attachParsed);
             Assert.IsNull(attachError);
 
-            var attachStatus = sessionAuthority.TryAttachChannel(attachTokenId, attachSessionId, viewerFingerprint, attachChannel);
+            var attachStatus = sessionAuthority.TryAttachChannel(attachPayload.TokenId, attachPayload.SessionId, viewerFingerprint, attachPayload.Channel);
             Assert.AreEqual(AttachmentStatus.Success, attachStatus);
 
             // Responder status 1 byte (0x00 = Success)
@@ -124,14 +122,13 @@ public class LoopbackMtlsIntegrationTests
 
             bool lsi2Parsed = Lsi2ControlPacket.TryReadPacket(
                 lsi2Buffer,
-                out ulong seq,
-                out _,
+                out var lsi2Header,
                 out var inputMsg,
                 out string? lsi2Error);
 
             Assert.IsTrue(lsi2Parsed);
             Assert.IsNull(lsi2Error);
-            Assert.AreEqual(1UL, seq);
+            Assert.AreEqual(1UL, lsi2Header.SequenceNumber);
             Assert.AreEqual(InputEventType.MouseDown, inputMsg!.Type);
             Assert.AreEqual(RemoteMouseButton.Left, inputMsg.Button);
 

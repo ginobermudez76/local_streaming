@@ -194,9 +194,7 @@ namespace LanScreenShare.Network.Streaming
 
             if (!ChannelAttachmentMessage.TryDeserialize(
                     attachBuffer,
-                    out string reqSessionId,
-                    out string reqTokenId,
-                    out var reqChannel,
+                    out var attachPayload,
                     out string? attachError))
             {
                 Console.WriteLine($"[ControlServer] Error en CHANNEL_ATTACH de {clientId}: {attachError}");
@@ -206,7 +204,7 @@ namespace LanScreenShare.Network.Streaming
 
             if (_sessionAuthority != null)
             {
-                var status = _sessionAuthority.TryAttachChannel(reqTokenId, reqSessionId, peerFingerprint, reqChannel);
+                var status = _sessionAuthority.TryAttachChannel(attachPayload.TokenId, attachPayload.SessionId, peerFingerprint, attachPayload.Channel);
                 if (status != AttachmentStatus.Success)
                 {
                     await sslStream.WriteAsync(new byte[] { (byte)status }, linkedCts.Token);
@@ -216,7 +214,7 @@ namespace LanScreenShare.Network.Streaming
                 }
             }
 
-            return (sslStream, reqSessionId, true);
+            return (sslStream, attachPayload.SessionId, true);
         }
 
         private async Task<bool> IsClientApprovedAsync(TcpClient client, Stream stream, string clientId, CancellationToken token)
@@ -312,7 +310,6 @@ namespace LanScreenShare.Network.Streaming
 
             if (!Lsi2ControlPacket.TryReadPacket(
                     packetBuffer,
-                    out _,
                     out _,
                     out var input,
                     out string? protocolError))

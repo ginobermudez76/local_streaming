@@ -61,30 +61,39 @@ namespace LanScreenShare.Media
 
             lock (_lock)
             {
-                if (_wasapiOut == null ||
-                    _wasapiOut.PlaybackState != PlaybackState.Playing ||
-                    _waveProvider == null ||
-                    _currentWaveFormat == null ||
-                    _currentWaveFormat.SampleRate != chunk.SampleRate ||
-                    _currentWaveFormat.Channels != chunk.Channels ||
-                    _currentWaveFormat.BitsPerSample != chunk.BitsPerSample)
+                if (NeedsReinitialization(chunk))
                 {
                     InitializePlayer(chunk);
                 }
 
-                if (_waveProvider != null && _wasapiOut != null)
-                {
-                    // Control de latencia ultra-baja: Si el búfer de NAudio se acumula por encima de 80ms, descartar para resincronizar
-                    if (_waveProvider.BufferedDuration.TotalMilliseconds > 80)
-                    {
-                        _waveProvider.ClearBuffer();
-                    }
-
-                    float currentVol = _isMuted ? 0f : _volume;
-                    ApplyVolume(chunk.Data, chunk.AudioFormat, chunk.BitsPerSample, currentVol);
-                    _waveProvider.AddSamples(chunk.Data, 0, chunk.Data.Length);
-                }
+                EnqueueChunk(chunk);
             }
+        }
+
+        private bool NeedsReinitialization(CapturedAudioChunk chunk) =>
+            _wasapiOut == null ||
+            _wasapiOut.PlaybackState != PlaybackState.Playing ||
+            _waveProvider == null ||
+            !MatchesCurrentFormat(chunk);
+
+        private bool MatchesCurrentFormat(CapturedAudioChunk chunk) =>
+            _currentWaveFormat != null &&
+            _currentWaveFormat.SampleRate == chunk.SampleRate &&
+            _currentWaveFormat.Channels == chunk.Channels &&
+            _currentWaveFormat.BitsPerSample == chunk.BitsPerSample;
+
+        private void EnqueueChunk(CapturedAudioChunk chunk)
+        {
+            if (_waveProvider == null || _wasapiOut == null) return;
+
+            if (_waveProvider.BufferedDuration.TotalMilliseconds > 80)
+            {
+                _waveProvider.ClearBuffer();
+            }
+
+            float currentVol = _isMuted ? 0f : _volume;
+            ApplyVolume(chunk.Data!, chunk.AudioFormat, chunk.BitsPerSample, currentVol);
+            _waveProvider.AddSamples(chunk.Data!, 0, chunk.Data!.Length);
         }
 
         private static void ApplyVolume(byte[] data, int audioFormat, int bitsPerSample, float volume)
@@ -100,19 +109,29 @@ namespace LanScreenShare.Media
 
             if (audioFormat == 3 || bitsPerSample == 32) // IEEE Float 32-bit
             {
-                var floatSpan = MemoryMarshal.Cast<byte, float>(data.AsSpan());
-                for (int i = 0; i < floatSpan.Length; i++)
-                {
-                    floatSpan[i] *= volume;
-                }
+                ApplyFloatVolume(data, volume);
             }
             else // PCM 16-bit
             {
-                var shortSpan = MemoryMarshal.Cast<byte, short>(data.AsSpan());
-                for (int i = 0; i < shortSpan.Length; i++)
-                {
-                    shortSpan[i] = (short)Math.Clamp((int)Math.Round(shortSpan[i] * volume), short.MinValue, short.MaxValue);
-                }
+                ApplyPcm16Volume(data, volume);
+            }
+        }
+
+        private static void ApplyFloatVolume(byte[] data, float volume)
+        {
+            var floatSpan = MemoryMarshal.Cast<byte, float>(data.AsSpan());
+            for (int i = 0; i < floatSpan.Length; i++)
+            {
+                floatSpan[i] *= volume;
+            }
+        }
+
+        private static void ApplyPcm16Volume(byte[] data, float volume)
+        {
+            var shortSpan = MemoryMarshal.Cast<byte, short>(data.AsSpan());
+            for (int i = 0; i < shortSpan.Length; i++)
+            {
+                shortSpan[i] = (short)Math.Clamp((int)Math.Round(shortSpan[i] * volume), short.MinValue, short.MaxValue);
             }
         }
 

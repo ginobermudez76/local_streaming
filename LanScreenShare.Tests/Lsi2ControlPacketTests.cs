@@ -26,15 +26,14 @@ public class Lsi2ControlPacketTests
 
         bool parsed = Lsi2ControlPacket.TryReadPacket(
             buffer,
-            out ulong readSeq,
-            out ulong readTs,
+            out var header,
             out var readInput,
             out string? error);
 
         Assert.IsTrue(parsed);
         Assert.IsNull(error);
-        Assert.AreEqual(seq, readSeq);
-        Assert.AreEqual(ts, readTs);
+        Assert.AreEqual(seq, header.SequenceNumber);
+        Assert.AreEqual(ts, header.Timestamp);
         Assert.IsNotNull(readInput);
         Assert.AreEqual(InputEventType.MouseMove, readInput.Type);
         Assert.AreEqual(input.NormalizedX, readInput.NormalizedX, 0.001f);
@@ -56,8 +55,7 @@ public class Lsi2ControlPacketTests
 
         bool parsed = Lsi2ControlPacket.TryReadPacket(
             buffer,
-            out ulong readSeq,
-            out ulong readTs,
+            out _,
             out var readInput,
             out string? error);
 
@@ -82,13 +80,12 @@ public class Lsi2ControlPacketTests
 
         bool parsed = Lsi2ControlPacket.TryReadPacket(
             buffer,
-            out ulong readSeq,
-            out ulong readTs,
+            out var header,
             out var readInput,
             out string? error);
 
         Assert.IsTrue(parsed);
-        Assert.AreEqual(100UL, readSeq);
+        Assert.AreEqual(100UL, header.SequenceNumber);
         Assert.AreEqual(0x41, readInput!.KeyCode);
     }
 
@@ -104,7 +101,6 @@ public class Lsi2ControlPacketTests
 
         bool parsed = Lsi2ControlPacket.TryReadPacket(
             buffer,
-            out _,
             out _,
             out _,
             out string? error);
@@ -125,11 +121,9 @@ public class Lsi2ControlPacketTests
             buffer,
             out _,
             out _,
-            out _,
             out string? error);
 
         Assert.IsFalse(parsed);
         Assert.IsTrue(error!.Contains("InvalidMagic"));
     }
 }
-
