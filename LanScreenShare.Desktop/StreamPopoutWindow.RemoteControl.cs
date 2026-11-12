@@ -183,11 +183,10 @@ namespace LanScreenShare.Desktop
             var screenImage = this.FindControl<Image>("ScreenImage");
             screenImage?.Focus();
 
-            var props = e.GetCurrentPoint(screenImage).Properties;
-            RemoteMouseButton button = GetPressedMouseButton(props);
-            if (button != RemoteMouseButton.None)
+            var btn = GetPressedMouseButton(e.GetCurrentPoint(screenImage).Properties);
+            if (btn != RemoteMouseButton.None)
             {
-                SendMouseInput(e, InputEventType.MouseDown, button);
+                SendMouseInput(e, InputEventType.MouseDown, btn);
             }
         }
 
@@ -204,9 +203,8 @@ namespace LanScreenShare.Desktop
             if (!_isRemoteControlEnabled || IsPointerOverHeader(e)) return;
 
             var screenImage = this.FindControl<Image>("ScreenImage");
-            var props = e.GetCurrentPoint(screenImage).Properties;
-            RemoteMouseButton button = GetReleasedMouseButton(props);
-            SendMouseInput(e, InputEventType.MouseUp, button);
+            var btn = GetReleasedMouseButton(e.GetCurrentPoint(screenImage).Properties);
+            SendMouseInput(e, InputEventType.MouseUp, btn);
         }
 
         private void ScreenImage_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
@@ -248,50 +246,23 @@ namespace LanScreenShare.Desktop
             SendKeyInput(e, InputEventType.KeyUp);
         }
 
-        private bool HandleCtrlAltShortcut(Key key)
+        private bool HandlePopoutKeyShortcuts(KeyEventArgs e)
         {
-            if (key == Key.L)
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Alt))
             {
-                GameModeToggled?.Invoke();
-                return true;
+                if (e.Key == Key.L) { GameModeToggled?.Invoke(); return true; }
+                if (e.Key == Key.M) { CycleMonitorRequested?.Invoke(); return true; }
             }
 
-            if (key == Key.M)
-            {
-                CycleMonitorRequested?.Invoke();
-                return true;
-            }
-
-            return false;
-        }
-
-        private bool HandleWindowShortcut(Key key)
-        {
-            if (key == Key.F11)
-            {
-                ToggleFullscreen();
-                return true;
-            }
-
-            if (key == Key.Escape && _isFullscreen)
-            {
-                SetFullscreen(false);
-                return true;
-            }
+            if (e.Key == Key.F11) { ToggleFullscreen(); return true; }
+            if (e.Key == Key.Escape && _isFullscreen) { SetFullscreen(false); return true; }
 
             return false;
         }
 
         private void PopoutWindow_KeyDown(object? sender, KeyEventArgs e)
         {
-            bool hasCtrlAlt = e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Alt);
-            if (hasCtrlAlt && HandleCtrlAltShortcut(e.Key))
-            {
-                e.Handled = true;
-                return;
-            }
-
-            if (HandleWindowShortcut(e.Key))
+            if (HandlePopoutKeyShortcuts(e))
             {
                 e.Handled = true;
             }

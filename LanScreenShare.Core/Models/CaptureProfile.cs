@@ -9,3 +9,4 @@ namespace LanScreenShare.Core.Models
         int TargetHeight = 0,
         int BitrateMbps = 8);
 }
+
