@@ -239,7 +239,7 @@ namespace LanScreenShare.Desktop
 
             scaleCombo.SelectedIndex = FindMatchingResolutionIndex(items, _appSettings.ResolutionTag);
             GetSelectedResolution(out int targetW, out int targetH, out double scale);
-            UpdateResolutionLabels(nativeW, nativeH, targetW, targetH, scale);
+            UpdateResolutionLabels(new ResolutionMetrics(nativeW, nativeH, targetW, targetH, scale));
         }
 
         private static List<ComboBoxItem> BuildResolutionComboItems(int nativeW, int nativeH, double nativeAspect)
@@ -728,7 +728,7 @@ namespace LanScreenShare.Desktop
 
             int nativeW = (_currentSource != null && _currentSource.Width > 0) ? _currentSource.Width : 1920;
             int nativeH = (_currentSource != null && _currentSource.Height > 0) ? _currentSource.Height : 1080;
-            UpdateResolutionLabels(nativeW, nativeH, targetW, targetH, scale);
+            UpdateResolutionLabels(new ResolutionMetrics(nativeW, nativeH, targetW, targetH, scale));
         }
 
         private void SaveCurrentSettings()
