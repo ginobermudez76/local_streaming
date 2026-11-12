@@ -235,7 +235,7 @@ namespace LanScreenShare.Desktop
                 try
                 {
                     using var audioCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                    await _audioClient.ConnectAsync(ipAddress, 5002, _sslClientOptions, handshake?.SessionId, handshake?.AudioToken, audioCts.Token);
+                    await _audioClient.ConnectAsync(new AudioClientConnectionOptions(ipAddress, 5002, _sslClientOptions, handshake?.SessionId, handshake?.AudioToken), audioCts.Token);
                     if (_isViewerVoiceChatActive)
                     {
                         _micCaptureService?.StartCapture();

@@ -286,7 +286,7 @@ namespace LanScreenShare.Tests
                 CheckCompletion();
             };
 
-            await client.ConnectAsync("127.0.0.1", port, clientSslOpts, session.SessionId, audioToken.TokenId);
+            await client.ConnectAsync(new AudioClientConnectionOptions("127.0.0.1", port, clientSslOpts, session.SessionId, audioToken.TokenId));
             await Task.Delay(100);
 
             Assert.AreEqual(1, server.ConnectedClientsCount, "El cliente mTLS debe estar registrado en el servidor.");

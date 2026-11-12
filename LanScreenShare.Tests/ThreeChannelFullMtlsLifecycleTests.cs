@@ -135,7 +135,7 @@ public class ThreeChannelFullMtlsLifecycleTests
             audioReceivedEvent.Set();
         };
 
-        await audioClient.ConnectAsync("127.0.0.1", audioPort, clientOptions, sessionId, audioToken, token);
+        await audioClient.ConnectAsync(new AudioClientConnectionOptions("127.0.0.1", audioPort, clientOptions, sessionId, audioToken), token);
         Assert.IsTrue(audioClient.IsConnected);
 
         // 3. Cliente conecta al canal de Control (5003) con el token de Control
