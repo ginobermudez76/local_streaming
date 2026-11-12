@@ -140,7 +140,7 @@ namespace LanScreenShare.Tests
                 }
             };
 
-            service.StartCapture(new CaptureProfile(TargetFps: 60, TargetWidth: 640, TargetHeight: 480));
+            service.StartCapture(new CaptureProfile { TargetFps = 60, TargetWidth = 640, TargetHeight = 480 });
             Assert.IsTrue(service.IsCapturing);
 
             var completed = await Task.WhenAny(tcs.Task, Task.Delay(5000));

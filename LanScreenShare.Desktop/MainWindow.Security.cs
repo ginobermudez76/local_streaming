@@ -31,61 +31,56 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void InitializeStreamAccessMode()
+        private void ConfigureAccessModeComboBox(string comboName, string currentSetting, Action<string> onModeChanged)
         {
-            var streamAccessCombo = this.FindControl<ComboBox>("StreamAccessModeComboBox");
-            if (streamAccessCombo != null)
-            {
-                SelectComboBoxItemByTag(streamAccessCombo, _appSettings.StreamAccessMode);
-                _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
-                streamAccessCombo.SelectionChanged += (s, e) =>
-                {
-                    _requireStreamApproval = (streamAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string == "ask";
-                    Console.WriteLine($"[AccessHost] Aprobación de stream requerida: {_requireStreamApproval}");
-                    SaveCurrentSettings();
-                };
-            }
+            var combo = this.FindControl<ComboBox>(comboName);
+            if (combo == null) return;
 
-            _streamServer.ClientApprovalCallback = async (clientId) =>
+            SelectComboBoxItemByTag(combo, currentSetting);
+            onModeChanged((combo.SelectedItem as ComboBoxItem)?.Tag as string ?? string.Empty);
+
+            combo.SelectionChanged += (s, e) =>
             {
-                if (!_requireStreamApproval) return true;
-                return await RequestStreamApprovalAsync(clientId);
+                var tag = (combo.SelectedItem as ComboBoxItem)?.Tag as string ?? string.Empty;
+                onModeChanged(tag);
+                SaveCurrentSettings();
             };
-
-            WireButtonClick("ApproveStreamButton", (s, e) => _streamApprovalTcs?.TrySetResult(true));
-            WireButtonClick("RejectStreamButton", (s, e) => _streamApprovalTcs?.TrySetResult(false));
-        }
-
-        private void InitializeControlAccessMode()
-        {
-            var controlAccessCombo = this.FindControl<ComboBox>("ControlAccessModeComboBox");
-            if (controlAccessCombo != null)
-            {
-                SelectComboBoxItemByTag(controlAccessCombo, _appSettings.ControlAccessMode);
-                _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
-                controlAccessCombo.SelectionChanged += (s, e) =>
-                {
-                    _remoteControlMode = (controlAccessCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
-                    Console.WriteLine($"[AccessHost] Modo de control remoto: {_remoteControlMode}");
-                    SaveCurrentSettings();
-                };
-            }
-
-            _controlServer.ClientApprovalCallback = async (clientId) =>
-            {
-                if (!_allowRemoteControl) return false;
-                if (_remoteControlMode == "auto") return true;
-                return await RequestControlApprovalAsync(clientId);
-            };
-
-            WireButtonClick("ApproveControlButton", (s, e) => _controlApprovalTcs?.TrySetResult(true));
-            WireButtonClick("RejectControlButton", (s, e) => _controlApprovalTcs?.TrySetResult(false));
         }
 
         private void InitializeAccessAndApproval()
         {
-            InitializeStreamAccessMode();
-            InitializeControlAccessMode();
+            ConfigureAccessModeComboBox("StreamAccessModeComboBox", _appSettings.StreamAccessMode, tag =>
+            {
+                _requireStreamApproval = tag == "ask";
+                Console.WriteLine($"[AccessHost] Aprobación de stream requerida: {_requireStreamApproval}");
+            });
+            _streamServer.ClientApprovalCallback = CheckStreamClientApproval;
+            WireApprovalButtons("ApproveStreamButton", "RejectStreamButton", () => _streamApprovalTcs);
+
+            ConfigureAccessModeComboBox("ControlAccessModeComboBox", _appSettings.ControlAccessMode, tag =>
+            {
+                _remoteControlMode = string.IsNullOrEmpty(tag) ? "auto" : tag;
+                Console.WriteLine($"[AccessHost] Modo de control remoto: {_remoteControlMode}");
+            });
+            _controlServer.ClientApprovalCallback = CheckControlClientApproval;
+            WireApprovalButtons("ApproveControlButton", "RejectControlButton", () => _controlApprovalTcs);
+        }
+
+        private void WireApprovalButtons(string approveButton, string rejectButton, Func<TaskCompletionSource<bool>?> getTcs)
+        {
+            WireButtonClick(approveButton, (s, e) => getTcs()?.TrySetResult(true));
+            WireButtonClick(rejectButton, (s, e) => getTcs()?.TrySetResult(false));
+        }
+
+        private async Task<bool> CheckStreamClientApproval(string clientId)
+        {
+            return !_requireStreamApproval || await RequestStreamApprovalAsync(clientId);
+        }
+
+        private async Task<bool> CheckControlClientApproval(string clientId)
+        {
+            if (!_allowRemoteControl) return false;
+            return _remoteControlMode == "auto" || await RequestControlApprovalAsync(clientId);
         }
 
         private bool OnProvisionalPairingRequested(string fingerprint, X509Certificate2 clientCert)

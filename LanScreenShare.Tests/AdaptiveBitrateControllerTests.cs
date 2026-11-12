@@ -75,31 +75,39 @@ namespace LanScreenShare.Tests
             Assert.AreEqual(12, controller.CurrentBitrateMbps);
         }
 
+        private AdaptiveBitrateController CreateTestController(int initialBitrate = 15, int baseFps = 60, int minBitrate = 2, int maxBitrate = 25)
+        {
+            return new AdaptiveBitrateController(initialBitrate, baseFps, TimeProvider)
+            {
+                MinBitrateMbps = minBitrate,
+                MaxBitrateMbps = maxBitrate
+            };
+        }
+
+        private static StreamTelemetry CreateTelemetry(int rttMs = 15, long droppedFrames = 0, int hostFps = 60, int viewerFps = 60)
+        {
+            return new StreamTelemetry
+            {
+                RttMs = rttMs,
+                DroppedFrames = droppedFrames,
+                HostFps = hostFps,
+                ViewerFps = viewerFps
+            };
+        }
+
         [TestMethod]
         public void AdditiveIncrease_ClampsToMaxBitrate()
         {
-            var controller = new AdaptiveBitrateController(initialBitrateMbps: 19, baseFps: 60, TimeProvider)
-            {
-                MinBitrateMbps = 2,
-                MaxBitrateMbps = 20,
-                IncreaseCooldownMs = 1000
-            };
-
-            var telemetry = new StreamTelemetry
-            {
-                RttMs = 12,
-                DroppedFrames = 0,
-                HostFps = 60,
-                ViewerFps = 60
-            };
+            var controller = CreateTestController(initialBitrate: 19, maxBitrate: 20);
+            controller.IncreaseCooldownMs = 1000;
 
             AdvanceTime(1200);
-            controller.RegisterTelemetry(telemetry);
+            controller.RegisterTelemetry(CreateTelemetry(rttMs: 12));
             Assert.AreEqual(20, controller.CurrentBitrateMbps);
 
             // Should not exceed 20
             AdvanceTime(1200);
-            controller.RegisterTelemetry(telemetry);
+            controller.RegisterTelemetry(CreateTelemetry(rttMs: 12));
             Assert.AreEqual(20, controller.CurrentBitrateMbps);
         }
 
@@ -154,25 +162,13 @@ namespace LanScreenShare.Tests
         [TestMethod]
         public void HighRtt_TriggersModerateCongestionStepDown()
         {
-            var controller = new AdaptiveBitrateController(initialBitrateMbps: 16, baseFps: 60, TimeProvider)
-            {
-                MinBitrateMbps = 2,
-                MaxBitrateMbps = 25,
-                RttThresholdCongestionMs = 50,
-                RttThresholdSevereMs = 90,
-                DecreaseCooldownMs = 500
-            };
-
-            var telemetry = new StreamTelemetry
-            {
-                RttMs = 60, // Moderate congestion (> 50ms, < 90ms)
-                DroppedFrames = 0,
-                HostFps = 60,
-                ViewerFps = 60
-            };
+            var controller = CreateTestController(initialBitrate: 16);
+            controller.RttThresholdCongestionMs = 50;
+            controller.RttThresholdSevereMs = 90;
+            controller.DecreaseCooldownMs = 500;
 
             AdvanceTime(600);
-            controller.RegisterTelemetry(telemetry);
+            controller.RegisterTelemetry(CreateTelemetry(rttMs: 60)); // Moderate congestion (> 50ms, < 90ms)
 
             Assert.AreEqual(AbrNetworkState.Congested, controller.CurrentState);
             // 16 * 0.85 = 14 Mbps
@@ -182,23 +178,11 @@ namespace LanScreenShare.Tests
         [TestMethod]
         public void SevereRtt_DropsAggressively()
         {
-            var controller = new AdaptiveBitrateController(initialBitrateMbps: 20, baseFps: 60, TimeProvider)
-            {
-                MinBitrateMbps = 2,
-                MaxBitrateMbps = 25,
-                RttThresholdSevereMs = 90
-            };
-
-            var telemetry = new StreamTelemetry
-            {
-                RttMs = 120, // Severe (> 90ms)
-                DroppedFrames = 0,
-                HostFps = 60,
-                ViewerFps = 45
-            };
+            var controller = CreateTestController(initialBitrate: 20);
+            controller.RttThresholdSevereMs = 90;
 
             AdvanceTime(800);
-            controller.RegisterTelemetry(telemetry);
+            controller.RegisterTelemetry(CreateTelemetry(rttMs: 120, viewerFps: 45)); // Severe (> 90ms)
 
             Assert.AreEqual(AbrNetworkState.SevereCongestion, controller.CurrentState);
             // 20 * 0.65 = 13 Mbps

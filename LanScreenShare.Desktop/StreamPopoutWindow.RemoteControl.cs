@@ -176,12 +176,19 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private bool CanProcessPointerInput(PointerEventArgs e, out Image? screenImage)
+        {
+            screenImage = null;
+            if (!_isRemoteControlEnabled || IsPointerOverHeader(e)) return false;
+
+            screenImage = this.FindControl<Image>("ScreenImage");
+            return screenImage != null;
+        }
+
         private void ScreenImage_PointerPressed(object? sender, PointerPressedEventArgs e)
         {
-            if (!_isRemoteControlEnabled || IsPointerOverHeader(e)) return;
-
-            var screenImage = this.FindControl<Image>("ScreenImage");
-            screenImage?.Focus();
+            if (!CanProcessPointerInput(e, out var screenImage)) return;
+            screenImage!.Focus();
 
             var btn = GetPressedMouseButton(e.GetCurrentPoint(screenImage).Properties);
             if (btn != RemoteMouseButton.None)
@@ -200,9 +207,8 @@ namespace LanScreenShare.Desktop
 
         private void ScreenImage_PointerReleased(object? sender, PointerReleasedEventArgs e)
         {
-            if (!_isRemoteControlEnabled || IsPointerOverHeader(e)) return;
+            if (!CanProcessPointerInput(e, out var screenImage)) return;
 
-            var screenImage = this.FindControl<Image>("ScreenImage");
             var btn = GetReleasedMouseButton(e.GetCurrentPoint(screenImage).Properties);
             SendMouseInput(e, InputEventType.MouseUp, btn);
         }

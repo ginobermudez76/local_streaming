@@ -69,15 +69,8 @@ namespace LanScreenShare.Desktop
 
         private CaptureProfile PrepareHostingCaptureProfile(out string engine)
         {
-            int fps = GetSelectedFps();
             engine = GetSelectedEngine();
-            string codec = GetSelectedCodec();
-            int sliderVal = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? (codec == "h264" ? 8 : 75));
-            int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
-            int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
-            GetSelectedResolution(out int targetW, out int targetH, out double scale);
-
-            return new CaptureProfile(fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+            return BuildCurrentCaptureProfile();
         }
 
         private void InitializeAdaptiveBitrate(int bitrateMbps, int fps)

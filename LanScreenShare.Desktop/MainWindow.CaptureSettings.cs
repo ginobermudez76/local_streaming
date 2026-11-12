@@ -88,41 +88,46 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void InitializeBitrateAndScaleControls()
+        private void InitializeBitrateControl()
         {
             var bitrateCombo = this.FindControl<ComboBox>("BitrateComboBox");
-            if (bitrateCombo != null)
+            if (bitrateCombo == null) return;
+
+            bitrateCombo.SelectionChanged += (s, e) =>
             {
-                bitrateCombo.SelectionChanged += (s, e) =>
+                if (_isUpdatingQualitySlider) return;
+                if (!TryGetSelectedItemTagAsInt(bitrateCombo, out int val)) return;
+
+                var slider = this.FindControl<Slider>("QualitySlider");
+                if (slider != null && (int)slider.Value != val)
                 {
-                    if (_isUpdatingQualitySlider) return;
-                    if (TryGetSelectedItemTagAsInt(bitrateCombo, out int val))
-                    {
-                        var slider = this.FindControl<Slider>("QualitySlider");
-                        if (slider != null && (int)slider.Value != val)
-                        {
-                            slider.Value = val;
-                        }
-                        else
-                        {
-                            OnSettingChanged();
-                            SaveCurrentSettings();
-                        }
-                    }
-                };
-            }
-
-            InitializeResolutionOptions();
-
-            var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
-            if (scaleCombo != null)
-            {
-                scaleCombo.SelectionChanged += (s, e) =>
+                    slider.Value = val;
+                }
+                else
                 {
                     OnSettingChanged();
                     SaveCurrentSettings();
-                };
-            }
+                }
+            };
+        }
+
+        private void InitializeScaleControl()
+        {
+            var scaleCombo = this.FindControl<ComboBox>("ScaleComboBox");
+            if (scaleCombo == null) return;
+
+            scaleCombo.SelectionChanged += (s, e) =>
+            {
+                OnSettingChanged();
+                SaveCurrentSettings();
+            };
+        }
+
+        private void InitializeBitrateAndScaleControls()
+        {
+            InitializeBitrateControl();
+            InitializeResolutionOptions();
+            InitializeScaleControl();
         }
 
         private void InitializeAbrCheckbox()
@@ -379,7 +384,14 @@ namespace LanScreenShare.Desktop
                         if (_isHosting && _screenCaptureService is DxgiScreenCaptureService)
                         {
                             UpdateStatus($"DXGI no disponible en esta pantalla ({ex.Message}), cambiando a GDI...", "#F59E0B");
-                            SwitchCaptureSource(_currentSource, "gdi", new CaptureProfile(GetSelectedFps(), _appSettings.Quality, 1.0, GetSelectedCodec(), 0, 0, _appSettings.BitrateMbps));
+                            SwitchCaptureSource(_currentSource, "gdi", new CaptureProfile
+                            {
+                                TargetFps = GetSelectedFps(),
+                                Quality = _appSettings.Quality,
+                                ResolutionScale = 1.0,
+                                Codec = GetSelectedCodec(),
+                                BitrateMbps = _appSettings.BitrateMbps
+                            });
                         }
                     });
                 };
@@ -435,7 +447,16 @@ namespace LanScreenShare.Desktop
             int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
             GetSelectedResolution(out int targetW, out int targetH, out double scale);
 
-            return new CaptureProfile(fps, quality, scale, codec, targetW, targetH, bitrateMbps);
+            return new CaptureProfile
+            {
+                TargetFps = fps,
+                Quality = quality,
+                ResolutionScale = scale,
+                Codec = codec,
+                TargetWidth = targetW,
+                TargetHeight = targetH,
+                BitrateMbps = bitrateMbps
+            };
         }
 
         private void RestartHostAudioCaptureIfEnabled()
@@ -625,7 +646,7 @@ namespace LanScreenShare.Desktop
 
             _screenCaptureService = CreateCaptureService(source, engine);
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
-            _screenCaptureService.StartCapture(new CaptureProfile(fps, profile.Quality, profile.Scale, profile.Codec, profile.TargetWidth, profile.TargetHeight, bitrateMbps));
+            _screenCaptureService.StartCapture(profile with { TargetFps = fps, BitrateMbps = bitrateMbps });
             UpdateAbrUI();
         }
 
@@ -634,15 +655,9 @@ namespace LanScreenShare.Desktop
             if (!_isHosting)
                 return;
 
-            int fps = GetSelectedFps();
             string engine = GetSelectedEngine();
             string codec = GetSelectedCodec();
-            int sliderVal = (int)(this.FindControl<Slider>("QualitySlider")?.Value ?? (codec == "h264" ? 8 : 75));
-            int quality = codec == "h264" ? _appSettings.Quality : sliderVal;
-            int bitrateMbps = codec == "h264" ? sliderVal : _appSettings.BitrateMbps;
-            GetSelectedResolution(out int targetW, out int targetH, out double scale);
-
-            SwitchCaptureSource(_currentSource, engine, new CaptureProfile(fps, quality, scale, codec, targetW, targetH, bitrateMbps));
+            SwitchCaptureSource(_currentSource, engine, BuildCurrentCaptureProfile());
             string engineName = engine == "dxgi" ? "DirectX DXGI (GPU)" : "GDI BitBlt (CPU)";
             UpdateStatus($"Cambiado a motor {engineName} ({codec.ToUpper()}) en caliente", "#22C55E");
         }
@@ -702,7 +717,16 @@ namespace LanScreenShare.Desktop
             UpdateScaleAndResolutionLabels(targetW, targetH, scale);
             MarkCustomPresetIfUserChanged();
 
-            _screenCaptureService.UpdateSettings(new CaptureProfile(fps, quality, scale, codec, targetW, targetH, bitrateMbps));
+            _screenCaptureService.UpdateSettings(new CaptureProfile
+            {
+                TargetFps = fps,
+                Quality = quality,
+                ResolutionScale = scale,
+                Codec = codec,
+                TargetWidth = targetW,
+                TargetHeight = targetH,
+                BitrateMbps = bitrateMbps
+            });
         }
 
         private void UpdateFpsAndQualityLabels(int fps, string codec, int sliderVal)
