@@ -1,0 +1,16 @@
+{
+  "rule_sets": [
+    {
+      "quality_gates": {
+        "hotspot_decline": true,
+        "new_code_health": true,
+        "supervise_goals": true,
+        "advisory_health_rules": true,
+        "critical_health_rules": true,
+        "refactoring_goals": true
+      },
+      "matching_content_path": "**/*"
+    }
+  ]
+}
+
