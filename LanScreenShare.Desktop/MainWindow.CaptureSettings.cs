@@ -52,6 +52,7 @@ namespace LanScreenShare.Desktop
                     string selCodec = GetSelectedCodec();
                     UpdateQualitySliderForCodec(selCodec);
                     UpdateHardwareEncoderBadgeUI();
+                    UpdateAbrUI();
                     OnSettingChanged();
                     SaveCurrentSettings();
                 };
@@ -665,19 +666,38 @@ namespace LanScreenShare.Desktop
         private void UpdateAbrUI()
         {
             var qualityTitle = this.FindControl<TextBlock>("QualityTitleLabel");
-            if (qualityTitle == null) return;
+            if (qualityTitle != null)
+            {
+                string codec = GetSelectedCodec();
+                qualityTitle.Text = codec == "h264" ? "Tasa de bits" : "Calidad JPEG";
+            }
 
+            UpdateAbrControlsState();
+        }
+
+        private void UpdateAbrControlsState()
+        {
             string codec = GetSelectedCodec();
-            if (codec == "h264")
+            bool isH264 = codec == "h264";
+
+            var abrCb = this.FindControl<CheckBox>("AbrCheckBox");
+            if (abrCb != null)
             {
-                qualityTitle.Text = _abrController.IsEnabled
-                    ? (_isHosting ? $"Tasa de bits (ABR: {_abrController.CurrentBitrateMbps} Mbps)" : "Tasa de bits (ABR auto)")
-                    : "Tasa de bits";
+                abrCb.IsEnabled = isH264;
             }
-            else
-            {
-                qualityTitle.Text = "Calidad JPEG";
-            }
+
+            var abrSubtitle = this.FindControl<TextBlock>("AbrSubtitleLabel");
+            if (abrSubtitle == null) return;
+
+            abrSubtitle.Text = GetAbrSubtitleText(isH264);
+        }
+
+        private string GetAbrSubtitleText(bool isH264)
+        {
+            if (!isH264) return "Solo disponible en códec H.264";
+            if (!_abrController.IsEnabled) return "Ajuste dinámico desactivado";
+            if (_isHosting) return $"Dinámico activo ({_abrController.CurrentBitrateMbps} Mbps)";
+            return "Ajusta dinámicamente bitrate y FPS según red";
         }
 
         private (int Fps, int BitrateMbps) AdjustForAbr(int fps, int bitrateMbps, string codec)
