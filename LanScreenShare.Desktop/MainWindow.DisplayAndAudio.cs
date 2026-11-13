@@ -19,12 +19,20 @@ namespace LanScreenShare.Desktop
             if (!_isFullscreen || _isGameMode)
                 return;
 
-            var headerBar = this.FindControl<Border>("StreamHeaderBar");
-            if (headerBar == null)
-                return;
-
             var pos = e.GetPosition(this);
-            UpdateFullscreenHeaderVisibility(headerBar, pos.Y);
+
+            var headerBar = this.FindControl<Border>("StreamHeaderBar");
+            if (headerBar != null)
+            {
+                UpdateFullscreenHeaderVisibility(headerBar, pos.Y);
+            }
+
+            var footerBar = this.FindControl<Border>("CanvasCardFooter");
+            if (footerBar != null)
+            {
+                double windowHeight = this.Bounds.Height > 0 ? this.Bounds.Height : this.ClientSize.Height;
+                UpdateFullscreenFooterVisibility(footerBar, pos.Y, windowHeight);
+            }
         }
 
         private void UpdateFullscreenHeaderVisibility(Border headerBar, double posY)
@@ -37,7 +45,7 @@ namespace LanScreenShare.Desktop
                 return;
             }
 
-            if (!headerBar.IsVisible)
+            if (!headerBar.IsVisible || _isMouseOverHeaderBar)
                 return;
 
             double headerHeight = headerBar.Bounds.Height > 0 ? headerBar.Bounds.Height : 50;
@@ -50,6 +58,30 @@ namespace LanScreenShare.Desktop
             {
                 headerBar.IsVisible = false;
                 _headerAutoHideTimer.Stop();
+            }
+        }
+
+        private void UpdateFullscreenFooterVisibility(Border footerBar, double posY, double windowHeight)
+        {
+            if (windowHeight <= 0) return;
+
+            double footerHeight = footerBar.Bounds.Height > 0 ? footerBar.Bounds.Height : 50;
+            double threshold = windowHeight - Math.Max(40, footerHeight);
+
+            if (posY >= threshold)
+            {
+                if (!footerBar.IsVisible) footerBar.IsVisible = true;
+                _footerAutoHideTimer.Stop();
+                _footerAutoHideTimer.Start();
+                return;
+            }
+
+            if (!footerBar.IsVisible || _isMouseOverFooterBar) return;
+
+            if (posY < threshold - 25)
+            {
+                footerBar.IsVisible = false;
+                _footerAutoHideTimer.Stop();
             }
         }
 
@@ -95,7 +127,7 @@ namespace LanScreenShare.Desktop
             SetElementVisibility("DevicesSectionBorder", false);
             SetElementVisibility("BottomFooterGrid", false);
             SetElementVisibility("CanvasCardHeader", false);
-            SetElementVisibility("CanvasCardFooter", false);
+            ConfigureFullscreenFooterBar(true);
 
             UpdateFullscreenButtonVisuals("IconFullscreenExit", "Salir");
             ConfigureWorkspaceContainer(new Thickness(0), new CornerRadius(0), new Thickness(0));
@@ -113,11 +145,34 @@ namespace LanScreenShare.Desktop
             SetElementVisibility("DevicesSectionBorder", true);
             SetElementVisibility("BottomFooterGrid", true);
             SetElementVisibility("CanvasCardHeader", true);
-            SetElementVisibility("CanvasCardFooter", true);
+            ConfigureFullscreenFooterBar(false);
 
             UpdateFullscreenButtonVisuals("IconFullscreen", "Pantalla Completa");
             ConfigureWorkspaceContainer(new Thickness(24, 18, 24, 12), new CornerRadius(14), new Thickness(1));
             ConfigureFullscreenHeaderBar(false);
+        }
+
+        private void ConfigureFullscreenFooterBar(bool fullscreen)
+        {
+            var footerBar = this.FindControl<Border>("CanvasCardFooter");
+            if (footerBar == null) return;
+
+            if (fullscreen)
+            {
+                footerBar.ZIndex = 100;
+                footerBar.IsVisible = false;
+                Grid.SetRow(footerBar, 1);
+                footerBar.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Bottom;
+                _footerAutoHideTimer.Stop();
+            }
+            else
+            {
+                footerBar.ZIndex = 0;
+                footerBar.IsVisible = true;
+                Grid.SetRow(footerBar, 2);
+                footerBar.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
+                _footerAutoHideTimer.Stop();
+            }
         }
 
         private void SetElementVisibility(string name, bool isVisible)
