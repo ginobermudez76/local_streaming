@@ -56,7 +56,16 @@ namespace LanScreenShare.Media
                 ?? throw new InvalidOperationException("No se pudo crear la instancia del decodificador H.264.");
 
             IntPtr pUnk = Marshal.GetIUnknownForObject(rawObj);
-            _decoder = new IMFTransform(pUnk);
+            Guid iidTransform = HardwareMftEncoderDiscovery.IID_IMFTransform;
+            int hrTransform = Marshal.QueryInterface(pUnk, in iidTransform, out IntPtr pTransform);
+            Marshal.Release(pUnk);
+
+            if (hrTransform != 0 || pTransform == IntPtr.Zero)
+            {
+                throw new InvalidOperationException($"No se pudo obtener la interfaz IMFTransform del decodificador H.264 (HRESULT 0x{hrTransform:X8}).");
+            }
+
+            _decoder = new IMFTransform(pTransform);
 
             // Configurar baja latencia estricta en atributos MFT y vía ICodecAPI oficial (cero buffering de DPB)
             ApplyDecoderLowLatency(_decoder);

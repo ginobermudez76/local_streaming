@@ -156,7 +156,8 @@ namespace LanScreenShare.Media
 
             try
             {
-                _encoder.Attributes.Set(HardwareMftEncoderDiscovery.MF_TRANSFORM_ASYNC_UNLOCK, 1);
+                var attrs = _encoder.Attributes;
+                attrs?.Set(HardwareMftEncoderDiscovery.MF_TRANSFORM_ASYNC_UNLOCK, 1);
             }
             catch
             {
