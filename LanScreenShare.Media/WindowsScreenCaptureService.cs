@@ -16,6 +16,10 @@ namespace LanScreenShare.Media
         public readonly record struct ScreenBounds(int X, int Y, int Width, int Height, bool AllScreens = false);
 
         public event EventHandler<CapturedFrame>? FrameCaptured;
+        public event EventHandler<bool>? SecureDesktopChanged;
+
+        protected virtual void OnSecureDesktopChanged(bool isSecure) =>
+            SecureDesktopChanged?.Invoke(this, isSecure);
         private CancellationTokenSource? _cts;
         private Task? _captureTask;
         private bool _disposed;
