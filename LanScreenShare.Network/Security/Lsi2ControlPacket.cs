@@ -201,5 +201,6 @@ public sealed class Lsi2ControlPacket
                 InputEventType.ClipboardText or
                 InputEventType.SwitchMonitor or
                 InputEventType.MonitorInfo or
-                InputEventType.SelectSource;
+                InputEventType.SelectSource or
+                InputEventType.SecureDesktopState;
 }

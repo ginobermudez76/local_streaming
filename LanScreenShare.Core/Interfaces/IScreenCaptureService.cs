@@ -6,6 +6,11 @@ namespace LanScreenShare.Core.Interfaces
     public interface IScreenCaptureService : IDisposable
     {
         event EventHandler<CapturedFrame>? FrameCaptured;
+        event EventHandler<bool>? SecureDesktopChanged
+        {
+            add { }
+            remove { }
+        }
         bool IsCapturing { get; }
         int TargetFps { get; set; }
         int Quality { get; set; }

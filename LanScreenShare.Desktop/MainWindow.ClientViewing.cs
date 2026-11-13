@@ -573,6 +573,7 @@ namespace LanScreenShare.Desktop
             _viewerWriteableBitmap = null;
 
             UpdatePlaceholderOnDisconnect(reason);
+            UpdateSecureDesktopBanner(false);
             HideViewerControls();
         }
 

@@ -897,6 +897,32 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- Secure Desktop / UAC Warning Banner -->
+                                <Border x:Name="SecureDesktopBanner"
+                                        Background="#E62D1515"
+                                        BorderBrush="#EF4444"
+                                        BorderThickness="1"
+                                        CornerRadius="8"
+                                        Padding="16,10"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Top"
+                                        Margin="0,14,0,0"
+                                        IsVisible="False"
+                                        IsHitTestVisible="False">
+                                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                        <PathIcon x:Name="SecureDesktopBannerIcon" Data="{StaticResource IconShield}" Width="16" Height="16" Foreground="#F87171" VerticalAlignment="Center"/>
+                                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="Escritorio Seguro / Diálogo UAC Activo en el Anfitrión"
+                                                       Foreground="#FCA5A5"
+                                                       FontSize="12.5"
+                                                       FontWeight="Bold"/>
+                                            <TextBlock Text="El control remoto y la captura están pausados por seguridad de Windows hasta que se acepte el diálogo."
+                                                       Foreground="#CBD5E1"
+                                                       FontSize="11"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- File Transfer Floating Progress / Completed Banner -->
                                 <Border x:Name="FileTransferBanner"
                                         Background="#F2151B26"

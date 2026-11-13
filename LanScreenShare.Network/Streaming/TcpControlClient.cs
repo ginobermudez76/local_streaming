@@ -24,6 +24,7 @@ namespace LanScreenShare.Network.Streaming
         public event EventHandler<string>? StatusChanged;
         public event EventHandler<string>? ClipboardTextReceived;
         public event EventHandler<string>? MonitorInfoReceived;
+        public event EventHandler<string>? SecureDesktopStateReceived;
         public bool IsConnected => _client != null && _client.Connected && _stream != null;
 
         public Task ConnectAsync(string hostIp, int port = 5003, CancellationToken cancellationToken = default) =>
@@ -139,7 +140,7 @@ namespace LanScreenShare.Network.Streaming
             if (message == null)
                 return true;
 
-            if (message.Type == InputEventType.ClipboardText || message.Type == InputEventType.MonitorInfo)
+            if (message.Type is InputEventType.ClipboardText or InputEventType.MonitorInfo or InputEventType.SecureDesktopState)
             {
                 return await ReadAndDispatchTextPayloadAsync(stream, message.Type, message.KeyCode, token);
             }
@@ -175,9 +176,13 @@ namespace LanScreenShare.Network.Streaming
                 {
                     ClipboardTextReceived?.Invoke(this, text);
                 }
-                else
+                else if (type == InputEventType.MonitorInfo)
                 {
                     MonitorInfoReceived?.Invoke(this, text);
+                }
+                else if (type == InputEventType.SecureDesktopState)
+                {
+                    SecureDesktopStateReceived?.Invoke(this, text);
                 }
             }
             catch (Exception ex)

@@ -446,6 +446,9 @@ namespace LanScreenShare.Network.Streaming
         public Task BroadcastMonitorInfoAsync(string monitorLabel) =>
             BroadcastTextPayloadAsync(InputEventType.MonitorInfo, monitorLabel);
 
+        public Task BroadcastSecureDesktopStateAsync(string stateText) =>
+            BroadcastTextPayloadAsync(InputEventType.SecureDesktopState, stateText);
+
         private bool HasActiveClients => IsRunning && !_clients.IsEmpty;
 
         private bool CanBroadcastText(string text, out byte[] utf8Bytes)

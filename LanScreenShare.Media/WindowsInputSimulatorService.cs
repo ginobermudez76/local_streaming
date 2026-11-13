@@ -133,6 +133,20 @@ namespace LanScreenShare.Media
             }
         }
 
+        private static void EnsureInputDesktopAttached()
+        {
+            if (!OperatingSystem.IsWindows()) return;
+
+            try
+            {
+                WindowsDesktopManager.TryAttachThreadToInputDesktop(out _, out _);
+            }
+            catch
+            {
+                // Ignorar fallos de permisos al conmutar escritorio
+            }
+        }
+
         public void SimulateInput(RemoteInputMessage input)
         {
             if (_disposed) return;
@@ -141,6 +155,7 @@ namespace LanScreenShare.Media
             {
                 try
                 {
+                    EnsureInputDesktopAttached();
                     DispatchInputEvent(input);
                 }
                 catch (Exception ex)

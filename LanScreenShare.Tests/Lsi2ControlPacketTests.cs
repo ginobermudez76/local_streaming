@@ -126,4 +126,29 @@ public class Lsi2ControlPacketTests
         Assert.IsFalse(parsed);
         Assert.IsTrue(error!.Contains("InvalidMagic"));
     }
+
+    [TestMethod]
+    public void SecureDesktopState_RoundTrip_PreservesPayloadLength()
+    {
+        var input = new RemoteInputMessage
+        {
+            Type = InputEventType.SecureDesktopState,
+            KeyCode = 21
+        };
+
+        byte[] buffer = new byte[Lsi2ControlPacket.PacketSize];
+        Lsi2ControlPacket.WritePacket(buffer, 777, 888, input);
+
+        bool parsed = Lsi2ControlPacket.TryReadPacket(
+            buffer,
+            out var header,
+            out var readInput,
+            out string? error);
+
+        Assert.IsTrue(parsed);
+        Assert.IsNull(error);
+        Assert.AreEqual(777UL, header.SequenceNumber);
+        Assert.AreEqual(InputEventType.SecureDesktopState, readInput!.Type);
+        Assert.AreEqual(21, readInput.KeyCode);
+    }
 }

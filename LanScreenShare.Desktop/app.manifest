@@ -15,4 +15,18 @@
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
     </application>
   </compatibility>
+
+  <!-- UAC / UIPI Privileges Specification (ADR-002):
+       En entornos de producción empaquetados e instalados (en %ProgramFiles% y firmados digitalmente
+       con un certificado de confianza), 'uiAccess="true"' permite interactuar con diálogos de UAC
+       y ventanas con mayor integridad sin requerir un servicio de Windows.
+       Para compilaciones de depuración y desarrollo local sin firma digital, 'uiAccess="false"' es requerido
+       para permitir la ejecución sin errores del cargador de Windows (0xc0000022). -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
 </assembly>

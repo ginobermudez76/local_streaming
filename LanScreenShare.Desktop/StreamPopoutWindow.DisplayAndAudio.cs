@@ -170,6 +170,15 @@ namespace LanScreenShare.Desktop
             };
             _gameModeBannerTimer.Start();
         }
+
+        public void SetSecureDesktopState(bool isBlocked)
+        {
+            var banner = this.FindControl<Border>("SecureDesktopBanner");
+            if (banner != null)
+            {
+                banner.IsVisible = isBlocked;
+            }
+        }
     }
 }
 
