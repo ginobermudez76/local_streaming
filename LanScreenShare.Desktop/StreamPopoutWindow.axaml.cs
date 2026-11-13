@@ -241,11 +241,17 @@ namespace LanScreenShare.Desktop
             var screenImage = this.FindControl<Image>("ScreenImage");
             if (screenImage != null)
             {
-                screenImage.Source = image;
+                if (screenImage.Source != image)
+                {
+                    screenImage.Source = image;
+                }
+
                 if (image.Size.Width > 0 && image.Size.Height > 0)
                 {
                     _currentAspect = image.Size.Width / image.Size.Height;
                 }
+
+                screenImage.InvalidateVisual();
             }
         }
 

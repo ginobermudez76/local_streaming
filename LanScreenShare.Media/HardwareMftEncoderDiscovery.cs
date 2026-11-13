@@ -88,7 +88,7 @@ namespace LanScreenShare.Media
             [PreserveSig] int GetItemByIndex(uint unIndex, out Guid pGuidKey, IntPtr pValue);
             [PreserveSig] int CopyAllItems(IntPtr pDest);
 
-            [PreserveSig] int ActivateObject([In, MarshalAs(UnmanagedType.LPStruct)] Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppv);
+            [PreserveSig] int ActivateObject([In, MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IntPtr ppv);
             [PreserveSig] int ShutdownObject();
             [PreserveSig] int DetachObject();
         }
@@ -250,11 +250,10 @@ namespace LanScreenShare.Media
                     return null;
                 }
 
-                int hrAct = activate.ActivateObject(IID_IMFTransform, out object rawTransform);
-                if (hrAct == 0 && rawTransform != null)
+                int hrAct = activate.ActivateObject(IID_IMFTransform, out IntPtr pTransform);
+                if (hrAct == 0 && pTransform != IntPtr.Zero)
                 {
-                    IntPtr pUnk = Marshal.GetIUnknownForObject(rawTransform);
-                    return new IMFTransform(pUnk);
+                    return new IMFTransform(pTransform);
                 }
             }
             catch (Exception ex)
@@ -292,9 +291,14 @@ namespace LanScreenShare.Media
                             if (pActivate == IntPtr.Zero)
                                 continue;
 
-                            resultTransform = TryActivateMatchingObject(pActivate, encoder.FriendlyName);
-                            if (resultTransform != null)
-                                break;
+                            if (resultTransform == null)
+                            {
+                                resultTransform = TryActivateMatchingObject(pActivate, encoder.FriendlyName);
+                            }
+                            else
+                            {
+                                Marshal.Release(pActivate);
+                            }
                         }
                     }
                     finally

@@ -49,6 +49,22 @@ namespace LanScreenShare.Media
             _nv12Buffer = new byte[_actualStride * _actualBufferHeight * 3 / 2];
             _sampleTimeCounter = 0;
 
+            _decoder = CreateDecoderTransform();
+
+            ApplyDecoderLowLatency(_decoder);
+            ConfigureDecoderMediaTypes(_decoder, width, height);
+            ApplyDecoderLowLatency(_decoder);
+
+            InspectOutputStreamInfo(width, height);
+
+            _decoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
+            _decoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
+
+            Console.WriteLine($"[H264Decoder] Decodificador H.264 inicializado ({width}x{height} -> NV12 -> BGRA, ProvidesSamples: {_mftProvidesSamples})");
+        }
+
+        private static IMFTransform CreateDecoderTransform()
+        {
             Type decoderType = Type.GetTypeFromCLSID(CLSID_CMSH264DecoderMFT)
                 ?? throw new InvalidOperationException("No se encontró el decodificador H.264 de Windows Media Foundation.");
 
@@ -56,47 +72,47 @@ namespace LanScreenShare.Media
                 ?? throw new InvalidOperationException("No se pudo crear la instancia del decodificador H.264.");
 
             IntPtr pUnk = Marshal.GetIUnknownForObject(rawObj);
-            _decoder = new IMFTransform(pUnk);
+            Guid iidTransform = HardwareMftEncoderDiscovery.IID_IMFTransform;
+            int hrTransform = Marshal.QueryInterface(pUnk, in iidTransform, out IntPtr pTransform);
+            Marshal.Release(pUnk);
 
-            // Configurar baja latencia estricta en atributos MFT y vía ICodecAPI oficial (cero buffering de DPB)
-            ApplyDecoderLowLatency(_decoder);
-
-            // 1. Configurar Tipo de Entrada (H.264 Baseline Profile)
-            IMFMediaType inputType = MediaFactory.MFCreateMediaType();
-            inputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-            inputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
-            inputType.Set(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
-            MediaFactory.MFSetAttributeSize(inputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
-            MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
-            inputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
-
-            try
+            if (hrTransform != 0 || pTransform == IntPtr.Zero)
             {
-                _decoder.SetInputType(0, inputType, 0);
+                throw new InvalidOperationException($"No se pudo obtener la interfaz IMFTransform del decodificador H.264 (HRESULT 0x{hrTransform:X8}).");
             }
-            finally
+
+            return new IMFTransform(pTransform);
+        }
+
+        private static void ConfigureDecoderMediaTypes(IMFTransform decoder, int width, int height)
+        {
+            // 1. Configurar Tipo de Entrada (H.264 Baseline Profile)
+            using (IMFMediaType inputType = MediaFactory.MFCreateMediaType())
             {
-                inputType.Dispose();
+                inputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
+                inputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
+                inputType.Set(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
+                MediaFactory.MFSetAttributeSize(inputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
+                MediaFactory.MFSetAttributeRatio(inputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
+                inputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
+                decoder.SetInputType(0, inputType, 0);
             }
 
             // 2. Configurar Tipo de Salida (NV12 nativo de alta eficiencia)
-            IMFMediaType outputType = MediaFactory.MFCreateMediaType();
-            outputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-            outputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.NV12);
-            MediaFactory.MFSetAttributeSize(outputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
-            MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
-            outputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
-
-            try
+            using (IMFMediaType outputType = MediaFactory.MFCreateMediaType())
             {
-                _decoder.SetOutputType(0, outputType, 0);
+                outputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
+                outputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.NV12);
+                MediaFactory.MFSetAttributeSize(outputType, MediaTypeAttributeKeys.FrameSize, (uint)width, (uint)height);
+                MediaFactory.MFSetAttributeRatio(outputType, MediaTypeAttributeKeys.PixelAspectRatio, 1u, 1u);
+                outputType.Set(MediaTypeAttributeKeys.InterlaceMode, (int)VideoInterlaceMode.Progressive);
+                decoder.SetOutputType(0, outputType, 0);
             }
-            finally
-            {
-                outputType.Dispose();
-            }
+        }
 
-            ApplyDecoderLowLatency(_decoder);
+        private void InspectOutputStreamInfo(int width, int height)
+        {
+            if (_decoder == null) return;
 
             try
             {
@@ -110,11 +126,6 @@ namespace LanScreenShare.Media
                 _mftProvidesSamples = false;
                 _outputBufferSize = width * height * 3 / 2;
             }
-
-            _decoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
-            _decoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
-
-            Console.WriteLine($"[H264Decoder] Decodificador H.264 inicializado ({width}x{height} -> NV12 -> BGRA, ProvidesSamples: {_mftProvidesSamples})");
         }
 
         private static void ApplyDecoderLowLatency(IMFTransform decoder)
