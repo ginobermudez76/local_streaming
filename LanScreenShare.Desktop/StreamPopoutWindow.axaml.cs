@@ -472,22 +472,24 @@ namespace LanScreenShare.Desktop
         private bool IsPointerOverHeader(PointerEventArgs e)
         {
             var pos = e.GetPosition(this);
+            return IsPointerOverHeaderBar(pos.Y) || IsPointerOverFooterBar(pos.Y);
+        }
+
+        private bool IsPointerOverHeaderBar(double posY)
+        {
             var header = this.FindControl<Border>("StreamHeaderBar");
-            if (header != null && header.IsVisible)
-            {
-                double headerHeight = header.Bounds.Height > 0 ? header.Bounds.Height : 50;
-                if (pos.Y <= headerHeight) return true;
-            }
+            if (header == null || !header.IsVisible) return false;
+            double headerHeight = header.Bounds.Height > 0 ? header.Bounds.Height : 50;
+            return posY <= headerHeight;
+        }
 
+        private bool IsPointerOverFooterBar(double posY)
+        {
             var footer = this.FindControl<Border>("StreamFooterBar");
-            if (footer != null && footer.IsVisible)
-            {
-                double windowHeight = this.Bounds.Height > 0 ? this.Bounds.Height : this.ClientSize.Height;
-                double footerHeight = footer.Bounds.Height > 0 ? footer.Bounds.Height : 50;
-                if (windowHeight > 0 && pos.Y >= windowHeight - footerHeight) return true;
-            }
-
-            return false;
+            if (footer == null || !footer.IsVisible) return false;
+            double windowHeight = this.Bounds.Height > 0 ? this.Bounds.Height : this.ClientSize.Height;
+            double footerHeight = footer.Bounds.Height > 0 ? footer.Bounds.Height : 50;
+            return windowHeight > 0 && posY >= windowHeight - footerHeight;
         }
 
         private void PopoutWindow_Closing(object? sender, WindowClosingEventArgs e)
