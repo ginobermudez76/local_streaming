@@ -95,7 +95,9 @@ namespace LanScreenShare.Desktop
         private bool _isFullscreen;
         private WindowState _previousWindowState = WindowState.Normal;
         private DispatcherTimer _headerAutoHideTimer = null!;
+        private DispatcherTimer _footerAutoHideTimer = null!;
         private bool _isMouseOverHeaderBar;
+        private bool _isMouseOverFooterBar;
 
         // Ventana emergente (Pop-out) y modo de ajuste de pantalla
         private StreamPopoutWindow? _popoutWindow;
@@ -166,10 +168,10 @@ namespace LanScreenShare.Desktop
             else
             {
                 UpdatePresetButtonsHighlight(_appSettings.TransmissionPreset ?? "quality");
+                OnSettingChanged();
             }
 
             _isInitializingSettings = false;
-            OnSettingChanged();
         }
 
 
@@ -227,6 +229,7 @@ namespace LanScreenShare.Desktop
             SetFullscreen(false);
             StopDeviceSearch();
             _headerAutoHideTimer.Stop();
+            _footerAutoHideTimer.Stop();
             _metricsTimer.Stop();
             _clipboardSyncTimer.Stop();
 

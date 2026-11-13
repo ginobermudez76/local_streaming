@@ -56,59 +56,78 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                    <!-- Control Remoto -->
-                    <ToggleButton x:Name="RemoteControlButton"
-                                  Background="#27272A"
-                                  Foreground="White"
-                                  Padding="10,6"
-                                  CornerRadius="4"
-                                  ToolTip.Tip="Habilitar interacción con mouse y teclado">
-                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <PathIcon Data="{StaticResource IconGamepad}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
-                            <TextBlock Text="Control" FontSize="12" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </ToggleButton>
-
-                    <!-- Modo 3D -->
-                    <ToggleButton x:Name="GameModeButton"
-                                  Background="#27272A"
-                                  Foreground="White"
-                                  Padding="10,6"
-                                  CornerRadius="4"
-                                  ToolTip.Tip="Captura el mouse para juegos 3D (giro 360°). Presiona Ctrl+Alt+L para liberar el cursor">
-                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <PathIcon Data="{StaticResource Icon3dRotation}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
-                            <TextBlock Text="Modo 3D (Ctrl+Alt+L)" FontSize="12" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </ToggleButton>
-
-                    <!-- Cambiar Monitor Remoto -->
-                    <Button x:Name="SwitchMonitorButton"
+                    <!-- Modo de Ajuste (Fit / Stretch) -->
+                    <Button x:Name="StretchModeButton"
                             Background="#27272A"
                             Foreground="White"
                             Padding="10,6"
                             CornerRadius="4"
-                            ToolTip.Tip="Elegir o cambiar pantalla/ventana del anfitrión (Ctrl+Alt+M)">
+                            ToolTip.Tip="Alternar modo de ajuste: Ajustar aspecto (Fit) / Llenar pantalla (Stretch)">
                         <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <PathIcon Data="{StaticResource IconAllScreens}" Width="14" Height="14" Foreground="#38BDF8" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="SwitchMonitorButtonText" Text="Pantalla" FontSize="12" VerticalAlignment="Center"/>
-                            <PathIcon Data="{StaticResource IconChevronDown}" Width="10" Height="10" Foreground="#A1A1AA" VerticalAlignment="Center" Margin="2,1,0,0"/>
+                            <PathIcon Data="{StaticResource IconAspectRatio}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="StretchModeButtonText" Text="Ajustar" FontSize="12" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
 
-                    <!-- Enviar Archivo -->
-                    <Button x:Name="SendFileButton"
+                    <!-- Adaptar tamaño de ventana al video -->
+                    <Button x:Name="AutoFitButton"
                             Background="#27272A"
                             Foreground="White"
                             Padding="10,6"
                             CornerRadius="4"
-                            ToolTip.Tip="Enviar archivo al anfitrión (o arrastra y suelta aquí)">
+                            ToolTip.Tip="Adaptar tamaño de ventana a la proporción del anfitrión">
+                        <TextBlock Text="1:1 Proporción" FontSize="12" VerticalAlignment="Center"/>
+                    </Button>
+
+                    <!-- Pantalla Completa -->
+                    <Button x:Name="FullscreenButton"
+                            Background="#27272A"
+                            Foreground="White"
+                            Padding="10,6"
+                            CornerRadius="4"
+                            ToolTip.Tip="Alternar Pantalla Completa (F11 / Doble Clic)">
                         <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <PathIcon Data="{StaticResource IconSendFile}" Width="14" Height="14" Foreground="#10B981" VerticalAlignment="Center"/>
-                            <TextBlock Text="Enviar archivo" FontSize="12" VerticalAlignment="Center"/>
+                            <PathIcon x:Name="FullscreenButtonIcon" Data="{StaticResource IconFullscreen}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="FullscreenButtonText" Text="Pantalla Completa" FontSize="12" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
 
+                    <!-- Reacoplar a ventana principal -->
+                    <Button x:Name="ReattachButton"
+                            Background="#2563EB"
+                            Foreground="White"
+                            Padding="10,6"
+                            CornerRadius="4"
+                            ToolTip.Tip="Volver a acoplar el visor a la ventana principal">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource IconDock}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
+                            <TextBlock Text="Reacoplar" FontSize="12" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Desconectar -->
+                    <Button x:Name="DisconnectButton"
+                            Content="Desconectar"
+                            Background="#DC2626"
+                            Foreground="White"
+                            Padding="12,6"
+                            CornerRadius="4"
+                            FontSize="12"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Auto-hiding Bottom Footer Overlay -->
+        <Border x:Name="StreamFooterBar"
+                VerticalAlignment="Bottom"
+                Background="#F218181B"
+                BorderBrush="#2D2D35"
+                BorderThickness="0,1,0,0"
+                Padding="16,8"
+                ZIndex="100">
+            <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+                <!-- Audio and Mic volume & mute controls -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <!-- Control de Audio (Silenciar y Control de Volumen) -->
                     <Border x:Name="AudioControlPanel"
                             Background="#27272A"
@@ -168,64 +187,62 @@
                                        Margin="0,0,4,0"/>
                         </StackPanel>
                     </Border>
+                </StackPanel>
 
-                    <!-- Modo de Ajuste (Fit / Stretch) -->
-                    <Button x:Name="StretchModeButton"
+                <!-- Operation controls: Remote Control, 3D Mode, Switch Monitor, Send File -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <!-- Control Remoto -->
+                    <ToggleButton x:Name="RemoteControlButton"
+                                  Background="#27272A"
+                                  Foreground="White"
+                                  Padding="10,6"
+                                  CornerRadius="4"
+                                  ToolTip.Tip="Habilitar interacción con mouse y teclado">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource IconGamepad}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
+                            <TextBlock Text="Control" FontSize="12" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
+
+                    <!-- Modo 3D -->
+                    <ToggleButton x:Name="GameModeButton"
+                                  Background="#27272A"
+                                  Foreground="White"
+                                  Padding="10,6"
+                                  CornerRadius="4"
+                                  ToolTip.Tip="Captura el mouse para juegos 3D (giro 360°). Presiona Ctrl+Alt+L para liberar el cursor">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource Icon3dRotation}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
+                            <TextBlock Text="Modo 3D (Ctrl+Alt+L)" FontSize="12" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
+
+                    <!-- Cambiar Monitor Remoto -->
+                    <Button x:Name="SwitchMonitorButton"
                             Background="#27272A"
                             Foreground="White"
                             Padding="10,6"
                             CornerRadius="4"
-                            ToolTip.Tip="Alternar modo de ajuste: Ajustar aspecto (Fit) / Llenar pantalla (Stretch)">
+                            ToolTip.Tip="Elegir o cambiar pantalla/ventana del anfitrión (Ctrl+Alt+M)">
                         <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <PathIcon Data="{StaticResource IconAspectRatio}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="StretchModeButtonText" Text="Ajustar" FontSize="12" VerticalAlignment="Center"/>
+                            <PathIcon Data="{StaticResource IconAllScreens}" Width="14" Height="14" Foreground="#38BDF8" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SwitchMonitorButtonText" Text="Pantalla" FontSize="12" VerticalAlignment="Center"/>
+                            <PathIcon Data="{StaticResource IconChevronDown}" Width="10" Height="10" Foreground="#A1A1AA" VerticalAlignment="Center" Margin="2,1,0,0"/>
                         </StackPanel>
                     </Button>
 
-                    <!-- Adaptar tamaño de ventana al video -->
-                    <Button x:Name="AutoFitButton"
+                    <!-- Enviar Archivo -->
+                    <Button x:Name="SendFileButton"
                             Background="#27272A"
                             Foreground="White"
                             Padding="10,6"
                             CornerRadius="4"
-                            ToolTip.Tip="Adaptar tamaño de ventana a la proporción del anfitrión">
-                        <TextBlock Text="1:1 Proporción" FontSize="12" VerticalAlignment="Center"/>
-                    </Button>
-
-                    <!-- Pantalla Completa -->
-                    <Button x:Name="FullscreenButton"
-                            Background="#27272A"
-                            Foreground="White"
-                            Padding="10,6"
-                            CornerRadius="4"
-                            ToolTip.Tip="Alternar Pantalla Completa (F11 / Doble Clic)">
+                            ToolTip.Tip="Enviar archivo al anfitrión (o arrastra y suelta aquí)">
                         <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <PathIcon x:Name="FullscreenButtonIcon" Data="{StaticResource IconFullscreen}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="FullscreenButtonText" Text="Pantalla Completa" FontSize="12" VerticalAlignment="Center"/>
+                            <PathIcon Data="{StaticResource IconSendFile}" Width="14" Height="14" Foreground="#10B981" VerticalAlignment="Center"/>
+                            <TextBlock Text="Enviar archivo" FontSize="12" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
-
-                    <!-- Reacoplar a ventana principal -->
-                    <Button x:Name="ReattachButton"
-                            Background="#2563EB"
-                            Foreground="White"
-                            Padding="10,6"
-                            CornerRadius="4"
-                            ToolTip.Tip="Volver a acoplar el visor a la ventana principal">
-                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <PathIcon Data="{StaticResource IconDock}" Width="14" Height="14" Foreground="White" VerticalAlignment="Center"/>
-                            <TextBlock Text="Reacoplar" FontSize="12" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Button>
-
-                    <!-- Desconectar -->
-                    <Button x:Name="DisconnectButton"
-                            Content="Desconectar"
-                            Background="#DC2626"
-                            Foreground="White"
-                            Padding="12,6"
-                            CornerRadius="4"
-                            FontSize="12"/>
                 </StackPanel>
             </Grid>
         </Border>

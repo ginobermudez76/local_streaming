@@ -36,7 +36,9 @@ namespace LanScreenShare.Desktop
         private bool _isFullscreen;
         private WindowState _previousWindowState = WindowState.Normal;
         private DispatcherTimer _headerAutoHideTimer = null!;
+        private DispatcherTimer _footerAutoHideTimer = null!;
         private bool _isMouseOverHeaderBar;
+        private bool _isMouseOverFooterBar;
         private DispatcherTimer? _gameModeBannerTimer;
         private Stretch _currentStretch = Stretch.Uniform;
         private double _currentAspect = 16.0 / 9.0;
@@ -46,6 +48,7 @@ namespace LanScreenShare.Desktop
         {
             InitializeComponent();
             InitializeHeaderAndAutoHide();
+            InitializeFooterAndAutoHide();
             InitializeScreenImageEvents();
             InitializeRemoteControlButtons();
             InitializeAudioControls();
@@ -75,12 +78,49 @@ namespace LanScreenShare.Desktop
             this.AddHandler(InputElement.PointerMovedEvent, Popout_GlobalPointerMoved, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
         }
 
+        private void InitializeFooterAndAutoHide()
+        {
+            _footerAutoHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+            _footerAutoHideTimer.Tick += OnFooterAutoHideTick;
+
+            var footerBar = this.FindControl<Border>("StreamFooterBar");
+            if (footerBar != null)
+            {
+                footerBar.PointerEntered += (s, e) =>
+                {
+                    _isMouseOverFooterBar = true;
+                    _footerAutoHideTimer.Stop();
+                };
+                footerBar.PointerExited += (s, e) =>
+                {
+                    _isMouseOverFooterBar = false;
+                    RestartFooterTimer();
+                };
+            }
+
+            RestartFooterTimer();
+        }
+
         private void OnHeaderAutoHideTick(object? sender, EventArgs e)
         {
             if (!_isFullscreen || _isMouseOverHeaderBar) return;
             var header = this.FindControl<Border>("StreamHeaderBar");
             if (header != null) header.IsVisible = false;
             _headerAutoHideTimer.Stop();
+        }
+
+        private void OnFooterAutoHideTick(object? sender, EventArgs e)
+        {
+            if (_isMouseOverFooterBar) return;
+            var footer = this.FindControl<Border>("StreamFooterBar");
+            if (footer != null) footer.IsVisible = false;
+            _footerAutoHideTimer.Stop();
+        }
+
+        private void RestartFooterTimer()
+        {
+            _footerAutoHideTimer.Stop();
+            _footerAutoHideTimer.Start();
         }
 
         private void InitializeScreenImageEvents()
@@ -469,11 +509,18 @@ namespace LanScreenShare.Desktop
 
         private void Popout_GlobalPointerMoved(object? sender, PointerEventArgs e)
         {
-            if (!_isFullscreen || _isGameMode) return;
-            var headerBar = this.FindControl<Border>("StreamHeaderBar");
-            if (headerBar == null) return;
+            if (_isGameMode) return;
+            double posY = e.GetPosition(this).Y;
+            double windowHeight = this.Bounds.Height > 0 ? this.Bounds.Height : this.ClientSize.Height;
 
-            UpdateHeaderVisibility(headerBar, e.GetPosition(this).Y);
+            if (_isFullscreen)
+            {
+                var headerBar = this.FindControl<Border>("StreamHeaderBar");
+                if (headerBar != null) UpdateHeaderVisibility(headerBar, posY);
+            }
+
+            var footerBar = this.FindControl<Border>("StreamFooterBar");
+            if (footerBar != null) UpdateFooterVisibility(footerBar, posY, windowHeight);
         }
 
         private void UpdateHeaderVisibility(Border headerBar, double posY)
@@ -485,7 +532,7 @@ namespace LanScreenShare.Desktop
                 return;
             }
 
-            if (!headerBar.IsVisible) return;
+            if (!headerBar.IsVisible || _isMouseOverHeaderBar) return;
 
             double headerHeight = headerBar.Bounds.Height > 0 ? headerBar.Bounds.Height : 50;
             if (posY <= headerHeight)
@@ -496,6 +543,29 @@ namespace LanScreenShare.Desktop
             {
                 headerBar.IsVisible = false;
                 _headerAutoHideTimer.Stop();
+            }
+        }
+
+        private void UpdateFooterVisibility(Border footerBar, double posY, double windowHeight)
+        {
+            if (windowHeight <= 0) return;
+
+            double footerHeight = footerBar.Bounds.Height > 0 ? footerBar.Bounds.Height : 50;
+            double threshold = windowHeight - Math.Max(40, footerHeight);
+
+            if (posY >= threshold)
+            {
+                if (!footerBar.IsVisible) footerBar.IsVisible = true;
+                RestartFooterTimer();
+                return;
+            }
+
+            if (!footerBar.IsVisible || _isMouseOverFooterBar) return;
+
+            if (posY < threshold - 25)
+            {
+                footerBar.IsVisible = false;
+                _footerAutoHideTimer.Stop();
             }
         }
 
@@ -527,6 +597,7 @@ namespace LanScreenShare.Desktop
         {
             _isFullscreen = fullscreen;
             var headerBar = this.FindControl<Border>("StreamHeaderBar");
+            var footerBar = this.FindControl<Border>("StreamFooterBar");
 
             if (fullscreen)
             {
@@ -544,6 +615,19 @@ namespace LanScreenShare.Desktop
             {
                 headerBar.IsVisible = !fullscreen;
             }
+
+            if (footerBar != null)
+            {
+                footerBar.IsVisible = !fullscreen;
+                if (!fullscreen)
+                {
+                    RestartFooterTimer();
+                }
+                else
+                {
+                    _footerAutoHideTimer.Stop();
+                }
+            }
         }
 
         private bool IsPointerOverHeader(PointerEventArgs e)
@@ -559,6 +643,7 @@ namespace LanScreenShare.Desktop
         {
             SetFullscreen(false);
             _headerAutoHideTimer.Stop();
+            _footerAutoHideTimer.Stop();
             _gameModeBannerTimer?.Stop();
 
             if (!_isClosingFromAction)
