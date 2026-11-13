@@ -460,7 +460,7 @@
                                             <!-- Side-by-side FPS & Bitrate -->
                                             <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
                                                 <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,4,0">
-                                                    <TextBlock Text="Fotogramas por segundo" FontSize="11" Foreground="#7C8B9E"/>
+                                                    <TextBlock Text="Fotogramas (FPS)" FontSize="11" Foreground="#7C8B9E"/>
                                                     <TextBlock x:Name="FpsValueLabel" Text="60 fps" IsVisible="False"/>
                                                     <ComboBox x:Name="FpsComboBox"
                                                               Classes="darkCombo"
@@ -473,19 +473,7 @@
                                                 </StackPanel>
 
                                                 <StackPanel Grid.Column="1" Spacing="4" Margin="4,0,0,0">
-                                                    <Grid ColumnDefinitions="*,Auto">
-                                                        <TextBlock x:Name="QualityTitleLabel" Grid.Column="0" Text="Tasa de bits" FontSize="11" Foreground="#7C8B9E" VerticalAlignment="Center"/>
-                                                        <CheckBox x:Name="AbrCheckBox"
-                                                                  Grid.Column="1"
-                                                                  Content="ABR Auto"
-                                                                  IsChecked="True"
-                                                                  FontSize="10.5"
-                                                                  Foreground="#38BDF8"
-                                                                  VerticalAlignment="Center"
-                                                                  Padding="4,0,0,0"
-                                                                  Margin="0"
-                                                                  ToolTip.Tip="Ajuste Automático de Bitrate (ABR): adapta dinámicamente la tasa de bits y FPS según RTT y congestión de la red."/>
-                                                    </Grid>
+                                                    <TextBlock x:Name="QualityTitleLabel" Text="Tasa de bits" FontSize="11" Foreground="#7C8B9E"/>
                                                     <TextBlock x:Name="QualityValueLabel" Text="15 Mbps" IsVisible="False"/>
                                                     <ComboBox x:Name="BitrateComboBox"
                                                               Classes="darkCombo"
@@ -498,6 +486,21 @@
                                                             LargeChange="5"
                                                             IsVisible="False"/>
                                                 </StackPanel>
+                                            </Grid>
+
+                                            <!-- Dedicated ABR Switch Row -->
+                                            <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,2">
+                                                <PathIcon Grid.Column="0" Data="{StaticResource IconSliders}" Width="14" Height="14" Foreground="#8B9BB0" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                                                    <TextBlock Text="ABR Automático" FontSize="12.5" Foreground="#E2E8F0"/>
+                                                    <TextBlock x:Name="AbrSubtitleLabel" Text="Ajusta dinámicamente bitrate y FPS según red" FontSize="10.5" Foreground="#7C8B9E"/>
+                                                </StackPanel>
+                                                <CheckBox Grid.Column="2"
+                                                          x:Name="AbrCheckBox"
+                                                          Classes="pillSwitch"
+                                                          IsChecked="True"
+                                                          VerticalAlignment="Center"
+                                                          ToolTip.Tip="Ajuste Automático de Bitrate (ABR): adapta dinámicamente la tasa de bits y FPS según RTT y congestión de la red."/>
                                             </Grid>
 
                                             <!-- Output Scale Row -->
