@@ -296,11 +296,15 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private void InitializeHeaderBarAutoHide()
+        private void InitializeOverlaysAutoHide()
         {
             _headerAutoHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
             _headerAutoHideTimer.Tick += OnHeaderAutoHideTick;
             WireHeaderBarPointerEvents();
+
+            _footerAutoHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+            _footerAutoHideTimer.Tick += OnFooterAutoHideTick;
+            WireFooterBarPointerEvents();
         }
 
         private void OnHeaderAutoHideTick(object? sender, EventArgs e)
@@ -309,6 +313,14 @@ namespace LanScreenShare.Desktop
             var header = this.FindControl<Border>("StreamHeaderBar");
             if (header != null) header.IsVisible = false;
             _headerAutoHideTimer.Stop();
+        }
+
+        private void OnFooterAutoHideTick(object? sender, EventArgs e)
+        {
+            if (!_isFullscreen || _isMouseOverFooterBar) return;
+            var footer = this.FindControl<Border>("CanvasCardFooter");
+            if (footer != null) footer.IsVisible = false;
+            _footerAutoHideTimer.Stop();
         }
 
         private void WireHeaderBarPointerEvents()
@@ -332,9 +344,30 @@ namespace LanScreenShare.Desktop
             };
         }
 
+        private void WireFooterBarPointerEvents()
+        {
+            var footerBar = this.FindControl<Border>("CanvasCardFooter");
+            if (footerBar == null) return;
+
+            footerBar.PointerEntered += (s, e) =>
+            {
+                _isMouseOverFooterBar = true;
+                _footerAutoHideTimer.Stop();
+            };
+            footerBar.PointerExited += (s, e) =>
+            {
+                _isMouseOverFooterBar = false;
+                if (_isFullscreen)
+                {
+                    _footerAutoHideTimer.Stop();
+                    _footerAutoHideTimer.Start();
+                }
+            };
+        }
+
         private void InitializeFullscreenAndPopoutControls()
         {
-            InitializeHeaderBarAutoHide();
+            InitializeOverlaysAutoHide();
             this.AddHandler(InputElement.PointerMovedEvent, MainWindow_GlobalPointerMoved, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
 
             WireButtonClick("FullscreenButton", (s, e) => ToggleFullscreen());
