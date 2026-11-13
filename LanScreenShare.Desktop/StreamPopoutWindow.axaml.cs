@@ -36,8 +36,9 @@ namespace LanScreenShare.Desktop
         private bool _isFullscreen;
         private WindowState _previousWindowState = WindowState.Normal;
         private DispatcherTimer _headerAutoHideTimer = null!;
+        private DispatcherTimer _footerAutoHideTimer = null!;
         private bool _isMouseOverHeaderBar;
-        private DispatcherTimer? _gameModeBannerTimer;
+        private bool _isMouseOverFooterBar;
         private Stretch _currentStretch = Stretch.Uniform;
         private double _currentAspect = 16.0 / 9.0;
         private bool _isClosingFromAction;
@@ -46,6 +47,7 @@ namespace LanScreenShare.Desktop
         {
             InitializeComponent();
             InitializeHeaderAndAutoHide();
+            InitializeFooterAndAutoHide();
             InitializeScreenImageEvents();
             InitializeRemoteControlButtons();
             InitializeAudioControls();
@@ -75,12 +77,49 @@ namespace LanScreenShare.Desktop
             this.AddHandler(InputElement.PointerMovedEvent, Popout_GlobalPointerMoved, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
         }
 
+        private void InitializeFooterAndAutoHide()
+        {
+            _footerAutoHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+            _footerAutoHideTimer.Tick += OnFooterAutoHideTick;
+
+            var footerBar = this.FindControl<Border>("StreamFooterBar");
+            if (footerBar != null)
+            {
+                footerBar.PointerEntered += (s, e) =>
+                {
+                    _isMouseOverFooterBar = true;
+                    _footerAutoHideTimer.Stop();
+                };
+                footerBar.PointerExited += (s, e) =>
+                {
+                    _isMouseOverFooterBar = false;
+                    RestartFooterTimer();
+                };
+            }
+
+            RestartFooterTimer();
+        }
+
         private void OnHeaderAutoHideTick(object? sender, EventArgs e)
         {
             if (!_isFullscreen || _isMouseOverHeaderBar) return;
             var header = this.FindControl<Border>("StreamHeaderBar");
             if (header != null) header.IsVisible = false;
             _headerAutoHideTimer.Stop();
+        }
+
+        private void OnFooterAutoHideTick(object? sender, EventArgs e)
+        {
+            if (_isMouseOverFooterBar) return;
+            var footer = this.FindControl<Border>("StreamFooterBar");
+            if (footer != null) footer.IsVisible = false;
+            _footerAutoHideTimer.Stop();
+        }
+
+        private void RestartFooterTimer()
+        {
+            _footerAutoHideTimer.Stop();
+            _footerAutoHideTimer.Start();
         }
 
         private void InitializeScreenImageEvents()
@@ -130,35 +169,6 @@ namespace LanScreenShare.Desktop
 
             this.AddHandler(DragDrop.DropEvent, Popout_Drop);
             this.AddHandler(DragDrop.DragOverEvent, Popout_DragOver);
-        }
-
-        private void ConfigureAudioVolumeSlider(string sliderName, Action<float>? volumeChanged, Action<double> updateVolumeText)
-        {
-            var slider = this.FindControl<Slider>(sliderName);
-            if (slider == null) return;
-
-            slider.PropertyChanged += (s, e) =>
-            {
-                if (e.Property.Name == nameof(Slider.Value))
-                {
-                    float vol = (float)Math.Clamp(slider.Value / 100.0, 0.0, 1.0);
-                    volumeChanged?.Invoke(vol);
-                    updateVolumeText(slider.Value);
-                }
-            };
-        }
-
-        private void InitializeAudioControls()
-        {
-            var muteBtn = this.FindControl<Button>("AudioMuteButton");
-            if (muteBtn != null) muteBtn.Click += (s, e) => MuteToggled?.Invoke();
-
-            ConfigureAudioVolumeSlider("AudioVolumeSlider", VolumeChanged, UpdateVolumeText);
-
-            var micMuteBtn = this.FindControl<Button>("MicMuteButton");
-            if (micMuteBtn != null) micMuteBtn.Click += (s, e) => MicMuteToggled?.Invoke();
-
-            ConfigureAudioVolumeSlider("MicVolumeSlider", MicVolumeChanged, UpdateMicVolumeText);
         }
 
         private void InitializeWindowButtons()
@@ -305,137 +315,6 @@ namespace LanScreenShare.Desktop
             }
         }
 
-        private readonly record struct BannerStyle(string IconName, string ColorHex, string Text, double Seconds);
-
-        private static readonly BannerStyle ActiveGameModeStyle = new(
-            "Icon3dRotation", "#38BDF8", "Modo 3D Activo — Presiona Ctrl + Alt + L para liberar el cursor", 3.0);
-
-        private static readonly BannerStyle InactiveGameModeStyle = new(
-            "IconLockOpen", "#FBBF24", "Mouse Liberado — Presiona Ctrl + Alt + L para recapturar", 2.5);
-
-        private static bool IsMutedOrZero(bool isMuted, float volume) =>
-            isMuted || volume <= 0.01f;
-
-        private bool TryGetStreamGeometry(string resourceKey, out StreamGeometry geometry)
-        {
-            if (this.TryFindResource(resourceKey, out var res) && res is StreamGeometry geo)
-            {
-                geometry = geo;
-                return true;
-            }
-            geometry = null!;
-            return false;
-        }
-
-        private void ShowGameModeBanner(bool isGameMode, Border? banner, TextBlock? bannerText, PathIcon? bannerIcon)
-        {
-            if (banner == null || bannerText == null) return;
-
-            var style = isGameMode ? ActiveGameModeStyle : InactiveGameModeStyle;
-            banner.IsVisible = true;
-
-            if (bannerIcon != null && TryGetStreamGeometry(style.IconName, out var geo))
-            {
-                bannerIcon.Data = geo;
-                bannerIcon.Foreground = new SolidColorBrush(Color.Parse(style.ColorHex));
-            }
-            bannerText.Text = style.Text;
-            bannerText.Foreground = new SolidColorBrush(Color.Parse(style.ColorHex));
-
-            RestartBannerTimer(banner, style.Seconds);
-        }
-
-        private void RestartBannerTimer(Border banner, double seconds)
-        {
-            _gameModeBannerTimer?.Stop();
-            _gameModeBannerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
-            _gameModeBannerTimer.Tick += (s, e) =>
-            {
-                banner.IsVisible = false;
-                _gameModeBannerTimer?.Stop();
-            };
-            _gameModeBannerTimer.Start();
-        }
-
-        public void SetGameModeState(bool isGameMode)
-        {
-            _isGameMode = isGameMode;
-            var gameModeBtn = this.FindControl<ToggleButton>("GameModeButton");
-            var screenImage = this.FindControl<Image>("ScreenImage");
-            var banner = this.FindControl<Border>("GameModeBanner");
-            var bannerText = this.FindControl<TextBlock>("GameModeBannerText");
-            var bannerIcon = this.FindControl<PathIcon>("GameModeBannerIcon");
-
-            if (gameModeBtn != null)
-            {
-                gameModeBtn.IsChecked = isGameMode;
-                gameModeBtn.Background = isGameMode ? new SolidColorBrush(Color.Parse("#2563EB")) : new SolidColorBrush(Color.Parse("#27272A"));
-            }
-
-            if (screenImage != null)
-            {
-                screenImage.Cursor = isGameMode ? new Cursor(StandardCursorType.None) : Cursor.Default;
-            }
-
-            ShowGameModeBanner(isGameMode, banner, bannerText, bannerIcon);
-        }
-
-        public void SetVolume(float volume, bool isMuted)
-        {
-            var volumeSlider = this.FindControl<Slider>("AudioVolumeSlider");
-            if (volumeSlider != null)
-            {
-                volumeSlider.Value = Math.Round(volume * 100);
-            }
-            UpdateVolumeText(volume * 100);
-
-            var muteIcon = this.FindControl<PathIcon>("AudioMuteIcon");
-            string iconName = IsMutedOrZero(isMuted, volume) ? "IconVolumeOff" : "IconVolumeUp";
-            if (muteIcon != null && TryGetStreamGeometry(iconName, out var geo))
-            {
-                muteIcon.Data = geo;
-            }
-        }
-
-        private void UpdateVolumeText(double percent)
-        {
-            var volumeText = this.FindControl<TextBlock>("AudioVolumeText");
-            if (volumeText != null)
-            {
-                volumeText.Text = $"{(int)Math.Round(percent)}%";
-            }
-        }
-
-        public void SetMicVolume(float volume, bool isMuted)
-        {
-            var volumeSlider = this.FindControl<Slider>("MicVolumeSlider");
-            if (volumeSlider != null)
-            {
-                volumeSlider.Value = Math.Round(volume * 100);
-            }
-            UpdateMicVolumeText(volume * 100);
-
-            var muteIcon = this.FindControl<PathIcon>("MicMuteIcon");
-            if (muteIcon == null) return;
-
-            bool muted = IsMutedOrZero(isMuted, volume);
-            string iconName = muted ? "IconMicOff" : "IconMic";
-            if (TryGetStreamGeometry(iconName, out var geo))
-            {
-                muteIcon.Data = geo;
-                muteIcon.Foreground = new SolidColorBrush(Color.Parse(muted ? "#EF4444" : "#10B981"));
-            }
-        }
-
-        private void UpdateMicVolumeText(double percent)
-        {
-            var volumeText = this.FindControl<TextBlock>("MicVolumeText");
-            if (volumeText != null)
-            {
-                volumeText.Text = $"{(int)Math.Round(percent)}%";
-            }
-        }
-
         public void SetStretchMode(Stretch stretch)
         {
             _currentStretch = stretch;
@@ -469,11 +348,18 @@ namespace LanScreenShare.Desktop
 
         private void Popout_GlobalPointerMoved(object? sender, PointerEventArgs e)
         {
-            if (!_isFullscreen || _isGameMode) return;
-            var headerBar = this.FindControl<Border>("StreamHeaderBar");
-            if (headerBar == null) return;
+            if (_isGameMode) return;
+            double posY = e.GetPosition(this).Y;
+            double windowHeight = this.Bounds.Height > 0 ? this.Bounds.Height : this.ClientSize.Height;
 
-            UpdateHeaderVisibility(headerBar, e.GetPosition(this).Y);
+            if (_isFullscreen)
+            {
+                var headerBar = this.FindControl<Border>("StreamHeaderBar");
+                if (headerBar != null) UpdateHeaderVisibility(headerBar, posY);
+            }
+
+            var footerBar = this.FindControl<Border>("StreamFooterBar");
+            if (footerBar != null) UpdateFooterVisibility(footerBar, posY, windowHeight);
         }
 
         private void UpdateHeaderVisibility(Border headerBar, double posY)
@@ -485,7 +371,7 @@ namespace LanScreenShare.Desktop
                 return;
             }
 
-            if (!headerBar.IsVisible) return;
+            if (!headerBar.IsVisible || _isMouseOverHeaderBar) return;
 
             double headerHeight = headerBar.Bounds.Height > 0 ? headerBar.Bounds.Height : 50;
             if (posY <= headerHeight)
@@ -496,6 +382,29 @@ namespace LanScreenShare.Desktop
             {
                 headerBar.IsVisible = false;
                 _headerAutoHideTimer.Stop();
+            }
+        }
+
+        private void UpdateFooterVisibility(Border footerBar, double posY, double windowHeight)
+        {
+            if (windowHeight <= 0) return;
+
+            double footerHeight = footerBar.Bounds.Height > 0 ? footerBar.Bounds.Height : 50;
+            double threshold = windowHeight - Math.Max(40, footerHeight);
+
+            if (posY >= threshold)
+            {
+                if (!footerBar.IsVisible) footerBar.IsVisible = true;
+                RestartFooterTimer();
+                return;
+            }
+
+            if (!footerBar.IsVisible || _isMouseOverFooterBar) return;
+
+            if (posY < threshold - 25)
+            {
+                footerBar.IsVisible = false;
+                _footerAutoHideTimer.Stop();
             }
         }
 
@@ -527,6 +436,7 @@ namespace LanScreenShare.Desktop
         {
             _isFullscreen = fullscreen;
             var headerBar = this.FindControl<Border>("StreamHeaderBar");
+            var footerBar = this.FindControl<Border>("StreamFooterBar");
 
             if (fullscreen)
             {
@@ -544,21 +454,49 @@ namespace LanScreenShare.Desktop
             {
                 headerBar.IsVisible = !fullscreen;
             }
+
+            if (footerBar != null)
+            {
+                footerBar.IsVisible = !fullscreen;
+                if (!fullscreen)
+                {
+                    RestartFooterTimer();
+                }
+                else
+                {
+                    _footerAutoHideTimer.Stop();
+                }
+            }
         }
 
         private bool IsPointerOverHeader(PointerEventArgs e)
         {
+            var pos = e.GetPosition(this);
+            return IsPointerOverHeaderBar(pos.Y) || IsPointerOverFooterBar(pos.Y);
+        }
+
+        private bool IsPointerOverHeaderBar(double posY)
+        {
             var header = this.FindControl<Border>("StreamHeaderBar");
             if (header == null || !header.IsVisible) return false;
-            var pos = e.GetPosition(this);
             double headerHeight = header.Bounds.Height > 0 ? header.Bounds.Height : 50;
-            return pos.Y <= headerHeight;
+            return posY <= headerHeight;
+        }
+
+        private bool IsPointerOverFooterBar(double posY)
+        {
+            var footer = this.FindControl<Border>("StreamFooterBar");
+            if (footer == null || !footer.IsVisible) return false;
+            double windowHeight = this.Bounds.Height > 0 ? this.Bounds.Height : this.ClientSize.Height;
+            double footerHeight = footer.Bounds.Height > 0 ? footer.Bounds.Height : 50;
+            return windowHeight > 0 && posY >= windowHeight - footerHeight;
         }
 
         private void PopoutWindow_Closing(object? sender, WindowClosingEventArgs e)
         {
             SetFullscreen(false);
             _headerAutoHideTimer.Stop();
+            _footerAutoHideTimer.Stop();
             _gameModeBannerTimer?.Stop();
 
             if (!_isClosingFromAction)
