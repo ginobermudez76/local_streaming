@@ -166,10 +166,10 @@ namespace LanScreenShare.Desktop
             else
             {
                 UpdatePresetButtonsHighlight(_appSettings.TransmissionPreset ?? "quality");
+                OnSettingChanged();
             }
 
             _isInitializingSettings = false;
-            OnSettingChanged();
         }
 
 
