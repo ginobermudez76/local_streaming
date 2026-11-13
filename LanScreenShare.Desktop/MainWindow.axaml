@@ -1019,6 +1019,7 @@
 
                                         <!-- System Audio Slider Control -->
                                         <Border x:Name="AudioControlPanel"
+                                                IsVisible="False"
                                                 Background="#1A2230"
                                                 BorderBrush="#263246"
                                                 BorderThickness="1"
@@ -1052,6 +1053,7 @@
 
                                         <!-- Microphone Slider Control -->
                                         <Border x:Name="MicControlPanel"
+                                                IsVisible="False"
                                                 Background="#1A2230"
                                                 BorderBrush="#263246"
                                                 BorderThickness="1"

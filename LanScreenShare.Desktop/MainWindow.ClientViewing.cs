@@ -582,6 +582,8 @@ namespace LanScreenShare.Desktop
             SetViewerControlVisibility("StretchModeButton", false);
             SetViewerControlVisibility("PopoutWindowButton", false);
             SetViewerControlVisibility("DisconnectButton", false);
+            SetViewerControlVisibility("AudioControlPanel", false);
+            SetViewerControlVisibility("MicControlPanel", false);
             SetViewerControlVisibility("ViewerVoiceChatPanel", false);
             SetViewerControlVisibility("SendFileButton", false);
 
