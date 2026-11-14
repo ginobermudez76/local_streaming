@@ -300,6 +300,9 @@ namespace LanScreenShare.Media
                 width = _captureWidth;
                 height = _captureHeight;
             }
+
+            width &= ~1;
+            height &= ~1;
         }
 
         private sealed class GdiDesktopCaptureSession : IDisposable
@@ -360,8 +363,8 @@ namespace LanScreenShare.Media
 
         private static int ComputeTargetDimension(int customTarget, int original, double scale)
         {
-            if (customTarget > 0) return customTarget;
-            if (scale > 0.2 && scale < 0.99) return (int)(original * scale);
+            if (customTarget > 0) return customTarget & ~1;
+            if (scale > 0.2 && scale < 0.99) return ((int)(original * scale)) & ~1;
             return 0;
         }
 

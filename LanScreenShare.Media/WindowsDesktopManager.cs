@@ -32,6 +32,12 @@ namespace LanScreenShare.Media
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetThreadDesktop(IntPtr hDesktop);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr GetThreadDesktop(uint dwThreadId);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern bool GetUserObjectInformation(
             IntPtr hObj,
@@ -124,6 +130,13 @@ namespace LanScreenShare.Media
                 string? name = GetDesktopName(hDesktop);
                 desktopName = name ?? DesktopDefault;
                 isSecureDesktop = IsSecureDesktopName(desktopName);
+
+                IntPtr hThreadDesktop = GetThreadDesktop(GetCurrentThreadId());
+                string? currentThreadDesktopName = GetDesktopName(hThreadDesktop);
+                if (string.Equals(desktopName, currentThreadDesktopName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
 
                 return SetThreadDesktop(hDesktop);
             }

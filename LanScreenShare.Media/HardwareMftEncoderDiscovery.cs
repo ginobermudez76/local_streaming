@@ -123,9 +123,10 @@ namespace LanScreenShare.Media
 
         private static MftEncoderInfo? ProcessSingleEncoderActivate(IntPtr pActivate)
         {
+            IMFActivate? activate = null;
             try
             {
-                var activate = (IMFActivate)Marshal.GetObjectForIUnknown(pActivate);
+                activate = (IMFActivate)Marshal.GetObjectForIUnknown(pActivate);
                 activate.GetAllocatedString(MFT_FRIENDLY_NAME_Attribute, out string friendlyName, out _);
                 friendlyName ??= "Desconocido";
 
@@ -151,6 +152,10 @@ namespace LanScreenShare.Media
             }
             finally
             {
+                if (activate != null && Marshal.IsComObject(activate))
+                {
+                    Marshal.ReleaseComObject(activate);
+                }
                 Marshal.Release(pActivate);
             }
         }
@@ -239,9 +244,10 @@ namespace LanScreenShare.Media
 
         private static IMFTransform? TryActivateMatchingObject(IntPtr pActivate, string targetFriendlyName)
         {
+            IMFActivate? activate = null;
             try
             {
-                var activate = (IMFActivate)Marshal.GetObjectForIUnknown(pActivate);
+                activate = (IMFActivate)Marshal.GetObjectForIUnknown(pActivate);
                 activate.GetAllocatedString(MFT_FRIENDLY_NAME_Attribute, out string friendlyName, out _);
                 friendlyName ??= "";
 
@@ -262,6 +268,10 @@ namespace LanScreenShare.Media
             }
             finally
             {
+                if (activate != null && Marshal.IsComObject(activate))
+                {
+                    Marshal.ReleaseComObject(activate);
+                }
                 Marshal.Release(pActivate);
             }
             return null;

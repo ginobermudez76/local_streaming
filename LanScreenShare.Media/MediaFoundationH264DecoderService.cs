@@ -134,20 +134,18 @@ namespace LanScreenShare.Media
 
             try
             {
-                var attrs = decoder.Attributes;
-                if (attrs != null)
-                {
-                    attrs.Set(CODECAPI_AVLowLatencyMode, 1);
-                }
+                using var attrs = decoder.Attributes;
+                attrs?.Set(CODECAPI_AVLowLatencyMode, 1);
             }
             catch { }
 
             int hrCodecApi = Marshal.QueryInterface(decoder.NativePointer, in IID_ICodecAPI, out IntPtr pCodecApi);
             if (hrCodecApi == 0 && pCodecApi != IntPtr.Zero)
             {
+                ICodecAPI? codecApi = null;
                 try
                 {
-                    var codecApi = (ICodecAPI)Marshal.GetObjectForIUnknown(pCodecApi);
+                    codecApi = (ICodecAPI)Marshal.GetObjectForIUnknown(pCodecApi);
                     object lowLatencyUint = (uint)1;
                     try
                     {
@@ -162,6 +160,10 @@ namespace LanScreenShare.Media
                 catch { }
                 finally
                 {
+                    if (codecApi != null && Marshal.IsComObject(codecApi))
+                    {
+                        Marshal.ReleaseComObject(codecApi);
+                    }
                     Marshal.Release(pCodecApi);
                 }
             }

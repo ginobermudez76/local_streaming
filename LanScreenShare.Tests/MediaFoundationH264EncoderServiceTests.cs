@@ -245,5 +245,33 @@ namespace LanScreenShare.Tests
             Assert.IsTrue((uint)firstIndex <= 2, $"El primer fotograma debe decodificarse inmediatamente en baja latencia (índice <= 2), pero tardó hasta el índice {firstIndex}.");
             Assert.IsTrue(count > 80, $"El decodificador H.264 debió decodificar casi todos los fotogramas continuos (>80/90), pero solo decodificó {count}.");
         }
+
+        [TestMethod]
+        [DoNotParallelize]
+        public void EncodeFrame_And_BgraToNv12_OddWindowDimensions_DoNotCrashOrThrow()
+        {
+            int oddWidth = 1279;
+            int oddHeight = 719;
+            int evenW = oddWidth & ~1;
+            int evenH = oddHeight & ~1;
+
+            byte[] bgra = CreateGradientBgra(oddWidth, oddHeight);
+            byte[] nv12 = new byte[evenW * evenH * 3 / 2];
+
+            // Conversión BGRA -> NV12 con dimensiones impares de ventana no debe desbordar el búfer
+            MediaFoundationH264EncoderService.BgraToNv12(bgra, nv12, oddWidth, oddHeight);
+
+            if (!OperatingSystem.IsWindows())
+                return;
+
+            using var encoder = CreateEncoderOrInconclusive(targetFps: 30, bitrate: 2_000_000);
+            if (encoder == null) return;
+
+            for (int i = 0; i < 5; i++)
+            {
+                byte[] encoded = encoder.EncodeFrame(bgra, oddWidth, oddHeight, forceKeyframe: i == 0);
+                Assert.IsNotNull(encoded);
+            }
+        }
     }
 }

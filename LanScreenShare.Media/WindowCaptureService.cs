@@ -234,6 +234,13 @@ namespace LanScreenShare.Media
         private static bool NeedsResize(int targetW, int targetH, int width, int height) =>
             targetW > 0 && targetH > 0 && (targetW != width || targetH != height);
 
+        private static int ComputeTargetDimension(int customTarget, int original, double scale)
+        {
+            if (customTarget > 0) return customTarget & ~1;
+            if (scale > 0.2 && scale < 0.99) return ((int)(original * scale)) & ~1;
+            return 0;
+        }
+
         private static bool IsCursorShowing(in CURSORINFO pci) =>
             pci.flags == CURSOR_SHOWING && pci.hCursor != IntPtr.Zero;
 
@@ -245,10 +252,10 @@ namespace LanScreenShare.Media
             if (!GetClientRect(hwnd, out RECT clientRect))
                 return null;
 
-            int width = clientRect.Right - clientRect.Left;
-            int height = clientRect.Bottom - clientRect.Top;
+            int width = (clientRect.Right - clientRect.Left) & ~1;
+            int height = (clientRect.Bottom - clientRect.Top) & ~1;
 
-            if (width <= 0 || height <= 0)
+            if (width < 2 || height < 2)
                 return null;
 
             IntPtr hdcWindow = GetDC(hwnd);
@@ -300,8 +307,8 @@ namespace LanScreenShare.Media
                 SKBitmap bitmapToEncode = skBitmap;
                 SKBitmap? resizedBitmap = null;
 
-                int targetW = options.CustomTargetWidth > 0 ? options.CustomTargetWidth : (options.Scale > 0.2 && options.Scale < 0.99 ? (int)(width * options.Scale) : 0);
-                int targetH = options.CustomTargetHeight > 0 ? options.CustomTargetHeight : (options.Scale > 0.2 && options.Scale < 0.99 ? (int)(height * options.Scale) : 0);
+                int targetW = ComputeTargetDimension(options.CustomTargetWidth, width, options.Scale);
+                int targetH = ComputeTargetDimension(options.CustomTargetHeight, height, options.Scale);
 
                 if (NeedsResize(targetW, targetH, width, height))
                 {
