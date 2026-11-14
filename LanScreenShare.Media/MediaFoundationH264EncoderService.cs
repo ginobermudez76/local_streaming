@@ -35,6 +35,7 @@ namespace LanScreenShare.Media
         private long _sampleTime;
         private byte[]? _nv12Buffer;
         private readonly object _lock = new();
+        private bool _pendingReinit;
         private bool _disposed;
 
         public string CodecName => "h264";
@@ -59,14 +60,7 @@ namespace LanScreenShare.Media
                 _bitrate = bitrate;
                 if (CanReinitializeEncoder)
                 {
-                    try
-                    {
-                        InitializeEncoder(_width, _height);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[H264Encoder] Error actualizando bitrate: {ex.Message}");
-                    }
+                    _pendingReinit = true;
                 }
             }
         }
@@ -80,11 +74,7 @@ namespace LanScreenShare.Media
                 _fps = fps;
                 if (CanReinitializeEncoder)
                 {
-                    try
-                    {
-                        InitializeEncoder(_width, _height);
-                    }
-                    catch { }
+                    _pendingReinit = true;
                 }
             }
         }
@@ -156,7 +146,7 @@ namespace LanScreenShare.Media
 
             try
             {
-                var attrs = _encoder.Attributes;
+                using var attrs = _encoder.Attributes;
                 attrs?.Set(HardwareMftEncoderDiscovery.MF_TRANSFORM_ASYNC_UNLOCK, 1);
             }
             catch
@@ -194,6 +184,7 @@ namespace LanScreenShare.Media
         {
             CleanupCurrentEncoder();
 
+            _pendingReinit = false;
             _width = width;
             _height = height;
             _nv12Buffer = new byte[width * height * 3 / 2];
@@ -219,14 +210,11 @@ namespace LanScreenShare.Media
             throw new InvalidOperationException("No se pudo inicializar ningún codificador H.264 (hardware ni software).");
         }
 
-        private static void ConfigureCodecApi(IMFTransform encoder, int fps)
+        private static void ApplyEncoderAttributes(IMFTransform encoder, int fps)
         {
-            if (encoder == null) return;
-
-            // 1. Configurar atributos directos de la MFT si los soporta (Hardware AMD, Intel, NVIDIA)
             try
             {
-                var attrs = encoder.Attributes;
+                using var attrs = encoder.Attributes;
                 if (attrs != null)
                 {
                     try { attrs.Set(CODECAPI_AVLowLatencyMode, 1); } catch { }
@@ -240,55 +228,65 @@ namespace LanScreenShare.Media
             {
                 // Algunas MFTs por software (como CMSH264EncoderMFT) lanzan E_NOTIMPL / COMException al acceder a Attributes
             }
+        }
 
-            // 2. Configurar vía ICodecAPI oficial de Windows SDK (IID: 901db4c7-31ce-41a2-85dc-8fa0bf41b8da)
+        private static void ApplyCodecApiValues(ICodecAPI codecApi, int fps)
+        {
+            object lowLatencyBool = true;
+            try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatencyBool); }
+            catch
+            {
+                object lowLatencyUint = (uint)1;
+                try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatencyUint); } catch { }
+            }
+
+            object bFrames = (uint)0;
+            try { codecApi.SetValue(CODECAPI_AVEncMPVDefaultBPictureCount, ref bFrames); } catch { }
+
+            object realTimeBool = true;
+            try { codecApi.SetValue(CODECAPI_AVEncCommonRealTime, ref realTimeBool); }
+            catch
+            {
+                object realTimeUint = (uint)1;
+                try { codecApi.SetValue(CODECAPI_AVEncCommonRealTime, ref realTimeUint); } catch { }
+            }
+
+            object qualityVsSpeed = (uint)0;
+            try { codecApi.SetValue(CODECAPI_AVEncCommonQualityVsSpeed, ref qualityVsSpeed); } catch { }
+
+            object gopSize = (uint)fps;
+            try { codecApi.SetValue(CODECAPI_AVEncMPVGOPSize, ref gopSize); } catch { }
+        }
+
+        private static void ConfigureCodecApi(IMFTransform encoder, int fps)
+        {
+            if (encoder == null) return;
+
+            ApplyEncoderAttributes(encoder, fps);
+
             int hr = Marshal.QueryInterface(encoder.NativePointer, in IID_ICodecAPI, out IntPtr pCodecApi);
             if (hr == 0 && pCodecApi != IntPtr.Zero)
             {
+                ICodecAPI? codecApi = null;
                 try
                 {
-                    var codecApi = (ICodecAPI)Marshal.GetObjectForIUnknown(pCodecApi);
-
-                    // 1. Modo de ultra baja latencia estricto (1 fotograma entra -> 1 fotograma sale inmediatamente, VT_BOOL y VT_UI4)
-                    object lowLatencyBool = true;
-                    try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatencyBool); }
-                    catch
-                    {
-                        object lowLatencyUint = (uint)1;
-                        try { codecApi.SetValue(CODECAPI_AVLowLatencyMode, ref lowLatencyUint); } catch { }
-                    }
-
-                    // 2. Cero B-Frames (indispensable para streaming en tiempo real sin desfase de reordenamiento)
-                    object bFrames = (uint)0;
-                    try { codecApi.SetValue(CODECAPI_AVEncMPVDefaultBPictureCount, ref bFrames); } catch { }
-
-                    // 3. Modo tiempo real habilitado
-                    object realTimeBool = true;
-                    try { codecApi.SetValue(CODECAPI_AVEncCommonRealTime, ref realTimeBool); }
-                    catch
-                    {
-                        object realTimeUint = (uint)1;
-                        try { codecApi.SetValue(CODECAPI_AVEncCommonRealTime, ref realTimeUint); } catch { }
-                    }
-
-                    // 4. Velocidad máxima de compresión (0 = más rápido / menor latencia en especificación Microsoft)
-                    object qualityVsSpeed = (uint)0;
-                    try { codecApi.SetValue(CODECAPI_AVEncCommonQualityVsSpeed, ref qualityVsSpeed); } catch { }
-
-                    // 5. Tamaño de GOP igual al FPS (1 keyframe por segundo máximo)
-                    object gopSize = (uint)fps;
-                    try { codecApi.SetValue(CODECAPI_AVEncMPVGOPSize, ref gopSize); } catch { }
+                    codecApi = (ICodecAPI)Marshal.GetObjectForIUnknown(pCodecApi);
+                    ApplyCodecApiValues(codecApi, fps);
                 }
                 catch { }
                 finally
                 {
+                    if (codecApi != null && Marshal.IsComObject(codecApi))
+                    {
+                        Marshal.ReleaseComObject(codecApi);
+                    }
                     Marshal.Release(pCodecApi);
                 }
             }
         }
 
         private bool NeedsEncoderReinitialization(int width, int height) =>
-            _encoder == null || _width != width || _height != height;
+            _encoder == null || _width != width || _height != height || _pendingReinit;
 
         private IMFSample CreateInputSample(byte[] bgraData, int width, int height, bool forceKeyframe)
         {
@@ -329,16 +327,24 @@ namespace LanScreenShare.Media
             return EncodeFrameSync(inputSample);
         }
 
+        private static bool HasValidFrameInput(byte[]? bgraData, int width, int evenWidth, int evenHeight) =>
+            bgraData != null && evenWidth >= 2 && evenHeight >= 2 && bgraData.Length >= width * evenHeight * 4;
+
         public byte[] EncodeFrame(byte[] bgraData, int width, int height, bool forceKeyframe = false)
         {
+            int evenWidth = width & ~1;
+            int evenHeight = height & ~1;
+            if (!HasValidFrameInput(bgraData, width, evenWidth, evenHeight))
+                return Array.Empty<byte>();
+
             lock (_lock)
             {
                 if (_disposed)
                     return Array.Empty<byte>();
 
-                if (NeedsEncoderReinitialization(width, height))
+                if (NeedsEncoderReinitialization(evenWidth, evenHeight))
                 {
-                    InitializeEncoder(width, height);
+                    InitializeEncoder(evenWidth, evenHeight);
                 }
 
                 if (_nv12Buffer == null || _encoder == null)
@@ -346,7 +352,7 @@ namespace LanScreenShare.Media
 
                 try
                 {
-                    using IMFSample inputSample = CreateInputSample(bgraData, width, height, forceKeyframe);
+                    using IMFSample inputSample = CreateInputSample(bgraData, width, evenHeight, forceKeyframe);
                     return DispatchEncodeSample(inputSample);
                 }
                 catch (Exception ex)
@@ -354,8 +360,9 @@ namespace LanScreenShare.Media
                     Console.WriteLine($"[H264Encoder] Error en codificación ({ex.Message}). Realizando fallback a software CPU...");
                     try
                     {
-                        FallbackToSoftwareCpu(width, height);
-                        return EncodeFrame(bgraData, width, height, forceKeyframe);
+                        FallbackToSoftwareCpu(evenWidth, evenHeight);
+                        using IMFSample retrySample = CreateInputSample(bgraData, width, evenHeight, forceKeyframe);
+                        return DispatchEncodeSample(retrySample);
                     }
                     catch (Exception fbEx)
                     {
@@ -567,23 +574,29 @@ namespace LanScreenShare.Media
 
         public static void BgraToNv12(byte[] bgra, byte[] nv12, int width, int height)
         {
-            int frameSize = width * height;
-            int halfHeight = height / 2;
+            int evenWidth = width & ~1;
+            int evenHeight = height & ~1;
+            if (evenWidth < 2 || evenHeight < 2)
+                return;
+
+            int frameSize = evenWidth * evenHeight;
+            int halfHeight = evenHeight / 2;
+            int bgraRowBytes = width * 4;
 
             Parallel.For(0, halfHeight, k =>
             {
                 int y0 = 2 * k;
                 int y1 = y0 + 1;
 
-                int row0BgraOffset = y0 * width * 4;
-                int row1BgraOffset = y1 * width * 4;
+                int row0BgraOffset = y0 * bgraRowBytes;
+                int row1BgraOffset = y1 * bgraRowBytes;
 
-                int row0YOffset = y0 * width;
-                int row1YOffset = y1 * width;
+                int row0YOffset = y0 * evenWidth;
+                int row1YOffset = y1 * evenWidth;
 
-                int uvRowOffset = frameSize + k * width;
+                int uvRowOffset = frameSize + k * evenWidth;
 
-                for (int x = 0; x < width; x += 2)
+                for (int x = 0; x < evenWidth; x += 2)
                 {
                     int x1 = x + 1;
 
