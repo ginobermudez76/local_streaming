@@ -34,6 +34,10 @@ namespace LanScreenShare.Media
         }
 
         public event EventHandler<CapturedFrame>? FrameCaptured;
+        public event EventHandler<bool>? SecureDesktopChanged;
+
+        protected virtual void OnSecureDesktopChanged(bool isSecure) =>
+            SecureDesktopChanged?.Invoke(this, isSecure);
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
         public string? ActiveEncoderDescription => _codec == "h264" ? _h264Encoder?.EncoderDescription : "JPEG";
         public bool IsHardwareAccelerated => _codec == "h264" && (_h264Encoder?.IsHardwareAccelerated ?? false);

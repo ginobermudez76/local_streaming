@@ -469,6 +469,12 @@ namespace LanScreenShare.Desktop
             popout.SetMicVolume(_micAudioPlayerService?.Volume ?? 1.0f, _micAudioPlayerService?.IsMuted ?? false);
             popout.SetStretchMode(_currentStretchMode);
 
+            var secureBanner = this.FindControl<Border>("SecureDesktopBanner");
+            if (secureBanner != null && secureBanner.IsVisible)
+            {
+                popout.SetSecureDesktopState(true);
+            }
+
             var screenImage = this.FindControl<Image>("ScreenImage");
             if (screenImage?.Source != null)
             {

@@ -44,6 +44,7 @@ namespace LanScreenShare.Media
 
         public event EventHandler<CapturedFrame>? FrameCaptured;
         public event EventHandler<Exception>? CaptureFailed;
+        public event EventHandler<bool>? SecureDesktopChanged;
         public bool IsCapturing => _cts != null && !_cts.IsCancellationRequested;
         public string? ActiveEncoderDescription => _codec == "h264" ? _h264Encoder?.EncoderDescription : "JPEG";
         public bool IsHardwareAccelerated => _codec == "h264" && (_h264Encoder?.IsHardwareAccelerated ?? false);
@@ -220,6 +221,23 @@ namespace LanScreenShare.Media
             catch { }
         }
 
+        private void WaitForSecureDesktopExit(CancellationToken token)
+        {
+            Console.WriteLine("[DXGI] Escritorio seguro (UAC / Winlogon) detectado. Pausando captura DXGI...");
+            SecureDesktopChanged?.Invoke(this, true);
+
+            while (!token.IsCancellationRequested && WindowsDesktopManager.IsActiveDesktopSecure(out _))
+            {
+                Thread.Sleep(350);
+            }
+
+            if (!token.IsCancellationRequested)
+            {
+                Console.WriteLine("[DXGI] Retorno al escritorio normal detectado. Reanudando captura DXGI...");
+                SecureDesktopChanged?.Invoke(this, false);
+            }
+        }
+
         private void CaptureLoop(CancellationToken token)
         {
             IntPtr mmcssHandle = ConfigureCaptureThreadPriority();
@@ -230,6 +248,12 @@ namespace LanScreenShare.Media
             {
                 while (!token.IsCancellationRequested)
                 {
+                    if (WindowsDesktopManager.IsActiveDesktopSecure(out _))
+                    {
+                        WaitForSecureDesktopExit(token);
+                        continue;
+                    }
+
                     try
                     {
                         using var session = CreateDxgiSession();
@@ -237,6 +261,12 @@ namespace LanScreenShare.Media
                     }
                     catch (Exception ex)
                     {
+                        if (WindowsDesktopManager.IsActiveDesktopSecure(out _))
+                        {
+                            WaitForSecureDesktopExit(token);
+                            continue;
+                        }
+
                         Console.WriteLine($"[DXGI Capture] Error en bucle DXGI: {ex.Message}");
                         CaptureFailed?.Invoke(this, ex);
                         Thread.Sleep(500);
@@ -284,6 +314,10 @@ namespace LanScreenShare.Media
                 if (status == FrameAcquireStatus.AccessLost)
                 {
                     Console.WriteLine("[DXGI] Acceso perdido o cambio de escritorio. Reinicializando...");
+                    if (WindowsDesktopManager.IsActiveDesktopSecure(out _))
+                    {
+                        WaitForSecureDesktopExit(token);
+                    }
                     break;
                 }
 

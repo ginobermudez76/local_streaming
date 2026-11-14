@@ -108,6 +108,24 @@ namespace LanScreenShare.Desktop
             {
                 if (_isViewing) ApplyRemoteMonitorInfo(monitorLabel);
             };
+            _controlClient.SecureDesktopStateReceived += (s, state) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    bool isBlocked = string.Equals(state, "SECURE_DESKTOP_ACTIVE", StringComparison.OrdinalIgnoreCase);
+                    UpdateSecureDesktopBanner(isBlocked);
+                });
+            };
+        }
+
+        private void UpdateSecureDesktopBanner(bool isBlocked)
+        {
+            var banner = this.FindControl<Border>("SecureDesktopBanner");
+            if (banner != null)
+            {
+                banner.IsVisible = isBlocked;
+            }
+            _popoutWindow?.SetSecureDesktopState(isBlocked);
         }
 
         private void InitializeControlSubsystem()

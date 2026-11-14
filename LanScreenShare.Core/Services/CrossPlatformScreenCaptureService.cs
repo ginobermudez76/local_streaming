@@ -15,6 +15,10 @@ namespace LanScreenShare.Core.Services
     public class CrossPlatformScreenCaptureService : IScreenCaptureService
     {
         public event EventHandler<CapturedFrame>? FrameCaptured;
+        public event EventHandler<bool>? SecureDesktopChanged;
+
+        protected virtual void OnSecureDesktopChanged(bool isSecure) =>
+            SecureDesktopChanged?.Invoke(this, isSecure);
 
         private volatile bool _isCapturing;
         private CancellationTokenSource? _cts;

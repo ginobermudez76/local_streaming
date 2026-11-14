@@ -76,6 +76,7 @@ namespace LanScreenShare.Desktop
 
             _screenCaptureService = CreateCaptureService(_currentSource, _appSettings.Engine);
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
+            _screenCaptureService.SecureDesktopChanged += ScreenCaptureService_SecureDesktopChanged;
             _inputSimulatorService = CreateInputSimulator();
         }
 

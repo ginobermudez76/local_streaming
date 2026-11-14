@@ -632,6 +632,7 @@ namespace LanScreenShare.Desktop
         {
             _screenCaptureService.StopCapture();
             _screenCaptureService.FrameCaptured -= ScreenCaptureService_FrameCaptured;
+            _screenCaptureService.SecureDesktopChanged -= ScreenCaptureService_SecureDesktopChanged;
             _screenCaptureService.Dispose();
 
             int fps = profile.Fps;
@@ -647,6 +648,7 @@ namespace LanScreenShare.Desktop
 
             _screenCaptureService = CreateCaptureService(source, engine);
             _screenCaptureService.FrameCaptured += ScreenCaptureService_FrameCaptured;
+            _screenCaptureService.SecureDesktopChanged += ScreenCaptureService_SecureDesktopChanged;
             _screenCaptureService.StartCapture(profile with { TargetFps = fps, BitrateMbps = bitrateMbps });
             UpdateAbrUI();
         }

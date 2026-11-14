@@ -268,6 +268,32 @@
                            FontWeight="Medium"/>
             </StackPanel>
         </Border>
+
+        <!-- Banner Escritorio Seguro / UAC -->
+        <Border x:Name="SecureDesktopBanner"
+                Background="#E62D1515"
+                BorderBrush="#EF4444"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,10"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,60,0,0"
+                IsVisible="False"
+                ZIndex="110">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <PathIcon x:Name="SecureDesktopBannerIcon" Data="{StaticResource IconShield}" Width="18" Height="18" Foreground="#F87171"/>
+                <StackPanel Spacing="2" VerticalAlignment="Center">
+                    <TextBlock Text="Escritorio Seguro / Diálogo UAC Activo en el Anfitrión"
+                               Foreground="#FCA5A5"
+                               FontSize="13"
+                               FontWeight="Bold"/>
+                    <TextBlock Text="El control remoto y la captura están pausados por seguridad de Windows hasta que se acepte el diálogo."
+                               Foreground="#CBD5E1"
+                               FontSize="11"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>
 

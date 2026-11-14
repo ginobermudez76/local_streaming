@@ -213,6 +213,15 @@ namespace LanScreenShare.Desktop
             }
         }
 
+        private void ScreenCaptureService_SecureDesktopChanged(object? sender, bool isSecureDesktop)
+        {
+            if (_isHosting && _controlServer != null)
+            {
+                string state = isSecureDesktop ? "SECURE_DESKTOP_ACTIVE" : "SECURE_DESKTOP_INACTIVE";
+                _ = _controlServer.BroadcastSecureDesktopStateAsync(state);
+            }
+        }
+
         private void StreamServer_ClientConnected(object? sender, string clientId)
         {
             _screenCaptureService.RequestKeyframe();
